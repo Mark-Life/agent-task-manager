@@ -211,6 +211,47 @@ path alongside the repo clone. Inside the container it is an ordinary directory 
 neither knows nor cares that it is a mount. Files written there survive the container. That
 is the entire storage mechanism.
 
+### Scope and promotion
+
+Most artifacts are byproducts nobody reads twice, and they belong to the task that made
+them. A few turn out to be reference material worth keeping. That difference is a decision
+someone makes, not a storage tier — so scope is task-level by default and **promotion** is
+an explicit verb, available in the dashboard and as one manager-agent tool.
+
+Three mounts, one writable:
+
+- the task's own folder — read-write
+- the project's promoted folder — **read-only**
+- a global folder — **read-only**
+
+Read-only on the shared folders is the load-bearing part. If any run could write there,
+promoted material would drift with no audit and no way to tell which run changed what — and
+the evidence would be the thing that got overwritten. Promotion as a separate deliberate
+step *is* the audit trail.
+
+**Reuse is a copy, never a reference.** Agents work on files; a copy is a file and a pointer
+is a concept they will get wrong. More importantly, if task B references task A's artifact
+and A is later refined, B's record of what it actually worked from becomes retroactively
+false. Disk is free; a task folder that is a self-contained record of what that task saw is
+worth more than deduplication.
+
+The two cases resolve differently, usefully. Within a project: promote once, and every
+future task in that project sees it automatically. Across projects: the manager copies the
+file. Reaching for the second one repeatedly is the signal that something wanted to be
+global.
+
+**Search is `ripgrep`, not an index.** The manager gets the artifacts root mounted
+read-only and greps it. Agents already know the tool, it is already in the image, it handles
+markdown and CSV fine, and at this data volume it is instant. The database index covers the
+metadata side — which task produced a file, when, how big. Embeddings earn their place the
+day literal matching stops being enough, and pgvector is already in the database when that
+happens.
+
+**Multi-tenancy caveat.** Mounting the whole artifacts root into the manager is correct
+while this is single-tenant. The day workspaces have more than one member, artifact reads
+need the same `workspace_id` scoping as every other table, and this shortcut stops being
+acceptable.
+
 **Agents use their native file tools.** Every harness ships a write tool taking an absolute
 path and file contents, and an edit tool taking a path and a find/replace pair. Models are
 heavily trained on them. A bespoke `create_artifact` tool would be a new interface for
@@ -277,9 +318,9 @@ Web SPA on CF Pages ─┼─→ gateway (VPS: HTTP + SSE) ─→ Postgres ←�
 Every run gets its own Docker container, including personal tasks and the manager agent.
 Ephemeral: torn down after the run.
 
-**Mounted from host:** the run workspace (rw), the task's artifacts directory (rw), and a
-per-run agent-home dir (rw). Nothing else. Never the docker socket — that one mount turns a
-sandbox into host root.
+**Mounted from host:** the run workspace (rw), the task's artifacts directory (rw), the
+project and global artifact folders (ro), and a per-run agent-home dir (rw). Nothing else.
+Never the docker socket — that one mount turns a sandbox into host root.
 
 **Hardening:** drop all capabilities, no-new-privileges, non-root user, pid/memory/cpu
 limits. Blast radius of a confused agent = its own container.
@@ -428,6 +469,5 @@ Starting from the Next.js monorepo template, unchanged on first commit. Then:
    to start?
 5. Concurrency caps on a 4-core / 8 GB box: what's the real ceiling for parallel coding
    containers, and does that force an earlier move to a bigger host?
-6. Are artifacts always task-scoped, or is there a project-level and a global directory
-   too? A task that wants last month's research report currently has nowhere to look for it
-   except its own folder.
+6. Does promotion need its own review, or is it a one-click act? A promoted artifact is
+   read by every future task in the project, so a bad one propagates quietly.
