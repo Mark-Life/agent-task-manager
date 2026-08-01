@@ -155,6 +155,19 @@ appending it turns the thread into a dump of "I've updated the file, let me know
 need anything else", which duplicates the transcript. Never appending it means a run that
 forgets the tool leaves the task silent. The fallback rule gets both.
 
+**The rule can also be enforced, on both harnesses.** Claude and Codex each expose a stop
+hook that fires when the agent tries to end its turn, receives the final assistant message,
+and can refuse — returning a reason that the agent then reads as its next prompt. So a run
+that finished without commenting gets sent back to write one. The input payload and the
+refusal contract are compatible across the two, so one hook serves both. Cap it at a single
+retry; both harnesses flag a re-entered stop hook, and neither enforces a limit for you.
+
+Two things not to trip over. Codex silently ignores hooks in headless runs unless trust is
+explicitly bypassed on the invocation — no warning, they just never fire. And on a *failed*
+turn the Codex stop hook does not run at all, so enforcement covers clean completion only;
+crashes are handled by the orchestrator watching for the failure event, below. Keep the
+auto-append fallback regardless — enforcement is the belt, the fallback is the braces.
+
 **Attribution is what makes multiple sessions work.** Every comment carries an author —
 human, or an agent plus its session and run. The UI can then say "from the review session"
 rather than presenting one undifferentiated voice.
@@ -181,6 +194,11 @@ summarization, no auto-retry, no special failure state on the task — the error
 in the thread, the session is marked failed, and a human decides. If that turns out to read
 badly in practice, summarizing the failure or having an agent respond to it are additive
 changes on top.
+
+This is orchestrator work, not hook work. Both harnesses emit a distinguishable failed
+terminal event, and Claude additionally fires a stop-failure hook, but a stream that simply
+truncates on an abort emits nothing at all — so the orchestrator must treat "process gone,
+no terminal event" as a failure in its own right.
 
 ## Artifacts
 
@@ -395,8 +413,5 @@ Starting from the Next.js monorepo template, unchanged on first commit. Then:
    to start?
 5. Concurrency caps on a 4-core / 8 GB box: what's the real ceiling for parallel coding
    containers, and does that force an earlier move to a bigger host?
-6. Can the "post a comment before finishing" rule be *enforced* via harness stop-hooks on
-   both Claude and Codex, or does Codex need a wrapper-side fallback? Under research;
-   the auto-append fallback works either way.
-7. Inline-in-Postgres artifact bodies: what size is the cutover to blob storage, and is it
+6. Inline-in-Postgres artifact bodies: what size is the cutover to blob storage, and is it
    worth building both paths up front rather than one?
