@@ -1,0 +1,49 @@
+import { Layer } from "effect";
+import { type DatabaseOptions, databaseLayer } from "./client";
+import { ArtifactRepo } from "./repositories/artifact";
+import { AuditLogRepo } from "./repositories/audit-log";
+import { CommentRepo } from "./repositories/comment";
+import { ProjectRepo } from "./repositories/project";
+import { RunRepo } from "./repositories/run";
+import { RunCommandRepo } from "./repositories/run-command";
+import { RunEventRepo } from "./repositories/run-event";
+import { AgentSessionRepo } from "./repositories/session";
+import { TaskRepo } from "./repositories/task";
+import { WorkspaceRepo } from "./repositories/workspace";
+
+/**
+ * Every repository, over whatever database handle is already in context.
+ *
+ * They merge rather than stack because no repository calls another: one
+ * aggregate each, and anything spanning two of them is the caller's
+ * composition. That is also what keeps a mutation and its audit row inside a
+ * single transaction — there is no second repository underneath to open one of
+ * its own.
+ */
+export const repositoriesLayer = Layer.mergeAll(
+  AgentSessionRepo.layer,
+  ArtifactRepo.layer,
+  AuditLogRepo.layer,
+  CommentRepo.layer,
+  ProjectRepo.layer,
+  RunCommandRepo.layer,
+  RunEventRepo.layer,
+  RunRepo.layer,
+  TaskRepo.layer,
+  WorkspaceRepo.layer
+);
+
+/**
+ * The whole store for one process: every repository over one connection pool.
+ * Provide it once at a composition root, and give it an actor — the
+ * repositories carry `CurrentActor` as a requirement, so a process that never
+ * says who it is cannot call a mutation.
+ *
+ * The database layer is merged in rather than hidden because two of the things
+ * it builds are legitimately used above this line: the auth handle Better Auth
+ * is constructed with, and the `PgClient` the event stream and the dispatch
+ * trigger listen on. The drizzle handle itself stays unexported, so the only
+ * way to a row is through a repository that audits what it did.
+ */
+export const storeLayer = (options: DatabaseOptions) =>
+  repositoriesLayer.pipe(Layer.provideMerge(databaseLayer(options)));

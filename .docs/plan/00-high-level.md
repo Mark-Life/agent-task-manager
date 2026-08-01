@@ -61,8 +61,13 @@ ideas → backlog → in progress → review → done
   progress* and the worker resumes with those comments as its next prompt.
 - **done**.
 
-Two agent spawn points (*backlog* on demand, *in progress* always) and one human gate
+Two agent spawn points (*backlog* on demand, *in progress* always) and one review gate
 (*review*). Nothing more.
+
+**The manager agent is not restricted relative to a person.** It is an optional second
+interface onto the same operations — say it instead of clicking it — so every move on the
+board is available to it, including the ones that spend a worker slot. Worker runs are the
+restricted actor: a run may only move its own task *in progress → review*.
 
 **No done-condition check.** The agent process exiting *is* the completion signal — every
 SDK reports it. Run ends → task moves *in progress → review*. Inspecting whether a PR was
@@ -303,8 +308,8 @@ Web SPA on CF Pages ─┼─→ gateway (VPS: HTTP + SSE) ─→ Postgres ←�
   this part is proven.
 - **manager agent** — not a loop. A conversational agent invoked per message. Its memory
   is the DB; its tools are the same API the web app uses. Turns "read this article and
-  file tickets" into rows. Files into *backlog*, never straight into *in progress* — the
-  decision to spend a worker slot stays human.
+  file tickets" into rows. It is a second interface to the same operations, not a lesser
+  one: anything a person can do on the board, it can do by being asked.
 - **gateway** — the API. One contract serves the SPA, the bot, the manager's tools, and
   external agents.
 - **telegram bot** — thin client. Voice in, approvals, status, summaries + links. Does
@@ -408,8 +413,13 @@ Telegram first, in the dashboard later. Thread and provider session id stored se
 so the provider can change mid-thread.
 
 **Controls running work, through the orchestrator, never directly.** It writes intents —
-the same stop and rerun a human has, plus re-prioritize — and the orchestrator acts. Keeps
-one owner of container lifecycle and makes every intervention auditable.
+the same stop, rerun and reorder a human has — and the orchestrator acts. Keeps one owner
+of container lifecycle and makes every intervention auditable.
+
+**Nothing on the board is withheld from it.** "Start task B next" and dragging task B to
+the top of the column are the same write, and refusing the sentence while allowing the drag
+would only move the same decision to a different button. The audit log is what makes this
+safe: every mutation records that the manager made it, and on whose instruction.
 
 Mid-run steering is out of scope for v1 — Codex has no clean input path. Stop, comment,
 rerun, the same way a human interrupts.

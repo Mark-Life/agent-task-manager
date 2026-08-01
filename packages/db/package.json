@@ -8,13 +8,23 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "bun test --pass-with-no-tests"
+    "test": "bun test --pass-with-no-tests",
+    "db:generate": "drizzle-kit generate",
+    "auth:generate": "bunx --bun auth@1.7.0-rc.2 generate --config ./src/auth/cli.ts --output ./src/schema/auth.ts --yes && bun run scripts/auth-schema-index.ts && bunx --bun ultracite fix ./src/schema/auth.ts"
   },
   "dependencies": {
     "effect": "catalog:",
-    "@workspace/domain": "workspace:*"
+    "@effect/sql-pg": "catalog:",
+    "@workspace/domain": "workspace:*",
+    "@better-auth/drizzle-adapter": "1.7.0-rc.2",
+    "better-auth": "1.7.0-rc.2",
+    "drizzle-orm": "1.0.0-rc.4",
+    "pg": "^8.22.0"
   },
   "devDependencies": {
-    "@workspace/typescript-config": "workspace:*"
+    "@types/bun": "^1.3.14",
+    "@types/pg": "^8.20.3",
+    "@workspace/typescript-config": "workspace:*",
+    "drizzle-kit": "1.0.0-rc.4"
   }
 }

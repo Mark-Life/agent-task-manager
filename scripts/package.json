@@ -7,6 +7,12 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test --pass-with-no-tests"
   },
+  "dependencies": {
+    "@effect/platform-bun": "catalog:",
+    "@workspace/db": "workspace:*",
+    "@workspace/domain": "workspace:*",
+    "effect": "catalog:"
+  },
   "devDependencies": {
     "@workspace/typescript-config": "workspace:*"
   }

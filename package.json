@@ -23,7 +23,9 @@
     "prepare": "husky",
     "upgrade": "bun run scripts/upgrade.ts",
     "db:up": "docker compose up -d",
-    "db:down": "docker compose down"
+    "db:down": "docker compose down",
+    "db:seed": "bun run scripts/seed.ts",
+    "db:store-check": "bun run scripts/store-check.ts"
   },
   "version": "0.0.1",
   "workspaces": {
@@ -34,7 +36,8 @@
     ],
     "catalog": {
       "effect": "4.0.0-beta.102",
-      "@effect/platform-bun": "4.0.0-beta.102"
+      "@effect/platform-bun": "4.0.0-beta.102",
+      "@effect/sql-pg": "4.0.0-beta.102"
     }
   },
   "private": true,

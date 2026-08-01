@@ -1,5 +1,11 @@
 import { Config, Context, Effect, Layer } from "effect";
 
+/** Mirrors the default `@workspace/db` applies to `DATABASE_POOL_MAX`. */
+const DEFAULT_DATABASE_POOL_MAX = 10;
+
+/** Mirrors the default `@workspace/db` applies to `DATABASE_CONNECT_TIMEOUT_MS`. */
+const DEFAULT_DATABASE_CONNECT_TIMEOUT_MS = 10_000;
+
 /**
  * Reads and validates the Effect-side application configuration from the
  * environment. `DATABASE_URL` is required and fails the layer build when
@@ -7,14 +13,28 @@ import { Config, Context, Effect, Layer } from "effect";
  * defaulted: only the app that needs a given setting (bot, a specific agent
  * provider, Executor, an OTLP collector) fails without it.
  *
- * The telemetry variables here are documentation of the contract, not the
- * source of truth — `@workspace/telemetry` reads `LOG_FORMAT`, `LOG_LEVEL`,
- * `EVENT_LOG_DIR`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`,
- * `SERVICE_VERSION`, and `GIT_SHA` directly via `Config` so it never depends
- * on this package. Names and defaults must stay in sync by hand.
+ * The telemetry and database variables here are documentation of the contract,
+ * not the source of truth — `@workspace/telemetry` reads `LOG_FORMAT`,
+ * `LOG_LEVEL`, `EVENT_LOG_DIR`, `OTEL_EXPORTER_OTLP_ENDPOINT`,
+ * `OTEL_EXPORTER_OTLP_HEADERS`, `SERVICE_VERSION` and `GIT_SHA` directly via
+ * `Config`, and `@workspace/db` reads the `DATABASE_*` set the same way, so a
+ * script wanting only a database handle need not build this layer. Names and
+ * defaults must stay in sync by hand.
  */
 const load = Effect.gen(function* () {
   const databaseUrl = yield* Config.redacted("DATABASE_URL");
+
+  // Connection pool knobs, read by `@workspace/db`. Per process, not per
+  // system: several of ours point at the same database at once.
+  const databasePoolMax = yield* Config.int("DATABASE_POOL_MAX").pipe(
+    Config.withDefault(DEFAULT_DATABASE_POOL_MAX)
+  );
+
+  // `pg` waits forever by default, so a database that is down looks like a
+  // process that hangs at boot saying nothing.
+  const databaseConnectTimeoutMs = yield* Config.int(
+    "DATABASE_CONNECT_TIMEOUT_MS"
+  ).pipe(Config.withDefault(DEFAULT_DATABASE_CONNECT_TIMEOUT_MS));
 
   // Same default as `@workspace/telemetry` applies to it. A required DATA_ROOT
   // here would mean telemetry runs with no env at all while any app reading this
@@ -74,6 +94,8 @@ const load = Effect.gen(function* () {
   return {
     anthropicApiKey,
     claudeSettingsJson,
+    databaseConnectTimeoutMs,
+    databasePoolMax,
     databaseUrl,
     dataRoot,
     eventLogDir,
