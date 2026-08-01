@@ -152,9 +152,9 @@ second integration to maintain.
 
 Streaming of run events rides alongside as SSE over Postgres NOTIFY.
 
-The exact Effect module choice (RPC vs HttpApi vs both, and how the OpenAPI spec is
-derived) is being verified against the v4 beta source. An addendum lands in this directory
-before implementation starts.
+The surface is Effect **HttpApi**, not Effect RPC — a deviation from `.docs/stack.md`,
+argued in `01-api-surface.md`. Short version: OpenAPI derivation and SSE exist only on
+HttpApi, and RPC over HTTP is a single opaque endpoint that Executor cannot use.
 
 Scoping: consumers get scoped tokens (read, task-write, admin). The Executor connector and
 the manager agent do not get destructive scopes.
