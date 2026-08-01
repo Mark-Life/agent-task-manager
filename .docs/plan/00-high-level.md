@@ -51,17 +51,27 @@ ideas → backlog → in progress → review → done
   can be spawned on demand** (from the dashboard or by asking the manager) to investigate
   and produce an artifact, so the task arrives at implementation with real context.
   Research is opt-in, not automatic.
-- **in progress** — moving a task here *is* the trigger. A worker picks it up, subject to a
-  global cap on parallel implementation agents. Whether a run is currently live is separate
-  from the status: a task sitting in this column with no live run is waiting for a slot or
-  has stalled, and the UI shows the difference (a spinner while an agent is working).
+- **in progress** — moving a task here *is* the trigger, every time, with no second
+  confirmation. A worker picks it up subject to a global cap on parallel agents. Whether a
+  run is currently live is separate from the status: a task sitting in this column with no
+  live run is waiting for a slot or has stalled, and the UI shows the difference (a spinner
+  while an agent is working).
 - **review** — the human gate. The run finished and left something to look at: a PR, a
-  document, a calendar. Comment on it here, or on the PR itself, then move it back to *in
+  document, a calendar. Comment here or on the PR itself, then move the task back to *in
   progress* and the worker resumes with those comments as its next prompt.
 - **done**.
 
 Two agent spawn points (*backlog* on demand, *in progress* always) and one human gate
 (*review*). Nothing more.
+
+**No done-condition check.** The agent process exiting *is* the completion signal — every
+SDK reports it. Run ends → task moves *in progress → review*. Inspecting whether a PR was
+actually opened is a later refinement, not a v1 gate.
+
+**Stop and rerun** are always available on a live run. Stop kills the process. Rerun
+resumes the same session with any comments added since as extra prompt input — the same
+move as interrupting an agent mid-thought, adding a correction, and letting it carry on.
+Because entering *in progress* auto-starts, "stop, comment, rerun" is the steering loop.
 
 ### Entities
 
@@ -83,15 +93,26 @@ Local filesystem storage on the VPS to start, behind an interface that takes an 
 adapter later (R2 or S3 — same API). Artifacts attach to a task and can be fed as context
 into any later run on that task.
 
-**Runner profile per kind** — the seam that keeps this from being a coding-only tool. It
-decides three things:
+**Comment** — the task's conversation. Human, agent, and manager all write here; every
+comment records its author, and an agent comment also records which session and run it came
+from. This is the cross-session channel (see *How agents talk back*).
 
-- workspace (fresh clone of a repo vs empty scratch dir)
-- tool + MCP set (git/gh vs calendar/maps/search)
-- done-condition (PR opened vs artifact written)
+### Tools are uniform
 
-Coding is just the kind that gets a repo and opens a PR. Get this seam right on day one;
-adding personal and research kinds later is then a config object, not a rewrite.
+Every agent gets the same tools regardless of task kind: git, `gh`, the shell, and the
+Executor MCP server. Gating tools by kind is a hardening concern, not a v1 concern, and the
+distinction does not survive contact with real tasks — "read these three library repos and
+write me a report on what to steal" is a personal research task that badly wants `git` and
+`gh`.
+
+**Executor** is the connector layer — an external service holding authenticated connectors
+(Google Workspace, Gmail, and the rest), exposed to every agent as MCP. Scattered across
+two systems, but one place to manage credentials and most of what's needed is already
+wired.
+
+So the per-kind seam shrinks to **workspace**: a fresh clone when the task has a repo, an
+empty scratch dir when it doesn't. That's the whole difference, and it's enough to make a
+trip-planning task and a feature task run on the same machinery.
 
 ### Sessions on a task
 
@@ -105,6 +126,45 @@ The shape this enables, end to end: an implementation run opens a PR and the tas
 becomes an artifact or a comment. The task goes back to *in progress*, and the **original**
 implementation session resumes, now with the review as its next prompt. Two sessions on one
 task, each doing what it is good at, both visible and switchable in the UI.
+
+### How agents talk back
+
+Two channels, deliberately not the same thing.
+
+**Transcripts** are captured, not written. Every tool call and message of every session is
+ingested wholesale and rendered in the dashboard. Nobody decides what goes in; it is the
+full record, and it is where you go when you want to know what actually happened.
+
+**Comments** are deliberate and short. This is the task's conversation, and the only
+channel that crosses sessions. Agents get a comment tool and are expected to use it to say
+the thing the next reader needs.
+
+**The final assistant message is auto-appended as a comment only if the run posted no
+comment of its own**, and it is flagged as auto-generated so the UI can collapse it. Always
+appending it turns the thread into a dump of "I've updated the file, let me know if you
+need anything else", which duplicates the transcript. Never appending it means a run that
+forgets the tool leaves the task silent. The fallback rule gets both.
+
+**Attribution is what makes multiple sessions work.** Every comment carries an author —
+human, or an agent plus its session and run. The UI can then say "from the review session"
+rather than presenting one undifferentiated voice.
+
+**Each session carries a watermark**: the last comment it has seen. On resume, its prompt is
+every comment added since, each labelled with its author. That single mechanism covers the
+whole review loop — the implementation session comes back and reads "the review session
+found X" and "you said Y", with no special-casing anywhere. It works unchanged for two
+sessions or ten.
+
+**Structured writes go through the same API the dashboard uses**, not through raw SQL. The
+gateway already exposes every operation; a run gets a token scoped to its own task, so it
+can update that task, comment on it, and attach artifacts, while only reading everything
+else. Fields the UI renders (status, title, brief, PR link) are real columns. Anything else
+an agent wants to record goes in a `metadata` JSON blob — free to write, no migration, and
+a key that proves itself gets promoted to a column later.
+
+**Run lifecycle events are not comments.** Started, finished, failed, cost, duration live on
+the run and in `run_events`. The dashboard interleaves them into the thread for reading; the
+storage keeps them apart so the comment thread stays a conversation.
 
 ## Architecture
 
@@ -207,8 +267,10 @@ The surface is Effect **HttpApi**, not Effect RPC — a deviation from `.docs/st
 argued in `01-api-surface.md`. Short version: OpenAPI derivation and SSE exist only on
 HttpApi, and RPC over HTTP is a single opaque endpoint that Executor cannot use.
 
-Scoping: consumers get scoped tokens (read, task-write, admin). The Executor connector and
-the manager agent do not get destructive scopes.
+Scoping: consumers get scoped tokens (read, task-write, admin). A worker run's token is
+scoped to its own task — write there, read everywhere else — which costs almost nothing to
+build and stops a confused agent from editing an unrelated ticket. The Executor connector
+and the manager agent do not get destructive scopes.
 
 ## Auth & workspaces
 
@@ -222,12 +284,12 @@ Threaded like ChatGPT — many threads, new/clear/switch, history listing. Avail
 Telegram first, in the dashboard later. Thread and provider session id stored separately,
 so the provider can change mid-thread.
 
-**Controls running work, through the orchestrator, never directly.** It writes intents
-(cancel / restart-with-context / re-prioritize); the orchestrator acts. Keeps one owner of
-container lifecycle and makes every intervention auditable.
+**Controls running work, through the orchestrator, never directly.** It writes intents —
+the same stop and rerun a human has, plus re-prioritize — and the orchestrator acts. Keeps
+one owner of container lifecycle and makes every intervention auditable.
 
-Mid-run steering is out of scope for v1 — Codex has no clean input path. Stop, then
-restart with an added prompt, the same way a human interrupts.
+Mid-run steering is out of scope for v1 — Codex has no clean input path. Stop, comment,
+rerun, the same way a human interrupts.
 
 Stuck-run detection starts as a cheap heuristic: no file edits plus repeating tool
 signatures over N minutes → flag, let the manager decide.
@@ -267,9 +329,10 @@ Starting from the Next.js monorepo template, unchanged on first commit. Then:
 3. **Manager agent in Telegram** — threads, task CRUD, run control. Talking replaces SQL.
 4. **Gateway + web dashboard** — the second full interface: boards with drag between
    statuses, task creation and editing, comments, run timelines, session switching.
-5. **Research + personal runner profiles** — on-demand research from *backlog*, and one
-   non-coding kind, to prove the seam.
-6. **Hardening** — scoped GitHub tokens, credential-refresh ownership, egress policy.
+5. **Research + non-repo tasks** — on-demand research from *backlog*, scratch-dir
+   workspaces, artifacts as first-class output.
+6. **Hardening** — scoped GitHub tokens, credential-refresh ownership, egress policy,
+   per-kind tool restriction if it turns out to be wanted.
 
 ## Unresolved questions
 
@@ -283,10 +346,9 @@ Starting from the Next.js monorepo template, unchanged on first commit. Then:
    to start?
 5. Concurrency caps on a 4-core / 8 GB box: what's the real ceiling for parallel coding
    containers, and does that force an earlier move to a bigger host?
-6. Do worker agents talk to Postgres directly, or only through the gateway API? Direct is
-   simpler; via API gives one place for validation and audit.
-7. When a task returns from *review* to *in progress*, does the worker resume automatically
-   or wait for an explicit "go"? Automatic is fewer clicks and risks burning a slot on a
-   half-written comment.
-8. Do artifacts get versioned, or does a re-run overwrite? Versioning is cheap on a
+6. Do artifacts get versioned, or does a re-run overwrite? Versioning is cheap on a
    filesystem and expensive to retrofit.
+7. When several sessions exist on a task, which one does *in progress* resume by default —
+   the most recent, or a session explicitly pinned as the task's main thread?
+8. A run that crashes without posting a comment leaves only a transcript. Is a failure
+   summary auto-comment worth it, or is the run's error state enough?
