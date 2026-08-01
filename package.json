@@ -25,7 +25,8 @@
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:seed": "bun run scripts/seed.ts",
-    "db:store-check": "bun run scripts/store-check.ts"
+    "db:store-check": "bun run scripts/store-check.ts",
+    "harness:check": "bun run scripts/harness-check.ts"
   },
   "version": "0.0.1",
   "workspaces": {

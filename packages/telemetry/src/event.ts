@@ -182,14 +182,21 @@ export const defineEvent = <
   marker: Marker,
   fields: Fields
 ) => {
-  const schema = Schema.Struct({ ...wideEventFields, ...fields }).pipe(
+  // The shared fields a unit did not redefine. Widening `outcome` is the whole
+  // point of `outcomeField`, and a plain spread of a generic loses it: the
+  // compiler intersects the two declarations of the key instead of letting the
+  // unit's win, so the extra literals disappear from the type while the runtime
+  // schema has them. Omitting the overridden keys first is what makes the
+  // widened union visible to the caller.
+  const shared: Omit<typeof wideEventFields, keyof Fields> = wideEventFields;
+  const schema = Schema.Struct({ ...shared, ...fields }).pipe(
     Schema.check(phaseAgreesWithOutcome)
   );
   const rowSchema = Schema.Struct({
     event: Schema.tag(marker),
     ts: Schema.String,
     ...environmentFields,
-    ...wideEventFields,
+    ...shared,
     ...fields,
   });
   return {

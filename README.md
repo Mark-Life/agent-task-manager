@@ -82,6 +82,7 @@ The `upgrade` command updates Next.js, refreshes all shadcn/ui components, updat
 | `bun run check` | Check for lint/format issues |
 | `bun run db:up` / `db:down` | Start / stop the local Postgres container |
 | `bun run logs` | Read the wide-event ledger (`runs \| errors \| stats \| follow`) |
+| `bun run harness:check` | Check the agent harness end to end (add `--live` for real model calls) |
 | `bun run upgrade` | Upgrade Next.js, shadcn/ui, and all deps |
 
 The libraries are consumed as source through tsconfig paths and have no build step, so
@@ -118,6 +119,31 @@ Read from `.env` / `.env.local` at the repo root (see `packages/env`). Telemetry
 | `OTEL_EXPORTER_OTLP_HEADERS` | unset | `k=v,k=v`, split on the first `=` per entry |
 | `SERVICE_VERSION` / `GIT_SHA` | — | stamped on every event's environment fields |
 | `DATABASE_URL` | required; `.env.example` ships `postgres://user:password@localhost:5432/agent_task_manager` | Postgres connection string |
+
+## Agent harness (`bun run harness:check`)
+
+`packages/harness` turns a prompt and a workspace into a stream of normalized events. Claude
+and Codex are behind one registry keyed by the `provider` value stored on an agent session, so
+the orchestrator selects a harness from a row and never imports either SDK. Capability flags
+(`cost`, `hooks`, `resume`, `rateLimitSignal`, `reasoning`, `subagents`) answer what a provider
+can be relied on to do before a run starts. The package never imports `packages/db`.
+
+Every run gets a private agent home at `${DATA_ROOT}/runs/<runId>/agent-home/<provider>`,
+pointed at through `CLAUDE_CONFIG_DIR` / `CODEX_HOME` and seeded with the credential files and
+nothing else, so a container never sees the operator's history and the transcript lands
+somewhere the run owns. It is removed when the run ends. One invocation leaves exactly one
+`atm.turn` row in the ledger, on every exit path including an interrupt.
+
+A stop hook (`packages/harness/scripts/stop-hook.ts`) refuses a turn that tries to end without
+having posted a comment, capped at one retry; the refusal is fed back to the model as its next
+prompt. The sandbox names the executable through `ATM_STOP_HOOK_COMMAND` and the run's comment
+marker through `ATM_COMMENT_MARKER`.
+
+```bash
+bun run harness:check                        # no model call: layout, seeding, registry, hook
+bun run harness:check --live                 # one real turn per provider, transcript, rows
+bun run harness:check --live --provider codex  # just the one harness
+```
 
 ## Event ledger (`bun run logs`)
 

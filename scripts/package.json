@@ -11,6 +11,8 @@
     "@effect/platform-bun": "catalog:",
     "@workspace/db": "workspace:*",
     "@workspace/domain": "workspace:*",
+    "@workspace/harness": "workspace:*",
+    "@workspace/telemetry": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
