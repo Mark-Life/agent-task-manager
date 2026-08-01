@@ -1,6 +1,15 @@
 import { drizzleAdapter } from "@better-auth/drizzle-adapter/relations-v2";
 import { type BetterAuthOptions, betterAuth } from "better-auth";
 import { organization } from "better-auth/plugins/organization";
+import {
+  account,
+  invitation,
+  member,
+  organization as organizationTable,
+  session,
+  user,
+  verification,
+} from "../schema/auth";
 
 /**
  * Everything about auth that does not depend on a live database handle, kept
@@ -30,8 +39,29 @@ export const options = {
  * connection pool. The server that mounts the handler passes its own handle in;
  * nothing here opens a connection.
  */
+/**
+ * The tables the adapter is allowed to reach, keyed by the model names Better
+ * Auth asks for. Passed explicitly because the adapter otherwise falls back to
+ * `db._.fullSchema`, which drizzle v1 does not populate — a v1 handle carries
+ * `relations` instead, so the lookup finds nothing and the adapter refuses to
+ * initialize.
+ *
+ * Naming only these seven is the useful part of having to pass them: the
+ * adapter is a generic model-keyed way into the database, and this is the list
+ * of what it can address.
+ */
+const authSchema = {
+  account,
+  invitation,
+  member,
+  organization: organizationTable,
+  session,
+  user,
+  verification,
+};
+
 export const makeAuth = (db: Parameters<typeof drizzleAdapter>[0]) =>
   betterAuth({
     ...options,
-    database: drizzleAdapter(db, { provider: "pg" }),
+    database: drizzleAdapter(db, { provider: "pg", schema: authSchema }),
   });

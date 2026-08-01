@@ -19,6 +19,9 @@ export default defineConfig({
   dialect: "postgresql",
   // Migrations are checked in beside the schema that needs them, forward-only.
   out: "./drizzle",
-  // Every table file, ours and the generated Better Auth one, lives here.
-  schema: "./src/schema/**/*.ts",
+  // The barrel, not a glob over the directory: a glob also picks up the
+  // colocated tests, and drizzle-kit loads what it matches with node, which has
+  // no `bun:test`. The barrel re-exports every table, ours and the generated
+  // Better Auth ones, so it sees the same set either way.
+  schema: "./src/schema/index.ts",
 });

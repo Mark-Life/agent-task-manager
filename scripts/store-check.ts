@@ -161,30 +161,31 @@ const storeCheck = Effect.gen(function* () {
     step: "ideas -> backlog, which a human may make",
   });
 
-  // Entering in_progress dispatches a worker, so spending that slot stays a
-  // human decision. The manager may ask; it may not do it.
+  // The orchestrator may only close a run out — `in_progress -> review` is its
+  // one move. It is the restricted actor here, not the manager: the manager is
+  // a second interface onto what a person can do, and this is one of them.
   const refused = yield* tasks
     .transition({ ...taskRef, to: "in_progress" })
     .pipe(
-      withActor(manager),
+      withActor(orchestrator),
       Effect.as("moved" as const),
       Effect.catchTag("TaskRepo.IllegalTransition", () =>
         Effect.succeed("refused" as const)
       )
     );
   yield* check({
-    detail: `the manager was ${refused} into in_progress`,
+    detail: `the orchestrator was ${refused} into in_progress`,
     ok: refused === "refused",
-    step: "backlog -> in_progress is refused to the manager",
+    step: "backlog -> in_progress is refused to the orchestrator",
   });
 
-  const started = yield* asHuman(
-    tasks.transition({ ...taskRef, to: "in_progress" })
-  );
+  const started = yield* tasks
+    .transition({ ...taskRef, to: "in_progress" })
+    .pipe(withActor(manager));
   yield* check({
     detail: `expected in_progress, found ${started.status}`,
     ok: started.status === "in_progress",
-    step: "backlog -> in_progress, which a human may make",
+    step: "backlog -> in_progress, which the manager may make as a person can",
   });
 
   const asOrchestrator = withActor(orchestrator);
@@ -262,10 +263,15 @@ const storeCheck = Effect.gen(function* () {
     step: "the worker run's move names its run and its session",
   });
 
+  const intoProgress = entries.filter(
+    (entry) => entry.action === "transition" && entry.toStatus === "in_progress"
+  );
   yield* check({
-    detail: "the manager's refused move left a row behind",
-    ok: entries.every((entry) => entry.actorKind !== "manager"),
-    step: "a refused mutation rolled its audit row back with it",
+    detail: `${intoProgress.length} rows move this task into in_progress, by ${intoProgress
+      .map((entry) => entry.actorKind)
+      .join(", ")}`,
+    ok: intoProgress.length === 1 && intoProgress[0]?.actorKind === "manager",
+    step: "the refused move rolled its audit row back, the allowed one kept its",
   });
 
   const projectHistory = yield* auditLog.forEntity({
