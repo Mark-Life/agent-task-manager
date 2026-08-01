@@ -85,13 +85,13 @@ criteria, parent task. Carries comments, artifacts, and sessions.
 stream, the audit log, and the dashboard replay source are one table.
 
 **Session** — an agent conversation. A task has **many** sessions over its life, so the
-link is its own table. The dashboard lists them and lets you switch between them.
+link is its own table. Each carries a status of its own — running, finished, failed — so a
+research session that died without producing anything is visible as failed rather than as
+an absence. The dashboard lists them and lets you switch between them.
 
-**Artifact** — a file produced by a run, held outside git: research reports, plans,
-scraped data, generated documents. Files, because that is what coding agents are good at.
-Local filesystem storage on the VPS to start, behind an interface that takes an S3-compatible
-adapter later (R2 or S3 — same API). Artifacts attach to a task and can be fed as context
-into any later run on that task.
+**Artifact** — a versioned document produced by a run: research reports, plans, scraped
+data, generated output. Attaches to a task and can be fed as context into any later run on
+it. See *Artifacts* below.
 
 **Comment** — the task's conversation. Human, agent, and manager all write here; every
 comment records its author, and an agent comment also records which session and run it came
@@ -117,9 +117,19 @@ trip-planning task and a feature task run on the same machinery.
 ### Sessions on a task
 
 Resuming beats starting over most of the time, so **the default is to continue the task's
-current session** with its full history. Starting a fresh session is a deliberate,
+latest session** with its full history. Starting a fresh session is a deliberate,
 one-click override, because sometimes clean context is exactly what you want — reviews
 especially.
+
+**Which session runs next is a property of the task**, not a decision made at dispatch
+time. While a task sits in *review* (or anywhere with no live run) that property can be
+set: the latest session, a specific older one, or a new session. Default is latest;
+default with no sessions yet is new. When the task moves to *in progress*, the
+orchestrator honours whatever is set and clears it back to the default.
+
+Making it a field rather than an argument is what lets the UI and the manager agent do the
+same thing through the same API — a dropdown on the task and a sentence to the manager both
+end up writing one value.
 
 The shape this enables, end to end: an implementation run opens a PR and the task lands in
 *review*. A **new** session reviews that PR with no memory of having written it. Its review
@@ -165,6 +175,45 @@ a key that proves itself gets promoted to a column later.
 **Run lifecycle events are not comments.** Started, finished, failed, cost, duration live on
 the run and in `run_events`. The dashboard interleaves them into the thread for reading; the
 storage keeps them apart so the comment thread stays a conversation.
+
+**A crashed run posts its error as a comment and moves the task to *review* anyway.** No
+summarization, no auto-retry, no special failure state on the task — the error text lands
+in the thread, the session is marked failed, and a human decides. If that turns out to read
+badly in practice, summarizing the failure or having an agent respond to it are additive
+changes on top.
+
+## Artifacts
+
+A file produced by a run, held outside git: research reports, plans, scraped data,
+generated documents. Files, because that is what agents are natively good at producing.
+
+**Agents write to a known directory in their workspace.** At run end the orchestrator
+collects whatever is there and stores it. No special tool to learn, no API call to
+remember — writing a file is the interface.
+
+**Versioning is content-addressed, and it comes for free.** Blobs are immutable and named
+by the hash of their contents; nothing is ever overwritten. A new version means writing a
+new blob and inserting a new row. Two runs producing identical content produce one blob.
+Rollback is repointing a row. Diffing two versions is reading two blobs. This is git's
+object store without the commit graph, and it is less work than the naive
+write-file-at-a-path design it replaces — which is why versioning is in from day one
+rather than deferred.
+
+**Two tables.** An `artifact` is the stable identity: task, name, current version. An
+`artifact_version` is one immutable revision: hash, size, extension, author (run, session,
+or human), timestamp. The extension is what the dashboard renders from — markdown, HTML,
+CSV.
+
+**Where the bytes live, by size.** Small text goes inline in a Postgres column, which is
+almost everything this system will produce; a report is kilobytes. Anything large gets a
+blob on disk with the row keeping a pointer. Same table, same API, one nullable column
+each. Start with the inline path only and add the pointer path the first time something
+big shows up — an additive migration, not a rewrite.
+
+**Object storage changes one function.** Because keys are content hashes, moving blobs to
+R2 or S3 swaps a put/get implementation and nothing else. Deliberately **not** using S3's
+own object versioning: it would split version history between bucket metadata and the
+database. The database stays the single source of truth for what versions exist.
 
 ## Architecture
 
@@ -346,9 +395,8 @@ Starting from the Next.js monorepo template, unchanged on first commit. Then:
    to start?
 5. Concurrency caps on a 4-core / 8 GB box: what's the real ceiling for parallel coding
    containers, and does that force an earlier move to a bigger host?
-6. Do artifacts get versioned, or does a re-run overwrite? Versioning is cheap on a
-   filesystem and expensive to retrofit.
-7. When several sessions exist on a task, which one does *in progress* resume by default —
-   the most recent, or a session explicitly pinned as the task's main thread?
-8. A run that crashes without posting a comment leaves only a transcript. Is a failure
-   summary auto-comment worth it, or is the run's error state enough?
+6. Can the "post a comment before finishing" rule be *enforced* via harness stop-hooks on
+   both Claude and Codex, or does Codex need a wrapper-side fallback? Under research;
+   the auto-append fallback works either way.
+7. Inline-in-Postgres artifact bodies: what size is the cutover to blob storage, and is it
+   worth building both paths up front rather than one?
