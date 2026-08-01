@@ -89,7 +89,7 @@ link is its own table. Each carries a status of its own — running, finished, f
 research session that died without producing anything is visible as failed rather than as
 an absence. The dashboard lists them and lets you switch between them.
 
-**Artifact** — a versioned document produced by a run: research reports, plans, scraped
+**Artifact** — a file produced by a run and kept: research reports, plans, scraped
 data, generated output. Attaches to a task and can be fed as context into any later run on
 it. See *Artifacts* below.
 
@@ -202,36 +202,50 @@ no terminal event" as a failure in its own right.
 
 ## Artifacts
 
-A file produced by a run, held outside git: research reports, plans, scraped data,
-generated documents. Files, because that is what agents are natively good at producing.
+A file a run produces and you want to keep: research reports, plans, scraped data,
+generated documents.
 
-**Agents write to a known directory in their workspace.** At run end the orchestrator
-collects whatever is there and stores it. No special tool to learn, no API call to
-remember — writing a file is the interface.
+**One directory per task, on disk, mounted into the container.** The host keeps
+`tasks/<id>/artifacts/`; every container working that task gets it bind-mounted at a fixed
+path alongside the repo clone. Inside the container it is an ordinary directory — the agent
+neither knows nor cares that it is a mount. Files written there survive the container. That
+is the entire storage mechanism.
 
-**Versioning is content-addressed, and it comes for free.** Blobs are immutable and named
-by the hash of their contents; nothing is ever overwritten. A new version means writing a
-new blob and inserting a new row. Two runs producing identical content produce one blob.
-Rollback is repointing a row. Diffing two versions is reading two blobs. This is git's
-object store without the commit graph, and it is less work than the naive
-write-file-at-a-path design it replaces — which is why versioning is in from day one
-rather than deferred.
+**Agents use their native file tools.** Every harness ships a write tool taking an absolute
+path and file contents, and an edit tool taking a path and a find/replace pair. Models are
+heavily trained on them. A bespoke `create_artifact` tool would be a new interface for
+something the model already does well, and every extra tool costs a little quality — so
+there isn't one. The only instruction needed is one line in the prompt: anything worth
+keeping goes in the artifacts directory, everything else is scratch and dies with the
+container.
 
-**Two tables.** An `artifact` is the stable identity: task, name, current version. An
-`artifact_version` is one immutable revision: hash, size, extension, author (run, session,
-or human), timestamp. The extension is what the dashboard renders from — markdown, HTML,
-CSV.
+**Postgres holds an index, never bytes.** Path, size, modified time, extension, and which
+run last touched it — rebuilt by scanning the directory after each run. Because the index is
+derivable from disk it is a cache, not a source of truth: if it ever drifts, rescan. That
+removes an entire class of consistency bug.
 
-**Where the bytes live, by size.** Small text goes inline in a Postgres column, which is
-almost everything this system will produce; a report is kilobytes. Anything large gets a
-blob on disk with the row keeping a pointer. Same table, same API, one nullable column
-each. Start with the inline path only and add the pointer path the first time something
-big shows up — an additive migration, not a rewrite.
+Bytes-in-Postgres was the wrong instinct and this reverses it. Reading a file from local
+disk is a page-cache hit; reading it from Postgres is a query round-trip plus decompression
+of a large value, and the bytes are on the same disk anyway. Large values also bloat the
+write-ahead log and every backup, forever. Postgres is fast for metadata; the filesystem is
+fast for bytes.
 
-**Object storage changes one function.** Because keys are content hashes, moving blobs to
-R2 or S3 swaps a put/get implementation and nothing else. Deliberately **not** using S3's
-own object versioning: it would split version history between bucket metadata and the
-database. The database stays the single source of truth for what versions exist.
+**No versioning.** A folder of current files, that's it. What a previous draft said is in
+the run transcript if it is ever wanted. If real history turns out to matter later, the
+answer is `git init` in the artifacts directory and a commit after each run — free history,
+free diff, tooling everyone already knows, and no schema at all. That option stays open at
+zero cost, which is why building a version table now would be paying early for something
+that may never be needed.
+
+**Object storage is sync-in / sync-out, not a mount.** Buckets do not bind-mount sensibly —
+the FUSE adapters that pretend otherwise have no atomic rename and poor partial writes, and
+agents edit files in place constantly. The cloud path instead materializes the directory
+before the run and persists changed files after, the way CI restores a cache. So the seam
+is "give me this task's directory, take it back when I'm done", with a local implementation
+that mounts and a bucket implementation that copies. One interface, two implementations —
+not a hybrid, and the agent sees a plain directory either way.
+
+**One run per task at a time**, so two agents never write the same directory concurrently.
 
 ## Architecture
 
@@ -263,8 +277,9 @@ Web SPA on CF Pages ─┼─→ gateway (VPS: HTTP + SSE) ─→ Postgres ←�
 Every run gets its own Docker container, including personal tasks and the manager agent.
 Ephemeral: torn down after the run.
 
-**Mounted from host:** the run workspace (rw) and a per-run agent-home dir (rw). Nothing
-else. Never the docker socket — that one mount turns a sandbox into host root.
+**Mounted from host:** the run workspace (rw), the task's artifacts directory (rw), and a
+per-run agent-home dir (rw). Nothing else. Never the docker socket — that one mount turns a
+sandbox into host root.
 
 **Hardening:** drop all capabilities, no-new-privileges, non-root user, pid/memory/cpu
 limits. Blast radius of a confused agent = its own container.
@@ -413,5 +428,6 @@ Starting from the Next.js monorepo template, unchanged on first commit. Then:
    to start?
 5. Concurrency caps on a 4-core / 8 GB box: what's the real ceiling for parallel coding
    containers, and does that force an earlier move to a bigger host?
-6. Inline-in-Postgres artifact bodies: what size is the cutover to blob storage, and is it
-   worth building both paths up front rather than one?
+6. Are artifacts always task-scoped, or is there a project-level and a global directory
+   too? A task that wants last month's research report currently has nowhere to look for it
+   except its own folder.
