@@ -1,0 +1,356 @@
+#!/usr/bin/env bun
+
+/**
+ * Wide-event ledger viewer: `runs | errors | stats | follow` over the JSONL
+ * files under EVENT_LOG_DIR (default `${DATA_ROOT}/events`), one file per
+ * service (`loop.jsonl`, `gateway.jsonl`, ...). Within a file the `event` field
+ * names the unit of work, so one service may write several markers; every view
+ * takes a marker so counts stay about one kind of thing. Reads the ledger
+ * directly; never talks to a running service.
+ *
+ * Usage: `bun run logs [runs|errors|stats|follow] [marker|all]`
+ */
+
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { open, stat } from "node:fs/promises";
+import { join } from "node:path";
+
+/**
+ * Reads an environment variable, treating blank as unset. `.env` files routinely
+ * carry a documented-but-empty key, and Effect's `Config` already skips those —
+ * matching it here keeps the viewer pointed at the directory the sink writes to.
+ */
+const envOr = (name: string, fallback: string) =>
+  process.env[name]?.trim() || fallback;
+
+const DATA_ROOT = envOr("DATA_ROOT", ".data");
+const EVENT_LOG_DIR = envOr("EVENT_LOG_DIR", join(DATA_ROOT, "events"));
+const EVENT_PREFIX = "atm.";
+/** Marker the views read when none is named: the canonical record of the system. */
+const DEFAULT_MARKER = "atm.run";
+/** Marker argument that turns marker filtering off. */
+const ALL_MARKERS = "all";
+const POLL_MS = 500;
+
+/** Outcome given to a start row whose unit never wrote a terminus. */
+const LOST = "lost";
+
+/** Width-1 ASCII markers per outcome (emoji render double-width and break table alignment). */
+const MARK: Record<string, string> = {
+  already_running: "-",
+  at_capacity: "!",
+  done: "+",
+  errored: "x",
+  interrupted: "~",
+  lost: "?",
+  parked: "=",
+  timeout: "#",
+};
+
+/** One parsed wide event. Fields are best-effort — any may be absent. */
+interface EventRow {
+  costUsd?: number | null;
+  durationMs?: number | null;
+  errorClass?: string;
+  errorMessage?: string;
+  event?: string;
+  outcome?: string | null;
+  phase?: string;
+  project?: string;
+  provider?: string;
+  runId?: string | null;
+  totalTokens?: number | null;
+  ts?: string;
+  turns?: number | null;
+}
+
+/** Parse one JSONL line, returning the row only when it carries an `atm.*` marker. */
+const parseLine = (line: string, marker: string) => {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed?.event !== "string") {
+      return null;
+    }
+    const wanted =
+      marker === ALL_MARKERS
+        ? parsed.event.startsWith(EVENT_PREFIX)
+        : parsed.event === marker;
+    return wanted ? (parsed as EventRow) : null;
+  } catch {
+    return null;
+  }
+};
+
+/** List `*.jsonl` files in the event log directory, empty when the directory is missing. */
+const listLedgerFiles = (dir: string) => {
+  if (!existsSync(dir)) {
+    return [];
+  }
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".jsonl"))
+    .map((name) => join(dir, name))
+    .sort();
+};
+
+/**
+ * Collapses the two rows a long unit of work writes into the one thing that
+ * happened. A start row whose `runId` also has a terminus is dropped — the
+ * terminus carries the whole story, and counting both doubles every total. A
+ * start row with no terminus is the interesting case: the unit was claimed and
+ * never closed, so it is reported as `lost` rather than vanishing.
+ */
+const reconcilePhases = (rows: EventRow[]) => {
+  const terminated = new Set(
+    rows
+      .filter((row) => row.phase !== "start" && row.runId)
+      .map((row) => row.runId)
+  );
+  return rows.flatMap((row) => {
+    if (row.phase !== "start") {
+      return [row];
+    }
+    return row.runId && terminated.has(row.runId)
+      ? []
+      : [{ ...row, outcome: LOST }];
+  });
+};
+
+/** Read and parse every event row across every ledger file, sorted by timestamp. */
+const readAllRows = (dir: string, marker: string) => {
+  const rows: EventRow[] = [];
+  for (const file of listLedgerFiles(dir)) {
+    const text = readFileSync(file, "utf8");
+    for (const line of text.split("\n")) {
+      const row = parseLine(line, marker);
+      if (row) {
+        rows.push(row);
+      }
+    }
+  }
+  return reconcilePhases(rows).sort((a, b) =>
+    (a.ts ?? "").localeCompare(b.ts ?? "")
+  );
+};
+
+/** Pad `s` to width `w`, right-aligned when `right`, truncating overflow. */
+const pad = (s: string, w: number, right = false) => {
+  const v = s.length > w ? s.slice(0, w) : s;
+  return right ? v.padStart(w) : v.padEnd(w);
+};
+
+const TIME_W = 8;
+const MARK_W = 1;
+const COST_W = 9;
+const DUR_W = 8;
+const TURNS_W = 5;
+const TOK_W = 9;
+const PROJECT_W = 16;
+const CLASS_W = 18;
+const COST_DECIMALS = 4;
+const DUR_DECIMALS = 1;
+const MS_PER_SEC = 1000;
+
+/** HH:MM:SS from an ISO timestamp; falls back to a placeholder when unparseable. */
+const fmtTime = (ts?: string) => {
+  if (!ts) {
+    return "--:--:--";
+  }
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime())
+    ? pad(ts, TIME_W)
+    : d.toTimeString().slice(0, TIME_W);
+};
+
+/** `$x.xxxx` or `-` when the row reported no cost (interrupt/timeout/degraded). */
+const fmtCost = (n?: number | null) =>
+  typeof n === "number" ? `$${n.toFixed(COST_DECIMALS)}` : "-";
+
+/** Human duration (`1.2s` / `340ms`) or `-`. */
+const fmtDur = (ms?: number | null) => {
+  if (typeof ms !== "number") {
+    return "-";
+  }
+  return ms >= MS_PER_SEC
+    ? `${(ms / MS_PER_SEC).toFixed(DUR_DECIMALS)}s`
+    : `${ms}ms`;
+};
+
+/** Integer or `-`. */
+const fmtInt = (n?: number | null) =>
+  typeof n === "number" ? n.toLocaleString() : "-";
+
+/** One aligned `runs` / `follow` row. */
+const runLine = (r: EventRow) => {
+  const mark = MARK[r.outcome ?? ""] ?? "?";
+  return [
+    pad(fmtTime(r.ts), TIME_W),
+    pad(mark, MARK_W),
+    pad(fmtCost(r.costUsd), COST_W, true),
+    pad(fmtDur(r.durationMs), DUR_W, true),
+    pad(fmtInt(r.turns), TURNS_W, true),
+    pad(fmtInt(r.totalTokens), TOK_W, true),
+    r.project ?? "-",
+  ].join(" ");
+};
+
+const RUN_HEADER = [
+  pad("TIME", TIME_W),
+  pad("O", MARK_W),
+  pad("COST", COST_W, true),
+  pad("DUR", DUR_W, true),
+  pad("TURNS", TURNS_W, true),
+  pad("TOKENS", TOK_W, true),
+  "PROJECT",
+].join(" ");
+
+/** One aligned `errors` row: time, marker, project, errorClass, errorMessage. */
+const errorLine = (r: EventRow) =>
+  [
+    pad(fmtTime(r.ts), TIME_W),
+    pad(MARK[r.outcome ?? ""] ?? "?", MARK_W),
+    pad(r.project ?? "-", PROJECT_W),
+    pad(r.errorClass ?? "-", CLASS_W),
+    r.errorMessage ?? "-",
+  ].join(" ");
+
+const ERR_HEADER = [
+  pad("TIME", TIME_W),
+  pad("O", MARK_W),
+  pad("PROJECT", PROJECT_W),
+  pad("CLASS", CLASS_W),
+  "MESSAGE",
+].join(" ");
+
+/** Print aggregate counts, total cost, and total wall time across all rows. */
+const printStats = (rows: EventRow[], marker: string) => {
+  const counts: Record<string, number> = {};
+  let totalCost = 0;
+  let totalMs = 0;
+  for (const r of rows) {
+    const outcome = r.outcome ?? "unknown";
+    counts[outcome] = (counts[outcome] ?? 0) + 1;
+    if (typeof r.costUsd === "number") {
+      totalCost += r.costUsd;
+    }
+    if (typeof r.durationMs === "number") {
+      totalMs += r.durationMs;
+    }
+  }
+  // The count is labelled with what was counted: totals mean nothing until you
+  // know whether they are over runs, agent turns, or everything at once.
+  process.stdout.write(`${pad(marker, PROJECT_W)} ${rows.length}\n`);
+  for (const [outcome, n] of Object.entries(counts).sort()) {
+    const mark = MARK[outcome] ?? "?";
+    process.stdout.write(`  ${mark} ${pad(outcome, PROJECT_W)} ${n}\n`);
+  }
+  process.stdout.write(`total cost  $${totalCost.toFixed(COST_DECIMALS)}\n`);
+  process.stdout.write(
+    `total wall  ${(totalMs / MS_PER_SEC).toFixed(DUR_DECIMALS)}s\n`
+  );
+};
+
+/** Per-file poll-tail state: byte offset already drained. */
+interface TailState {
+  offset: number;
+}
+
+/** Read newly appended bytes from `file` past `state.offset` and print any complete rows. */
+const drainFile = async (file: string, state: TailState, marker: string) => {
+  let size: number;
+  try {
+    ({ size } = await stat(file));
+  } catch {
+    return;
+  }
+  if (size < state.offset) {
+    state.offset = 0; // file truncated or rotated
+  }
+  if (size <= state.offset) {
+    return;
+  }
+  const fh = await open(file, "r");
+  try {
+    const buf = Buffer.alloc(size - state.offset);
+    await fh.read(buf, 0, buf.length, state.offset);
+    const text = buf.toString("utf8");
+    const lastNl = text.lastIndexOf("\n");
+    const consumable = lastNl === -1 ? "" : text.slice(0, lastNl);
+    for (const line of consumable.split("\n")) {
+      const row = parseLine(line, marker);
+      if (row) {
+        process.stdout.write(`${runLine(row)}\n`);
+      }
+    }
+    state.offset += Buffer.byteLength(
+      lastNl === -1 ? "" : `${consumable}\n`,
+      "utf8"
+    );
+  } finally {
+    await fh.close();
+  }
+};
+
+/** Poll-tail every ledger file, printing newly appended rows and picking up files created later. */
+const runFollow = async (dir: string, marker: string) => {
+  const states = new Map<string, TailState>();
+
+  const tick = async () => {
+    const files = listLedgerFiles(dir).map((file) => {
+      let state = states.get(file);
+      if (!state) {
+        // New files start at the end — `follow` shows what happens next, not history.
+        const startOffset = existsSync(file) ? statSync(file).size : 0;
+        state = { offset: startOffset };
+        states.set(file, state);
+      }
+      return { file, state };
+    });
+    await Promise.all(
+      files.map(({ file, state }) => drainFile(file, state, marker))
+    );
+  };
+
+  await tick();
+  setInterval(() => {
+    tick().catch(() => {
+      // transient read error — keep polling
+    });
+  }, POLL_MS);
+};
+
+process.stdout.on("error", (e) => {
+  if ((e as NodeJS.ErrnoException).code === "EPIPE") {
+    process.exit(0);
+  }
+});
+
+const mode = process.argv[2] ?? "runs";
+const requestedMarker = process.argv[3] ?? DEFAULT_MARKER;
+
+if (mode === "follow") {
+  await runFollow(EVENT_LOG_DIR, requestedMarker);
+} else {
+  const rows = readAllRows(EVENT_LOG_DIR, requestedMarker);
+  if (mode === "errors") {
+    process.stdout.write(`${ERR_HEADER}\n`);
+    // Every non-success ending, not just `errored`: a timeout, an interrupt and
+    // a lost unit all carry a class and a message, and all of them are why
+    // someone opened this view.
+    for (const r of rows) {
+      if (r.outcome !== "done") {
+        process.stdout.write(`${errorLine(r)}\n`);
+      }
+    }
+  } else if (mode === "stats") {
+    printStats(rows, requestedMarker);
+  } else {
+    process.stdout.write(`${RUN_HEADER}\n`);
+    for (const r of rows) {
+      process.stdout.write(`${runLine(r)}\n`);
+    }
+  }
+}

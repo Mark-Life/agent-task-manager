@@ -8,14 +8,14 @@
     "dev:app": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test --pass-with-no-tests"
   },
   "portless": {
     "name": "web",
     "script": "dev:app"
   },
   "dependencies": {
-    "@orpc/server": "^1.14.8",
     "@workspace/api": "workspace:*",
     "@workspace/env": "workspace:*",
     "@workspace/ui": "workspace:*",
@@ -31,8 +31,7 @@
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@workspace/typescript-config": "workspace:*",
-    "babel-plugin-react-compiler": "^1.0.0",
-    "typescript": "^6.0.3"
+    "babel-plugin-react-compiler": "^1.0.0"
   },
   "overrides": {
     "@types/react": "19.2.17",

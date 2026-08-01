@@ -101,7 +101,7 @@ volume rises 10x, and the assumed volume is written beside the sink.
 
 ---
 
-## Phase 0 — Scaffold
+## Phase 0 — Scaffold — **done**
 
 1. Pin `effect` and `@effect/platform-bun` to the same version, ≥ `4.0.0-beta.81` (see
    `01-api-surface.md` for why not beta.78). Add to the workspace catalog.
@@ -130,6 +130,18 @@ volume rises 10x, and the assumed volume is written beside the sink.
 empty. Postgres reachable from the host. A throwaway script emits one wide event: it lands
 in the JSONL, `bun run logs` shows it, and with the OTLP endpoint unset the process makes no
 network call.
+
+**Shipped**, deviations from the above:
+
+- Effect pinned at `4.0.0-beta.102`, the latest beta, not the beta.81 floor.
+- `apps/gateway`, `apps/loop` and `apps/telegram` not created — they belong to their own
+  phases. Only the `packages/*` rows and `apps/dashboard` exist.
+- `bun run build` covers `dashboard` and `web` only; the packages are consumed as source
+  through path aliases and have no build step, so the exit clause passes vacuously for them.
+- `withWideEvent` wraps the emit in `Effect.onExit`, so later phases get the exactly-once
+  property rather than re-deriving it. `outcome` is nullable, which is what a `phase: "start"`
+  row needs.
+- Ledger rotation implemented: one generation, 64 MiB cap per service.
 
 ---
 

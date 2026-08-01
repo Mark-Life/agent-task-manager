@@ -6,10 +6,20 @@
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
-      "outputs": [".next/**", "!.next/cache/**"]
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
     },
     "typecheck": {
-      "dependsOn": ["^typecheck"]
+      "dependsOn": ["^typecheck"],
+      "inputs": ["$TURBO_DEFAULT$", "tsconfig.json"],
+      "outputs": []
+    },
+    "//#lint": {
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "src/**/*.test.ts", "test/**/*.ts"],
+      "outputs": []
     },
     "//#check": {},
     "//#fix": {

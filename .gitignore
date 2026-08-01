@@ -18,6 +18,9 @@ coverage
 # Turbo
 .turbo
 
+# Data root: artifacts, per-run agent homes, event ledger
+.data
+
 # Vercel
 .vercel
 

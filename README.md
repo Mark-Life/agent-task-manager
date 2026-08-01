@@ -1,12 +1,32 @@
-# Next.js Monorepo Template
+# Agent Task Manager
 
-A turborepo-based monorepo template with Next.js, shadcn/ui, and strict code quality via Ultracite.
+A turborepo monorepo for running coding agents against tasks: a task store, an agent harness, a
+sandbox, an orchestrator loop, and the interfaces onto them. Bun, Effect, shadcn/ui, Ultracite.
 
 ## What's Inside
 
-- `apps/web` — Next.js application
-- `packages/ui` — shared shadcn/ui component library
-- `packages/typescript-config` — shared TypeScript configs
+Dependencies run one way, top to bottom. Every package may import `telemetry`; `telemetry`
+imports nothing of ours.
+
+| Package | Owns | May import |
+| --- | --- | --- |
+| `packages/domain` | Entities, schemas, status machine, actor and scope types. No I/O. | — |
+| `packages/db` | Drizzle schema, migrations, connection layer, repositories, audit write. | `domain` |
+| `packages/harness` | Agent providers, normalized events, session identity, transcripts. | `domain` |
+| `packages/sandbox` | Container lifecycle, mounts, images, credential seeding. | `domain` |
+| `packages/api` | HttpApi contract + OpenAPI. Types only, no handlers. | `domain` |
+| `packages/orchestrator` | Dispatch, leases, pool, run lifecycle, ingest, artifact index. | `domain` `db` `harness` `sandbox` |
+| `packages/telemetry` | Logger and OTLP layers, wide-event schema, sanitizers, JSONL sink, metrics. | — |
+| `packages/env` | Env parsing. | — |
+| `packages/ui` | Shared shadcn/ui components. | — |
+| `packages/typescript-config` | Shared TypeScript configs. | — |
+| `apps/gateway` | HttpApi server, SSE, auth, artifact serving. | `api` `db` `domain` |
+| `apps/loop` | Runtime host for the orchestrator. | `orchestrator` |
+| `apps/telegram` | Bot + manager agent. | `api` `harness` |
+| `apps/dashboard` | Vite SPA. | `api` `ui` |
+| `apps/web` | Next.js marketing app. | — |
+
+Most of these are scaffolds today: they carry their wiring and nothing else.
 
 ## Stack
 
@@ -54,13 +74,73 @@ The `upgrade` command updates Next.js, refreshes all shadcn/ui components, updat
 | Command | Description |
 | --- | --- |
 | `bun dev` | Start all apps in dev mode (web → https://web.localhost:8443) |
-| `bun run build` | Build all apps and packages |
+| `bun run build` | Build the two apps that have a build step (`web`, `dashboard`) |
+| `bun run typecheck` | Typecheck all apps and packages |
+| `bun run test` | Run tests across all apps and packages |
 | `bun run lint` | Lint all apps and packages |
 | `bun run fix` | Auto-fix formatting and lint issues |
 | `bun run check` | Check for lint/format issues |
+| `bun run db:up` / `db:down` | Start / stop the local Postgres container |
+| `bun run logs` | Read the wide-event ledger (`runs \| errors \| stats \| follow`) |
 | `bun run upgrade` | Upgrade Next.js, shadcn/ui, and all deps |
 
+The libraries are consumed as source through tsconfig paths and have no build step, so
+`typecheck` and `test` — not `build` — are what cover them.
+
 The web app runs behind [portless](https://portless.sh) at `https://web.localhost:8443` — automatic HTTPS, no port juggling. It binds the unprivileged port `8443` (via `PORTLESS_PORT` in the `dev` script) so it never needs `sudo`; the first run still adds a local certificate authority to your trust store once. Prefer a clean `https://web.localhost` with no port? Drop `PORTLESS_PORT` from the script and accept a one-time `sudo` for port 443. To bypass portless entirely, run `bun run dev:app` in `apps/web` for plain `http://localhost:3000`. Change the subdomain via the `portless` key in `apps/web/package.json`.
+
+## Postgres (local dev)
+
+`docker-compose.yml` runs a single Postgres container, bound to `127.0.0.1` only.
+
+```bash
+bun run db:up              # start, detached
+bun run db:down            # stop
+docker compose logs -f     # tail
+```
+
+Data persists in the `atm_postgres_data` named volume. Override `POSTGRES_USER` /
+`POSTGRES_PASSWORD` / `POSTGRES_DB` / `POSTGRES_PORT` in `.env` to change credentials or port;
+defaults match `DATABASE_URL` in `.env.example`
+(`postgres://user:password@localhost:5432/agent_task_manager`).
+
+## Environment variables
+
+Read from `.env` / `.env.local` at the repo root (see `packages/env`). Telemetry set:
+
+| Var | Default / example | Purpose |
+| --- | --- | --- |
+| `LOG_FORMAT` | `pretty` on a TTY, else `logfmt` | console log shape (`pretty`/`logfmt`/`json`) |
+| `LOG_LEVEL` | `Info` | minimum log level |
+| `DATA_ROOT` | `.data` | root for local, non-database state |
+| `EVENT_LOG_DIR` | `${DATA_ROOT}/events` | JSONL event ledger directory, one file per service |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP collector URL; unset disables export entirely, no HTTP client built |
+| `OTEL_EXPORTER_OTLP_HEADERS` | unset | `k=v,k=v`, split on the first `=` per entry |
+| `SERVICE_VERSION` / `GIT_SHA` | — | stamped on every event's environment fields |
+| `DATABASE_URL` | required; `.env.example` ships `postgres://user:password@localhost:5432/agent_task_manager` | Postgres connection string |
+
+## Event ledger (`bun run logs`)
+
+Every unit of work (agent turn, container run, HTTP request, ...) emits one wide JSON line to
+`${EVENT_LOG_DIR}/<service>.jsonl` — one file per service (`loop.jsonl`, `gateway.jsonl`), with
+the `event` field naming the unit inside it. Read it with:
+
+```bash
+bun run logs                  # same as: bun run logs runs atm.run
+bun run logs runs             # one row per unit, newest last
+bun run logs errors           # every non-done outcome, with class + message
+bun run logs stats            # counts per outcome, total cost, total wall time
+bun run logs follow           # poll-tails all ledger files, prints new rows as they land
+bun run logs stats atm.turn   # any view takes a marker; `all` reads every atm.* marker
+```
+
+Each view reads one marker (default `atm.run`) so counts stay about one kind of thing. For a
+unit that writes both a `start` row and a terminus, the pair is collapsed to the terminus; a
+start with no terminus is reported as `lost` rather than disappearing.
+
+A missing `EVENT_LOG_DIR` prints an empty table / zeroed stats instead of crashing. Blank reads
+as unset, matching `Config`, so the viewer and the sink always agree on the directory. No
+running service required; it only reads files on disk.
 
 ## Adding Components
 

@@ -1,3 +1,13 @@
 {
-  "type": "module"
+  "name": "@workspace/scripts",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test --pass-with-no-tests"
+  },
+  "devDependencies": {
+    "@workspace/typescript-config": "workspace:*"
+  }
 }
