@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "effect": {
+      "source": "kitlangton/skills",
+      "sourceType": "github",
+      "skillPath": "skills/effect/SKILL.md",
+      "computedHash": "1b789df989e009e38ad988ea8986430bde2accad67eb924b07f1458c019ad026"
+    },
+    "observability": {
+      "source": "mark-life/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/coding-workflows/observability/SKILL.md",
+      "computedHash": "8e96f9875dc1294c93f446ab6513fec680c048c48ae8c5990339584c7049f00f"
+    },
+    "quality-code": {
+      "source": "RhysSullivan/skills",
+      "sourceType": "github",
+      "skillPath": "skills/quality-code/SKILL.md",
+      "computedHash": "327fc074c121d259ff0c8d7a031dd4f63877d490169cf8d91a3bb30f4a017311"
+    }
+  }
+}
