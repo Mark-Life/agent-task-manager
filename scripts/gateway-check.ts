@@ -37,8 +37,10 @@
  * **The stream.** A live run's timeline over SSE, and the row that is written
  * when the connection closes rather than when the handler returned.
  *
- * The one thing this cannot claim is the trace reaching the run — see
- * `traceClaims` below, which says exactly how far it goes and what is missing.
+ * **The trace.** A request's id on the audit row it wrote, and on the two rows
+ * the loop reads to open a run — the whole of the gateway's half of that seam.
+ * The loop adopting them is `bun run loop:check`'s claim, because it needs a
+ * loop.
  *
  * Everything is scoped to its own data root (`${DATA_ROOT}/gateway-check`) so a
  * real gateway's ledger is never appended to, and every row it files is deleted
@@ -76,7 +78,7 @@ import {
   withActor,
 } from "@workspace/db";
 import type { TaskId, WorkspaceId } from "@workspace/domain";
-import { Actor, UserId } from "@workspace/domain";
+import { Actor, parseTraceparent, UserId } from "@workspace/domain";
 import { DateTime, Effect } from "effect";
 import { makeTokenSigner } from "../apps/gateway/src/auth/tokens";
 import { SERVICE_NAME } from "../apps/gateway/src/identity";
@@ -97,7 +99,6 @@ import {
   CheckFailed,
   check,
   freePort,
-  gap,
   makeCaller,
   startGateway,
 } from "./gateway-check-client";
@@ -187,17 +188,33 @@ const openRun = (input: {
     withActor(Actor.cases.orchestrator.make({ loopInstance: APPLICATION_NAME }))
   );
 
+/** The trace id a row carries, or the header itself when it carries none. */
+const carried = (header: string | null | undefined) => {
+  const context = parseTraceparent(header);
+  return context === null ? `nothing (${header ?? "null"})` : context.traceId;
+};
+
 /**
- * How far a request's trace actually reaches, stated exactly.
+ * How far a request's trace reaches, which is every row on this side of the
+ * seam between the gateway and the loop.
  *
- * The audited half holds: every mutation stamps the current span's trace onto
- * its audit row, so a task filed over HTTP is joined to the request that filed
- * it by an id an operator can grep for. The run half does not, and this says so
- * out loud rather than asserting something weaker and calling it the criterion.
+ * Three rows, one request each. The audit row is the trail an operator greps:
+ * every mutation stamps the current span's trace onto it. The other two are
+ * what the loop reads to decide there is work — a card in *in progress* and an
+ * intent on the queue — and each carries the asking request's whole
+ * `traceparent`, so the run opened off it seconds or a restart later is a child
+ * of the request rather than a second tree with a matching id.
+ *
+ * Nothing here needs a loop, and nothing here is the loop's claim: that the
+ * orchestrator adopts the header and the run row lands in the request's trace
+ * is proved by `bun run loop:check`, which has one.
  */
 const traceClaims = (input: {
+  readonly caller: ReturnType<typeof makeCaller>;
   readonly created: string;
+  readonly projectId: string;
   readonly taskId: TaskId;
+  readonly token: string;
   readonly workspaceId: WorkspaceId;
 }) =>
   Effect.gen(function* () {
@@ -206,21 +223,69 @@ const traceClaims = (input: {
       taskId: input.taskId,
       workspaceId: input.workspaceId,
     });
-    const wrote = (entityType: string) =>
-      entries.find(
-        (entry) => entry.action === "create" && entry.entityType === entityType
-      );
+    const wroteTask = entries.find(
+      (entry) => entry.action === "create" && entry.entityType === "task"
+    );
 
     yield* check({
-      detail: `the create request traced ${input.created}, its audit row ${wrote("task")?.traceId ?? "nothing"}`,
-      ok: wrote("task")?.traceId === input.created,
+      detail: `the create request traced ${input.created}, its audit row ${wroteTask?.traceId ?? "nothing"}`,
+      ok: wroteTask?.traceId === input.created,
       step: "the create request's trace is on the audit row it wrote",
     });
 
-    yield* gap({
-      detail: `the run traces ${wrote("run")?.traceId ?? "nothing"} — its opener's, not the request's. Nothing the gateway writes can carry a trace to the loop: run_command has no trace column and RunCommandRepo.enqueue no trace argument, task has none either, and RunRepo.create's only caller is the orchestrator passing its own claim span. Closing it is one column and one argument in @workspace/db`,
-      step: "the create request's trace does NOT reach the atm.run row",
+    // Filed straight into the column rather than moved into it: a create is as
+    // much a dispatch trigger as a move, and it is the path the manager and the
+    // seed script take, so it is the one worth driving over the wire.
+    const filed = yield* input.caller.call({
+      body: {
+        projectId: input.projectId,
+        status: "in_progress",
+        title: "gateway-check dispatch",
+      },
+      method: "POST",
+      path: "/tasks",
+      token: input.token,
     });
+    const dispatchTaskId = ((filed.body as { id?: string }).id ?? "") as TaskId;
+    const stamped = (call: { readonly body: unknown }) =>
+      (call.body as { dispatchTraceparent?: string | null })
+        .dispatchTraceparent ?? null;
+
+    yield* check({
+      detail: `the request traced ${filed.traceId}, the card carries ${carried(stamped(filed))}`,
+      ok: parseTraceparent(stamped(filed))?.traceId === filed.traceId,
+      step: "a card filed into in_progress carries the request's trace for the loop to read",
+    });
+
+    const intent = yield* input.caller.call({
+      body: {},
+      method: "POST",
+      path: `/tasks/${dispatchTaskId}/commands/rerun`,
+      token: input.token,
+    });
+    const queued = (intent.body as { traceparent?: string | null }).traceparent;
+    yield* check({
+      detail: `the request traced ${intent.traceId}, the intent carries ${carried(queued)}`,
+      ok: parseTraceparent(queued)?.traceId === intent.traceId,
+      step: "an intent queued over HTTP carries the asking request's trace too",
+    });
+
+    // A rerun moves no card, so the card is still where it was: leaving the
+    // column now is what proves the stamp is cleared rather than left to join a
+    // run to a request that ended days ago.
+    const left = yield* input.caller.call({
+      body: { to: "review" },
+      method: "POST",
+      path: `/tasks/${dispatchTaskId}/status`,
+      token: input.token,
+    });
+    yield* check({
+      detail: `after the move the card carries ${stamped(left) ?? "nothing"}`,
+      ok: stamped(left) === null,
+      step: "leaving the column clears the stamp, so no later run joins a spent request",
+    });
+
+    return dispatchTaskId;
   });
 
 /** The four credentials every claim below is made with. */
@@ -307,14 +372,25 @@ const drive = (input: {
       token: adminToken,
     });
 
+    // Last of the claims, because it files a third card and the cleanup below
+    // is what takes it away again.
+    const dispatchTaskId = yield* traceClaims({
+      caller,
+      created,
+      projectId,
+      taskId,
+      token: adminToken,
+      workspaceId,
+    });
+
     yield* cleanUp({
       caller,
       projectId,
-      taskIds: [otherTaskId, taskId],
+      taskIds: [otherTaskId, taskId, dispatchTaskId],
       token: adminToken,
     });
 
-    return { created, refused, streamed, taskId };
+    return { refused, streamed, taskId };
   });
 
 const gatewayCheck = Effect.gen(function* () {
@@ -361,11 +437,6 @@ const gatewayCheck = Effect.gen(function* () {
     refused: driven.refused,
     streamed: driven.streamed,
     taskId: driven.taskId,
-  });
-  yield* traceClaims({
-    created: driven.created,
-    taskId: driven.taskId,
-    workspaceId: workspace.id,
   });
 
   yield* Effect.logInfo(

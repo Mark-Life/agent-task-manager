@@ -16,7 +16,11 @@
  * from inside the container. Each leaves its own kind of audit row.
  *
  * Rows are left behind on purpose — the audit log is append-only and the whole
- * claim is that the trail survives. Usage: `bun run db:store-check`.
+ * claim is that the trail survives. The attempt is not among them: a run left
+ * live on a task that has already been accepted is a state nothing in the system
+ * can reach, and the next process to sweep for lost runs would try to move an
+ * accepted task back into review and be refused. So the walk ends the attempt
+ * the way a real one ends. Usage: `bun run db:store-check`.
  */
 
 import { BunRuntime } from "@effect/platform-bun";
@@ -207,6 +211,8 @@ const storeCheck = Effect.gen(function* () {
     })
   );
 
+  yield* asOrchestrator(runs.start({ id: run.id, workspaceId }));
+
   const worker = Actor.cases.worker_run.make({
     runId: run.id,
     sessionId: session.id,
@@ -220,6 +226,24 @@ const storeCheck = Effect.gen(function* () {
     detail: `expected review, found ${reviewed.status}`,
     ok: reviewed.status === "review",
     step: "in_progress -> review, the worker run's only move",
+  });
+
+  // The attempt is over the moment the worker hands the card back, and the
+  // orchestrator is the one that says so. Leaving it live would leave the
+  // database in a state only a crash produces, for every later check to find.
+  const closed = yield* asOrchestrator(
+    runs.close({ id: run.id, outcome: "done", workspaceId })
+  );
+  const ended = yield* asOrchestrator(
+    sessions.finish({ id: session.id, workspaceId })
+  );
+  yield* check({
+    detail: `the run is ${closed.status}/${closed.outcome} and the session ${ended.status}`,
+    ok:
+      closed.status === "finished" &&
+      closed.outcome === "done" &&
+      ended.status === "finished",
+    step: "the attempt and its session are closed out, leaving no live run behind",
   });
 
   const done = yield* asHuman(tasks.transition({ ...taskRef, to: "done" }));

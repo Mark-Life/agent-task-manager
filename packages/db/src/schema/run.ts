@@ -205,6 +205,11 @@ export const runCommand = pgTable(
       .notNull()
       .default("pending"),
     taskId: uuid("task_id").$type<TaskId>().notNull(),
+    // The trace of the request that wrote this intent, as a W3C `traceparent`.
+    // The other half of the same idea as `task.dispatch_traceparent`: a rerun
+    // or a start-session is a dispatch trigger that moves no card, so the row
+    // that causes the work is this one and it carries the id that caused it.
+    traceparent: text("traceparent"),
   },
   (t) => [
     foreignKey({

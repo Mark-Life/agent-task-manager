@@ -54,6 +54,7 @@ import {
 } from "@workspace/db";
 import {
   Actor,
+  parseTraceparent,
   type Run,
   type RunTrigger,
   type Task,
@@ -77,6 +78,7 @@ import {
   Redacted,
   Schedule,
   Stream,
+  Tracer,
 } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { rescanRunArtifacts } from "./artifacts";
@@ -142,6 +144,28 @@ export interface OrchestratorInterface {
 
 /** The trigger a sweep dispatches a card under. */
 const SWEEP_TRIGGER: RunTrigger = "status_change";
+
+/**
+ * Runs a dispatch under the span that asked for it, where the row that caused
+ * it carried one.
+ *
+ * Adopting the caller's span as this fiber's parent, rather than copying a
+ * trace id onto the run row, is what makes the join hold all the way down: the
+ * claim reads its ids off the ambient span, the run row is written from those
+ * ids, the container's `traceparent` is built from them, and the wide event
+ * carries them. One adoption here puts the lot inside the request's trace, and
+ * a header that does not parse simply leaves the loop tracing itself, which is
+ * what it did before anybody asked over HTTP.
+ */
+const underCaller = <A, E, R>(
+  traceparent: string | null,
+  effect: Effect.Effect<A, E, R>
+) => {
+  const caller = parseTraceparent(traceparent);
+  return caller === null
+    ? effect
+    : Effect.withParentSpan(effect, Tracer.externalSpan(caller));
+};
 
 /** How many events a run with no ledger on disk is reported to have produced. */
 const NO_EVENTS = 0;
@@ -494,12 +518,21 @@ const make = Effect.gen(function* () {
    * `onlyIfMissing` is the in-process half of "one run per task": the lease
    * answers it durably and across processes, and this answers it for the notify
    * and the poll that arrive in the same second, without touching a disk.
+   *
+   * The command's `traceparent` wins over the task's, because a rerun asked for
+   * now is a newer cause than the move that put the card in the column; a sweep
+   * names none and the task's own stamp answers.
    */
   const forkRun = (input: {
     readonly task: Task;
+    /** The request that asked, where a command carried one of its own. */
+    readonly traceparent?: string | null;
     readonly trigger: RunTrigger;
   }) =>
-    startTask(input).pipe(
+    underCaller(
+      input.traceparent ?? input.task.dispatchTraceparent,
+      startTask(input)
+    ).pipe(
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.void
@@ -542,7 +575,11 @@ const make = Effect.gen(function* () {
           id: request.taskId,
           workspaceId: request.workspaceId,
         });
-        yield* forkRun({ task, trigger: request.trigger });
+        yield* forkRun({
+          task,
+          traceparent: request.traceparent,
+          trigger: request.trigger,
+        });
       }).pipe(Effect.provideContext(services)),
     stop: (request) =>
       Effect.gen(function* () {

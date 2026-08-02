@@ -50,6 +50,17 @@ export const Task = Schema.Struct({
   acceptance: Schema.NullOr(Schema.String),
   /** The prompt body. */
   brief: Schema.String,
+  /**
+   * The W3C `traceparent` of the write that last asked this task to run, so a
+   * run the loop opens later joins the request that caused it. Null for a task
+   * nothing has asked to run, or one moved by a caller outside a trace.
+   *
+   * A plain string rather than a validated one: it is read through
+   * `parseTraceparent`, which answers null for anything malformed, and a
+   * refinement here would fail the whole row instead — a task that cannot be
+   * decoded because of a telemetry field is a task that cannot be dispatched.
+   */
+  dispatchTraceparent: Schema.NullOr(Schema.String),
   id: TaskId,
   metadata: TaskMetadata,
   nextSessionId: Schema.NullOr(AgentSessionId),

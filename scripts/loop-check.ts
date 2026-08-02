@@ -57,6 +57,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import process from "node:process";
 
@@ -136,7 +137,7 @@ import {
   workspaceLayer,
 } from "@workspace/sandbox";
 import { EventLog, telemetryLayer } from "@workspace/telemetry";
-import { type Duration, Effect, Layer, Schedule, Schema } from "effect";
+import { type Duration, Effect, Layer, Schedule, Schema, Tracer } from "effect";
 import {
   CheckFailed,
   check,
@@ -177,6 +178,16 @@ const MIN_TIMELINE_ROWS = 3;
 
 /** The account this check files its tasks as. Nothing logs in as it. */
 const CHECK_USER = UserId.make(`${SERVICE}-human`);
+
+/**
+ * The trace an inbound request would have arrived under, minted here so it
+ * demonstrably starts outside everything the loop does. Fresh per invocation,
+ * so a run from an earlier check cannot satisfy the claim.
+ */
+const TRACE_ID_BYTES = 16;
+const SPAN_ID_BYTES = 8;
+const REQUEST_TRACE_ID = randomBytes(TRACE_ID_BYTES).toString("hex");
+const REQUEST_SPAN_ID = randomBytes(SPAN_ID_BYTES).toString("hex");
 
 /** The child was killed and the parent never saw its run go live. */
 class ChildNeverStarted extends Schema.TaggedErrorClass<ChildNeverStarted>()(
@@ -308,7 +319,16 @@ const awaitLiveRun = (input: {
     );
   });
 
-/** The task this check dispatches: no project, no repo, so no clone and no network. */
+/**
+ * The task this check dispatches: no project, no repo, so no clone and no
+ * network.
+ *
+ * Filed under a span whose parent came from outside this process, which is
+ * exactly the shape a gateway handler has when a request arrives carrying a
+ * `traceparent`: the write knows nothing about the trace, it simply happens
+ * inside it. That is what makes the run row's `trace_id` below evidence of a
+ * trace crossing the database rather than of this process tracing itself.
+ */
 const fileTask = (input: { title: string; workspaceId: WorkspaceId }) =>
   Effect.gen(function* () {
     const tasks = yield* TaskRepo;
@@ -321,7 +341,15 @@ const fileTask = (input: { title: string; workspaceId: WorkspaceId }) =>
         workspaceId: input.workspaceId,
       })
     );
-  });
+  }).pipe(
+    Effect.withSpan("POST /tasks"),
+    Effect.withParentSpan(
+      Tracer.externalSpan({
+        spanId: REQUEST_SPAN_ID,
+        traceId: REQUEST_TRACE_ID,
+      })
+    )
+  );
 
 /**
  * The half of the check that is meant to die.
@@ -389,6 +417,16 @@ const happyPath = (workspaceId: WorkspaceId) =>
       step: "the run row closed as done",
     });
 
+    // The whole point of minting the id at the edge: the request wrote a task
+    // and went away, another process picked the row up on its own clock, and
+    // the run it opened is still that request's. Nothing was passed between
+    // them but the column on the task.
+    yield* check({
+      detail: `the request traced ${REQUEST_TRACE_ID}, the run row traces ${run.traceId ?? "nothing"}`,
+      ok: run.traceId === REQUEST_TRACE_ID,
+      step: "the run row carries the trace the inbound request minted",
+    });
+
     const timeline = yield* runEvents.listByRun({
       runId: run.id,
       workspaceId,
@@ -445,6 +483,14 @@ const happyPath = (workspaceId: WorkspaceId) =>
       detail: `the terminus row says ${end[0]?.outcome}`,
       ok: end[0]?.outcome === "done",
       step: "the terminus row reports the run as done",
+    });
+    // The ledger and the row agree, because both read the same span: the loop
+    // adopted the request's context as its parent rather than copying an id
+    // onto one of them.
+    yield* check({
+      detail: `the terminus row traces ${end[0]?.traceId ?? "nothing"}`,
+      ok: end[0]?.traceId === REQUEST_TRACE_ID,
+      step: "the run's wide event lands in the request's trace too",
     });
 
     if (CONTAINED) {

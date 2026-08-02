@@ -30,7 +30,13 @@ export { CurrentActor, withActor } from "./actor";
 export { options as authOptions } from "./auth/options";
 export { Auth, type DatabaseOptions, databaseLayer } from "./client";
 export { type DatabaseConfig, databaseConfig } from "./config";
-export { ArtifactAlreadyPromoted, ArtifactRepo } from "./repositories/artifact";
+export {
+  ArtifactAlreadyPromoted,
+  type ArtifactPromotionInput,
+  ArtifactRepo,
+  type PromotedArtifacts,
+  type PromotionDestination,
+} from "./repositories/artifact";
 export {
   InvalidInput,
   MalformedRow,

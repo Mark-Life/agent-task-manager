@@ -447,8 +447,8 @@ const promotionTargetOf = (input: {
 };
 
 /**
- * Copies one of a task's files into the project's folder or the global one, and
- * records the decision.
+ * Copies one of a task's files into the project's folder or the global one,
+ * indexes the copy, and records the decision.
  *
  * Promotion is a verb, not an update. The shared folders are mounted read-only
  * into every container precisely so nothing else reaches them, which makes this
@@ -456,9 +456,14 @@ const promotionTargetOf = (input: {
  * sees — and that is why it carries an audit action of its own rather than a
  * flag on a row.
  *
- * Bytes first, stamp second. A copy with no row is a file somebody can promote
+ * Bytes first, index second. A copy with no row is a file somebody can promote
  * again over the same path; a row with no copy is a promise of shared material
- * that is not there, which every later run would read as an absence.
+ * that is not there, which every later run would read as an absence. The store
+ * writes both halves of the index — the stamp on this task's row and the row in
+ * the shared folder — in one transaction, so the two cannot part company.
+ *
+ * The task's own row is what comes back, because that is the file the caller
+ * named. The copy is what every later run reads, and its id is on the span.
  */
 export const promoteTaskArtifact = Effect.fn("Gateway.artifacts.promote")(
   function* (input: ArtifactPromoteRequest) {
@@ -488,14 +493,20 @@ export const promoteTaskArtifact = Effect.fn("Gateway.artifacts.promote")(
     }).pipe(Effect.orDie);
 
     const artifacts = yield* ArtifactRepo;
-    yield* Effect.annotateCurrentSpan({ scope: input.scope });
-    return yield* artifacts
+    const promoted = yield* artifacts
       .promote({
-        contentHash: copy.contentHash,
+        copy,
         id: row.id,
+        to,
         workspaceId: input.principal.workspaceId,
       })
       .pipe(withActor(input.principal.actor), asPromotionFailure);
+
+    yield* Effect.annotateCurrentSpan({
+      destinationId: promoted.destination.id,
+      scope: input.scope,
+    });
+    return promoted.source;
   }
 );
 

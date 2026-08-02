@@ -1,5 +1,7 @@
 import type {
+  Artifact,
   ArtifactStat,
+  ProjectId,
   RunId,
   TaskId,
   WorkspaceId,
@@ -31,6 +33,12 @@ const ENTITY = "artifact";
 /** The predicate of the partial unique index a task's rescan upserts on. */
 const taskScoped = sql`${artifact.scope} = 'task'`;
 
+/** The predicate of the partial unique index a promotion into a project upserts on. */
+const projectScoped = sql`${artifact.scope} = 'project'`;
+
+/** The predicate of the partial unique index a promotion into the workspace upserts on. */
+const globalScoped = sql`${artifact.scope} = 'global'`;
+
 /** An artifact is never addressed by id alone; every query names the workspace it belongs to. */
 interface ArtifactRef {
   readonly id: ArtifactId;
@@ -49,6 +57,52 @@ export class ArtifactAlreadyPromoted extends Schema.TaggedErrorClass<ArtifactAlr
 
 const refOf = (ref: ArtifactRef) =>
   and(eq(artifact.workspaceId, ref.workspaceId), eq(artifact.id, ref.id));
+
+/**
+ * The two folders a task's file can be promoted into. Never another task's, and
+ * never its own: a file is already in its task's folder, so promoting it there
+ * would be a decision with no effect and an audit row claiming otherwise.
+ *
+ * Restated here rather than imported from the package that owns the folders,
+ * because this package never imports the sandbox — the two shapes agree
+ * structurally, which is what a caller passing one to the other relies on.
+ */
+export type PromotionDestination =
+  | { readonly scope: "global" }
+  | { readonly projectId: ProjectId; readonly scope: "project" };
+
+/** Which file is being promoted, the copy that was already made of it, and where it went. */
+export interface ArtifactPromotionInput extends ArtifactRef {
+  /**
+   * What a `stat` of the copy read, plus the digest of the bytes that were
+   * written. Taken by whoever copied the file, because that is the only moment
+   * the bytes are in hand — a rescan never hashes, so "have the two files
+   * parted company since" stays answerable without reading the tree.
+   */
+  readonly copy: ArtifactStat & { readonly contentHash: string };
+  readonly to: PromotionDestination;
+}
+
+/** Both halves of a promotion: the file that was promoted, and the copy every later run reads. */
+export interface PromotedArtifacts {
+  /** The row in the shared folder. Carries no task, so it survives the one that made it. */
+  readonly destination: Artifact;
+  /** The task's own row, now stamped with when it was promoted and with what it held. */
+  readonly source: Artifact;
+}
+
+/**
+ * The partial unique index a promotion into that scope upserts on.
+ *
+ * Which key applies is decided by the scope and by nothing else: a project's
+ * folder is keyed by `(project_id, path)` and the global one by
+ * `(workspace_id, path)`, so promoting twice over one path replaces the file
+ * rather than filling the folder with rows nothing can tell apart.
+ */
+const conflictOf = (to: PromotionDestination) =>
+  to.scope === "project"
+    ? { target: [artifact.projectId, artifact.path], where: projectScoped }
+    : { target: [artifact.workspaceId, artifact.path], where: globalScoped };
 
 /** What a rescan of one task's artifacts directory found. */
 interface RescanInput {
@@ -157,28 +211,41 @@ const make = Effect.gen(function* () {
   );
 
   /**
-   * Marks a file as promoted. Copying it into the project or global folder is the
-   * sandbox's job — reuse is always a copy and never a reference, so that one
-   * task's record of what it worked from cannot be made retroactively false by
-   * someone refining the original. What this records is the decision, and the
-   * `promote` audit row beside it is the trail that read-only shared mounts exist
-   * to protect.
+   * Records a promotion: stamps the file that was promoted, and indexes the copy
+   * that now sits in the project's folder or the global one.
+   *
+   * Both halves, in one transaction, because half of them is worse than
+   * neither. A stamp with no destination row is an audit trail claiming material
+   * is shared that nothing can find; a destination row with no stamp is a file
+   * anyone can promote again. The bytes are copied first, by the caller, and
+   * that order is deliberate too — a row promising shared material that is not
+   * on disk reads to every later run as an absence.
+   *
+   * The destination is an upsert on the same per-scope key a rescan uses, so
+   * promoting over a path the folder already holds replaces what is there
+   * instead of adding a second row nothing could tell apart. The row keeps its
+   * id across that, since whatever already referred to it referred to the path.
+   *
+   * Reuse is a copy and never a reference: the destination is its own row over
+   * its own bytes, and `sourceArtifactId` is provenance rather than a pointer.
+   * Were it a pointer, one task's record of what it worked from would go
+   * retroactively false the day somebody refined the original.
+   *
+   * One audit row, naming the file that was promoted. The destination's
+   * `sourceArtifactId` leads back to it, and a second entry for the copy would
+   * count one decision twice.
    *
    * The one place a content hash is written. Copying is the only moment the
    * question "are these the same bytes" is worth answering, so it is the only
    * moment the answer is stored.
    */
   const promote = Effect.fn("ArtifactRepo.promote")(function* (
-    input: ArtifactRef & {
-      /**
-       * The digest of the bytes being promoted, taken by whoever copied the
-       * file. Recorded here and nowhere else, so "has the source moved on since
-       * this copy" stays answerable without hashing the tree on every rescan.
-       */
-      readonly contentHash: string;
-    }
+    input: ArtifactPromotionInput
   ) {
-    yield* Effect.annotateCurrentSpan({ artifactId: input.id });
+    yield* Effect.annotateCurrentSpan({
+      artifactId: input.id,
+      scope: input.to.scope,
+    });
     return yield* write(({ tx }) =>
       Effect.gen(function* () {
         const rows = yield* execute(
@@ -205,24 +272,76 @@ const make = Effect.gen(function* () {
         const values = yield* encodeWrite({
           entity: ENTITY,
           schema: ArtifactUpdate,
-          value: { contentHash: input.contentHash, promotedAt },
+          value: { contentHash: input.copy.contentHash, promotedAt },
         });
         const written = yield* execute(
           "ArtifactRepo.promote",
           tx.update(artifact).set(values).where(refOf(input)).returning()
         );
-        const promoted = yield* decodeWritten({
+        const source = yield* decodeWritten({
           decode: decodeArtifact,
           entity: ENTITY,
           operation: "ArtifactRepo.promote",
           rows: written,
         });
+
+        const copy = yield* encodeWrite({
+          entity: ENTITY,
+          schema: ArtifactInsert,
+          value: {
+            bytes: input.copy.bytes,
+            contentHash: input.copy.contentHash,
+            ext: input.copy.ext,
+            id: newArtifactId(),
+            // The bytes are the ones that run produced, so the copy carries the
+            // same provenance rather than none.
+            lastRunId: before.lastRunId,
+            modifiedAt: input.copy.modifiedAt,
+            path: input.copy.path,
+            projectId: input.to.scope === "project" ? input.to.projectId : null,
+            promotedAt,
+            scope: input.to.scope,
+            sourceArtifactId: before.id,
+            // A shared row names no task: it outlives the one that made it, and
+            // the scope checks in the schema say the same thing.
+            taskId: null,
+            workspaceId: input.workspaceId,
+          },
+        });
+        const conflict = conflictOf(input.to);
+        const copied = yield* execute(
+          "ArtifactRepo.promote",
+          tx
+            .insert(artifact)
+            .values(copy)
+            .onConflictDoUpdate({
+              set: {
+                bytes: sql`excluded.bytes`,
+                contentHash: sql`excluded.content_hash`,
+                ext: sql`excluded.ext`,
+                lastRunId: sql`excluded.last_run_id`,
+                modifiedAt: sql`excluded.modified_at`,
+                promotedAt: sql`excluded.promoted_at`,
+                sourceArtifactId: sql`excluded.source_artifact_id`,
+              },
+              target: conflict.target,
+              targetWhere: conflict.where,
+            })
+            .returning()
+        );
+        const destination = yield* decodeWritten({
+          decode: decodeArtifact,
+          entity: ENTITY,
+          operation: "ArtifactRepo.promote",
+          rows: copied,
+        });
+
         return audited(
-          promoted,
+          { destination, source } satisfies PromotedArtifacts,
           auditPromote({
-            entityId: promoted.id,
-            taskId: promoted.taskId,
-            workspaceId: promoted.workspaceId,
+            entityId: source.id,
+            taskId: source.taskId,
+            workspaceId: source.workspaceId,
           })
         );
       })

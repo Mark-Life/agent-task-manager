@@ -51,6 +51,15 @@ export const RunCommand = Schema.Struct({
   status: RunCommandStatus,
   /** A command can target a task that has no run yet. */
   taskId: TaskId,
+  /**
+   * The W3C `traceparent` of the request that asked, so the run this command
+   * starts joins it. Null for a command written outside a trace.
+   *
+   * Unvalidated for the same reason the task's copy is: it is read through
+   * `parseTraceparent`, and a command that cannot be decoded is a command that
+   * cannot be acted on or refused.
+   */
+  traceparent: Schema.NullOr(Schema.String),
 });
 
 export interface RunCommand extends Schema.Schema.Type<typeof RunCommand> {}

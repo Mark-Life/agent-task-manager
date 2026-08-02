@@ -71,6 +71,12 @@ const SPAWNABLE_TRIGGERS: readonly RunTrigger[] = ["manual", "research"];
 /** What starting a run needs from the part of the loop that owns dispatch. */
 export interface DispatchRequest {
   readonly taskId: TaskId;
+  /**
+   * The W3C `traceparent` the command row carried, so the run this starts
+   * belongs to the request that asked for it rather than to the poll that
+   * happened to pick the row up. Null for a command written outside a trace.
+   */
+  readonly traceparent: string | null;
   readonly trigger: RunTrigger;
   readonly workspaceId: WorkspaceId;
 }
@@ -295,6 +301,7 @@ export const makeRunCommands = Effect.gen(function* () {
     yield* unpark(task);
     yield* control.dispatch({
       taskId: command.taskId,
+      traceparent: command.traceparent,
       trigger: "rerun",
       workspaceId: command.workspaceId,
     });
@@ -328,6 +335,7 @@ export const makeRunCommands = Effect.gen(function* () {
     yield* unpark(task);
     yield* control.dispatch({
       taskId: command.taskId,
+      traceparent: command.traceparent,
       trigger,
       workspaceId: command.workspaceId,
     });

@@ -23,6 +23,7 @@ import {
   RunCommandUpdate,
 } from "../rows";
 import { runCommand } from "../schema/run";
+import { currentTraceparent } from "../trace";
 import {
   decodeMany,
   decodeWritten,
@@ -121,6 +122,11 @@ const make = Effect.gen(function* () {
         runId: input.runId ?? null,
         status: "pending",
         taskId: input.taskId,
+        // The request that asked, so the run this command starts belongs to
+        // its trace. Read off the ambient span rather than taken as an
+        // argument: the caller is already inside its own request span, and an
+        // argument is a thing to forget.
+        traceparent: yield* currentTraceparent,
         workspaceId: input.workspaceId,
       },
     });

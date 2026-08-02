@@ -51,6 +51,7 @@ import {
   type Task,
   type TaskId,
   type Timestamp,
+  traceparentOf,
   type WorkspaceId,
 } from "@workspace/domain";
 import { currentTraceIds } from "@workspace/telemetry";
@@ -104,10 +105,6 @@ const DEFAULT_TRIGGER: RunTrigger = "status_change";
 
 /** The first attempt at a task, before anything has failed. */
 const FIRST_ATTEMPT = 1;
-
-/** W3C trace context version, and the sampled flag the container inherits. */
-const TRACEPARENT_VERSION = "00";
-const TRACEPARENT_SAMPLED = "01";
 
 /**
  * The outcomes that end a losing streak. A run somebody stopped is not evidence
@@ -165,20 +162,6 @@ const queueWaitOf = (input: {
     DateTime.toEpochMillis(input.claimedAt) -
       DateTime.toEpochMillis(input.statusChangedAt)
   );
-
-/**
- * The W3C `traceparent` for the container, or null outside a trace. Built here
- * rather than carried from a header because this loop is where the trace
- * starts for a task the board triggered; a task the gateway triggered arrives
- * with its trace id already on the run row.
- */
-const traceparentOf = (ids: {
-  readonly spanId: string | null;
-  readonly traceId: string | null;
-}) =>
-  ids.traceId === null || ids.spanId === null
-    ? null
-    : `${TRACEPARENT_VERSION}-${ids.traceId}-${ids.spanId}-${TRACEPARENT_SAMPLED}`;
 
 /** What identifies the task a plan is about. */
 interface TaskRef {
@@ -292,6 +275,12 @@ const make = Effect.gen(function* () {
       // Read while the plan's span is open and carried on the claim: the wide
       // event is emitted as that span closes, and by then `Effect.currentSpan`
       // answers nothing.
+      //
+      // These are the request's ids wherever the row that asked for this run
+      // carried a `traceparent` — the caller's span is adopted as this fiber's
+      // parent before planning starts, so the run row, the header handed to the
+      // container and the wide event all name the trace that asked, without any
+      // of them knowing where the trace came from.
       const ids = yield* currentTraceIds;
       const provider = yield* providerFor(ref, task);
 

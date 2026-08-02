@@ -17,6 +17,7 @@ const row: typeof Task.Encoded = {
   acceptance: null,
   brief: "Read the article and file what is worth doing.",
   createdAt: now,
+  dispatchTraceparent: null,
   id: newTaskId(),
   metadata: { articleUrl: "https://example.com/a", readingMinutes: 12 },
   nextSessionId: null,

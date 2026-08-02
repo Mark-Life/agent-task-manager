@@ -30,6 +30,7 @@ const taskRow = {
   acceptance: null,
   brief: "",
   createdAt: AT,
+  dispatchTraceparent: null,
   id: TASK_UUID,
   metadata: { articleUrl: "https://example.com" },
   nextSessionId: null,
@@ -109,6 +110,7 @@ const runCommandRow = {
   runId: null,
   status: "pending",
   taskId: TASK_UUID,
+  traceparent: null,
   updatedAt: AT,
   workspaceId: WORKSPACE_ID,
 };

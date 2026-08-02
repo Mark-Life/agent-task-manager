@@ -44,6 +44,13 @@ export const task = pgTable(
     ...mutableColumns<TaskId>(),
     acceptance: text("acceptance"),
     brief: text("brief").notNull().default(""),
+    // The trace of the write that last asked this task to run, as a W3C
+    // `traceparent`. The board's own dispatch trigger is a status change and
+    // writes no `run_command`, so a trace that rode only on commands would
+    // reach half the runs; this is the row that causes the other half, and the
+    // orchestrator reads it off here — a poll, a notify or a restart later —
+    // to open its run inside the request's trace rather than its own.
+    dispatchTraceparent: text("dispatch_traceparent"),
     metadata: jsonb("metadata").$type<TaskMetadata>().notNull().default({}),
     nextSessionId: uuid("next_session_id")
       .$type<AgentSessionId>()

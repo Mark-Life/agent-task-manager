@@ -12,4 +12,5 @@ export * from "./run-command";
 export * from "./run-event";
 export * from "./status";
 export * from "./task";
+export * from "./trace";
 export * from "./workspace";

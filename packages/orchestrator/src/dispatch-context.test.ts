@@ -36,6 +36,7 @@ const task: Task = {
   acceptance: null,
   brief: "ship it",
   createdAt: at,
+  dispatchTraceparent: null,
   id: taskId,
   metadata: {},
   nextSessionId: null,

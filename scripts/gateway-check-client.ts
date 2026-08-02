@@ -60,15 +60,6 @@ export const check = (options: {
         new CheckFailed({ detail: options.detail, step: options.step })
       );
 
-/**
- * Something true of this build that the exit criteria ask for and that is not
- * wired yet. Loud on every run, and never a pass dressed up as one.
- */
-export const gap = (options: {
-  readonly detail: string;
-  readonly step: string;
-}) => Effect.logWarning(`GAP   ${options.step} — ${options.detail}`);
-
 /** One decoded `atm.request` row of the ledger the child gateway wrote. */
 export type RequestRow = typeof RequestEvent.rowSchema.Type;
 

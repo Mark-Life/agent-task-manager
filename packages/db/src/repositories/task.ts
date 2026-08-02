@@ -32,6 +32,7 @@ import { Context, DateTime, Effect, Layer, Schema } from "effect";
 import { Database } from "../client";
 import { decodeTask, TaskInsert, TaskUpdate } from "../rows";
 import { task } from "../schema/task";
+import { currentTraceparent } from "../trace";
 import {
   auditCreate,
   auditDelete,
@@ -63,6 +64,23 @@ const ONE = 1;
 
 /** Mirrors the column default: a new task is an idea until someone says otherwise. */
 const DEFAULT_STATUS = "ideas" satisfies Task["status"];
+
+/** The one column that is a dispatch trigger: entering it asks for a run. */
+const DISPATCHES = "in_progress" satisfies Task["status"];
+
+/**
+ * The trace to stamp on a task landing in this column, and the reason the
+ * column carries a trace at all.
+ *
+ * A card entering *in progress* is a request for work that will be picked up by
+ * another process, seconds or a restart later — so the write that asks leaves
+ * its span on the row, and the orchestrator opens the run under it. Landing
+ * anywhere else clears the stamp rather than leaving it: once the card has left
+ * the column nothing is being asked for, and a stale header would eventually
+ * join a run to a request that ended days ago.
+ */
+const dispatchTraceparentFor = (status: Task["status"]) =>
+  status === DISPATCHES ? currentTraceparent : Effect.succeed(null);
 
 /**
  * The move is not in the status machine, or is but not for this kind of actor.
@@ -120,6 +138,9 @@ const make = Effect.gen(function* () {
 
     const statusChangedAt = yield* DateTime.now;
     const status = input.status ?? DEFAULT_STATUS;
+    // A task can be created straight into the column — the seed script and the
+    // manager both do — and that create is as much a dispatch trigger as a move.
+    const dispatchTraceparent = yield* dispatchTraceparentFor(status);
 
     return yield* write(({ actor, tx }) =>
       Effect.gen(function* () {
@@ -144,6 +165,7 @@ const make = Effect.gen(function* () {
             ...DEFAULT_NEXT_SESSION,
             acceptance: input.acceptance,
             brief: input.brief,
+            dispatchTraceparent,
             id: newTaskId(),
             metadata: input.metadata ?? ({} satisfies TaskMetadata),
             parentTaskId: input.parentTaskId ?? null,
@@ -213,6 +235,7 @@ const make = Effect.gen(function* () {
     });
 
     const statusChangedAt = yield* DateTime.now;
+    const dispatchTraceparent = yield* dispatchTraceparentFor(options.to);
 
     return yield* write(({ actor, tx }) =>
       Effect.gen(function* () {
@@ -276,6 +299,7 @@ const make = Effect.gen(function* () {
           entity: ENTITY,
           schema: TaskUpdate,
           value: {
+            dispatchTraceparent,
             parkedUntil: unparks ? null : undefined,
             rank,
             status: options.to,

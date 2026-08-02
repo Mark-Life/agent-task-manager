@@ -8,15 +8,18 @@
  * pointing out of the task's folder is refused — a fake filesystem or a fake
  * index would be asserting the fake.
  *
- * The fixture is a real project and a real task, deleted afterwards. Deleting
- * the task cascades to its artifact index rows; the audit rows stay, which is
- * what append-only means.
+ * The fixture is a real project and two real tasks in it — promotion exists so
+ * that the second reads what the first produced, which one task cannot claim —
+ * all deleted afterwards. Deleting a task cascades to its artifact index rows
+ * and deleting the project cascades to the promoted ones; the audit rows stay,
+ * which is what append-only means.
  */
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -72,6 +75,7 @@ let uploadDir: string;
 let workspaceId: WorkspaceId;
 let project: Project;
 let task: Task;
+let later: Task;
 let principal: PrincipalShape;
 
 /** Where the multipart parser would have left an upload, as this test writes it by hand. */
@@ -105,13 +109,21 @@ beforeAll(async () => {
         title: "artifacts: upload, read and promote",
         workspaceId: first.id,
       });
-      return { card, made, workspaceId: first.id };
+      // The task that comes after. Promotion exists so that this one reads what
+      // the first one produced, which needs two tasks in one project to claim.
+      const next = yield* tasks.create({
+        projectId: made.id,
+        title: "artifacts: the task that comes after",
+        workspaceId: first.id,
+      });
+      return { card, made, next, workspaceId: first.id };
     }).pipe(withActor(caller))
   );
 
   ({ workspaceId } = built);
   project = built.made;
   task = built.card;
+  later = built.next;
   principal = { actor: caller, scope: "task-write", workspaceId };
 });
 
@@ -121,6 +133,7 @@ afterAll(async () => {
       const tasks = yield* TaskRepo;
       const projects = yield* ProjectRepo;
       yield* tasks.delete({ id: task.id, workspaceId });
+      yield* tasks.delete({ id: later.id, workspaceId });
       yield* projects.delete({ id: project.id, workspaceId });
     }).pipe(withActor(caller))
   );
@@ -218,6 +231,43 @@ test("promotion copies the file into the project's folder and stamps the row", a
     )
   );
   expect(again._tag).toBe("ArtifactAlreadyPromoted");
+});
+
+test("a later task promotes over the same path without leaving two files", async () => {
+  const revised = "revised, by the task that came after";
+  const row = await runtime.runPromise(
+    uploadTaskArtifact({
+      dataRoot,
+      file: persistFile("revised.md", revised),
+      path: "shared.md",
+      principal,
+      taskId: later.id,
+    })
+  );
+
+  const promoted = await runtime.runPromise(
+    promoteTaskArtifact({
+      artifactId: row.id,
+      dataRoot,
+      principal,
+      scope: "project",
+      taskId: later.id,
+    })
+  );
+  expect(promoted.promotedAt).not.toBeNull();
+
+  const shared = projectArtifactsDirOf({ dataRoot, projectId: project.id });
+  expect(readdirSync(shared)).toEqual(["shared.md"]);
+  expect(readFileSync(join(shared, "shared.md"), "utf8")).toBe(revised);
+
+  // The first task's own file is untouched. Reuse is a copy, so its record of
+  // what it worked from cannot be rewritten by somebody else's promotion.
+  expect(
+    readFileSync(
+      join(taskArtifactsDirOf({ dataRoot, taskId: task.id }), "shared.md"),
+      "utf8"
+    )
+  ).toBe("worth keeping");
 });
 
 test("a path that leaves the task's folder is refused, and writes nothing", async () => {

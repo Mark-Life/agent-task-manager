@@ -65,6 +65,7 @@ const task: Task = {
   acceptance: "the endpoint returns 204 and the row is gone",
   brief: "delete the thing when the user asks for it",
   createdAt: at,
+  dispatchTraceparent: null,
   id: taskId,
   metadata: {},
   nextSessionId: null,

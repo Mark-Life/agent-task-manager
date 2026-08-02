@@ -24,8 +24,8 @@ import {
   withActor,
 } from "@workspace/db";
 import type { Task, TaskStatus, WorkspaceId } from "@workspace/domain";
-import { Actor } from "@workspace/domain";
-import { DateTime, Effect, Layer, Schema } from "effect";
+import { Actor, parseTraceparent } from "@workspace/domain";
+import { DateTime, Effect, Layer, Schema, Tracer } from "effect";
 import {
   type DispatchRequest,
   RunCommands,
@@ -33,6 +33,10 @@ import {
   STOPPED_SEQ,
   type StopRequest,
 } from "./commands";
+
+/** A caller's trace context, as a `traceparent` header would carry it. */
+const CALLER_TRACE = "4bf92f3577b34da6a3ce929d0e0e4736";
+const CALLER_SPAN_ID = "00f067aa0ba902b7";
 
 /** Reported as `application_name`, so `pg_stat_activity` names this process. */
 const APPLICATION_NAME = "orchestrator-commands-test";
@@ -341,8 +345,15 @@ test("a rerun starts a run, clears the park, and says so on the trigger", async 
   );
 
   expect(outcome?.result).toBe("acted");
+  // The trace is whatever the write ran under, and there is always one: every
+  // repository method opens a span of its own. Its value is the next test.
   expect(calls.dispatched).toEqual([
-    { taskId: task.id, trigger: "rerun", workspaceId },
+    {
+      taskId: task.id,
+      traceparent: expect.any(String),
+      trigger: "rerun",
+      workspaceId,
+    },
   ]);
 
   const unparked = await runStore(
@@ -352,6 +363,47 @@ test("a rerun starts a run, clears the park, and says so on the trigger", async 
     })
   );
   expect(unparked.parkedUntil).toBeNull();
+});
+
+test("a rerun carries the asking request's trace across to the dispatcher", async () => {
+  const task = await makeTask("in_progress");
+  const calls = emptyCalls();
+
+  const outcome = await runWith(
+    calls,
+    {},
+    Effect.gen(function* () {
+      const commands = yield* RunCommandRepo;
+      // The write as a gateway handler makes it: inside the request's span,
+      // which the caller's `traceparent` header is the parent of. Nothing about
+      // the trace is passed as an argument — the row picks it off the span.
+      yield* withActor(asker)(
+        commands.enqueue({
+          payload: { kind: "rerun" },
+          taskId: task.id,
+          workspaceId,
+        })
+      ).pipe(
+        Effect.withSpan("POST /tasks/:taskId/commands"),
+        Effect.withParentSpan(
+          Tracer.externalSpan({ spanId: CALLER_SPAN_ID, traceId: CALLER_TRACE })
+        )
+      );
+      const consumer = yield* RunCommands;
+      return yield* consumer.consumeNext({ workspaceId });
+    })
+  );
+
+  expect(outcome?.result).toBe("acted");
+  expect(outcome?.command.traceparent).not.toBeNull();
+  // The command row's own column, and the request it hands the dispatcher, are
+  // the same trace the caller minted — not the poll's that claimed the row.
+  expect(parseTraceparent(outcome?.command.traceparent)?.traceId).toBe(
+    CALLER_TRACE
+  );
+  expect(
+    parseTraceparent(calls.dispatched[0]?.traceparent ?? null)?.traceId
+  ).toBe(CALLER_TRACE);
 });
 
 test("a rerun on a task that is not in progress is refused, not silently obeyed", async () => {
@@ -432,7 +484,12 @@ test("a start_session spawns research from the backlog without moving the card",
 
   expect(outcome?.result).toBe("acted");
   expect(calls.dispatched).toEqual([
-    { taskId: task.id, trigger: "research", workspaceId },
+    {
+      taskId: task.id,
+      traceparent: expect.any(String),
+      trigger: "research",
+      workspaceId,
+    },
   ]);
 
   const after = await runStore(

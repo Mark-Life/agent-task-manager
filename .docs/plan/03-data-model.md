@@ -226,6 +226,7 @@ URLs) and nothing reads an archive flag. Both come back the day the dashboard ha
 | `next_session_new` | boolean | no | `false` | Start fresh instead of resuming — the one selection an id cannot express. Orchestrator resets both to the default after dispatch. |
 | `rank` | double precision | no | — | Position in its column, ascending — and therefore position in the dispatch queue, since the orchestrator spends slots from the top of `in_progress`. Fractional: dropping a card between two others writes the midpoint, one row, no renumbering. Computed inside the write transaction. |
 | `parked_until` | timestamptz | yes | — | Set when the retry threshold trips. The dispatcher skips a parked task, so repeated failure stops re-dispatching instead of looping. Cleared by any human transition into `in_progress`. |
+| `dispatch_traceparent` | text | yes | — | The W3C header of the write that last asked this card to run, stamped off the ambient span on any landing in `in_progress` and cleared on any landing elsewhere. The orchestrator adopts it as the parent of the dispatch, so the run it opens minutes later is a child of the request rather than a second tree. Unvalidated text: it is read through a total parser, and a refinement would fail the whole row over a telemetry field. |
 
 Check: `not (next_session_new and next_session_id is not null)`.
 
@@ -343,6 +344,7 @@ The stop / rerun / research intents. Written by anyone, acted on only by the orc
 | `actor_session_id` | uuid | yes | — | |
 | `consumed_at` | timestamptz | yes | — | |
 | `rejected_reason` | text | yes | — | "No live run" and "task not in progress" are outcomes, not silence. |
+| `traceparent` | text | yes | — | Same header as `task.dispatch_traceparent`, for the triggers that move no card: a rerun or a `start_session` carries the asking request's span on its own row. A command's header wins over the task's when both are present. |
 
 `start_session` is how a research or manual session is requested — from the dashboard or the
 manager — so run creation stays solely with the orchestrator and the request rides the
@@ -615,6 +617,7 @@ for Better Auth's promise API.
 | Actor on every mutation | `audit_entry`, written in the mutation's transaction; `Actor` is an Effect requirement; `ActorKind` includes the orchestrator, which writes most of them. |
 | Crash posts a comment and moves to review | `comment` with `kind = 'run_error'`, authored by the orchestrator, + `agent_session.status = 'failed'` + the `in_progress → review` transition. |
 | Per-run transcript location | `run.agent_home_path`, relative to the data root. |
+| A request's trace reaches the run it caused | `task.dispatch_traceparent` on the card, `run_command.traceparent` on the intent; the orchestrator parses whichever the row carried and dispatches under it, so `run.trace_id` and the `atm.run` event land in the request's trace. |
 
 ---
 
