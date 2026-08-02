@@ -477,6 +477,16 @@ export const cleanUp = (input: {
     });
   });
 
+/**
+ * How much shorter than the intended hold the server's own measurement is
+ * allowed to be. The reader starts its clock before it opens the connection and
+ * the server starts its when the request lands, so the row can only ever report
+ * less than was asked for — by the connection setup, which is a millisecond on
+ * a loopback and more on a loaded machine. Demanding the full hold makes the
+ * claim fail on arithmetic rather than on behaviour.
+ */
+const STREAM_SETUP_SLACK_MS = 250;
+
 /** What the ledger says about the requests that were just made. */
 export const ledgerClaims = (input: {
   readonly caller: Caller;
@@ -532,11 +542,11 @@ export const ledgerClaims = (input: {
 
     const [stream] = forTrace(input.streamed);
     yield* check({
-      detail: `sse ${stream?.sse}, held ${stream?.streamHeldMs}ms, answered in ${stream?.durationMs}ms`,
+      detail: `sse ${stream?.sse}, held ${stream?.streamHeldMs}ms of an intended ${input.holdMs}ms, answered in ${stream?.durationMs}ms`,
       ok:
         stream?.sse === true &&
-        (stream.streamHeldMs ?? 0) >= input.holdMs &&
-        (stream.durationMs ?? input.holdMs) < input.holdMs,
+        (stream.streamHeldMs ?? 0) >= input.holdMs - STREAM_SETUP_SLACK_MS &&
+        (stream.durationMs ?? input.holdMs) < (stream.streamHeldMs ?? 0),
       step: "the stream's row waited for the connection, not for the handler",
     });
 
