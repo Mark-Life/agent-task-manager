@@ -480,7 +480,13 @@ export const localSandbox = Effect.gen(function* () {
   const fs = yield* FileSystem;
   const spawner = yield* ChildProcessSpawner;
   const telemetry = yield* Telemetry;
-  return Sandbox.of({ run: runLocal({ fs, spawner, telemetry }) });
+  // No daemon, no containers, nothing to sweep. Empty rather than unsupported:
+  // a caller sweeping at boot should not have to ask which mode it is in.
+  return Sandbox.of({
+    held: Effect.succeed([]),
+    remove: () => Effect.void,
+    run: runLocal({ fs, spawner, telemetry }),
+  });
 });
 
 /**

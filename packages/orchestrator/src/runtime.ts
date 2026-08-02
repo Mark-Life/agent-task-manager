@@ -50,6 +50,7 @@ import {
   ChatThreadRepo,
   CurrentActor,
   ProjectRepo,
+  RunRepo,
   TaskRepo,
   WorkspaceRepo,
 } from "@workspace/db";
@@ -57,6 +58,7 @@ import {
   Actor,
   parseTraceparent,
   type Run,
+  type RunId,
   type RunSubject,
   type RunTrigger,
   type SessionProvider,
@@ -69,7 +71,7 @@ import {
   hostRunLayout,
   readExecutorMcp,
 } from "@workspace/harness";
-import { sandboxImageFor } from "@workspace/sandbox";
+import { orphansOf, Sandbox, sandboxImageFor } from "@workspace/sandbox";
 import {
   Cause,
   Context,
@@ -125,6 +127,8 @@ import { runEconomicsOf } from "./turn-rollup";
 
 /** What a boot found the previous process had left behind. */
 export interface RecoveryReport {
+  /** Containers left by a process that was killed before its teardown could run. */
+  readonly containersReaped: number;
   /** Lease files whose holder was gone, and which are now free to claim. */
   readonly leasesReclaimed: number;
   /** Run rows still marked live with nobody working on them, closed as `lost`. */
@@ -251,6 +255,8 @@ const make = Effect.gen(function* () {
   const leases = yield* LeaseStore;
   const pool = yield* WorkerPool;
   const projects = yield* ProjectRepo;
+  const runs = yield* RunRepo;
+  const sandbox = yield* Sandbox;
   const sessions = yield* AgentSessionRepo;
   const tasks = yield* TaskRepo;
   const workspaces = yield* WorkspaceRepo;
@@ -826,6 +832,43 @@ const make = Effect.gen(function* () {
       } satisfies DispatchContext;
     });
 
+  /**
+   * Removes the containers a killed process left behind, and answers with how
+   * many.
+   *
+   * The teardown of an ordinary run is a release registered before its container
+   * starts, so nothing here is the normal path — this is for the endings a
+   * release cannot survive: the loop killed outright, the host rebooted, a check
+   * killing a child to prove what a crash leaves.
+   *
+   * The label carries the run id, so what is an orphan is a database question
+   * and it is asked here rather than in the sandbox: a container is left alone
+   * while any workspace still holds its run as live, which covers the runs this
+   * very loop is about to reclaim as well as one a second loop is working on.
+   */
+  const reap = Effect.gen(function* () {
+    const held = yield* sandbox.held;
+    if (held.length === 0) {
+      return 0;
+    }
+
+    const live = new Set<RunId>();
+    for (const workspace of yield* allWorkspaces) {
+      const rows = yield* runs
+        .listLive({ workspaceId: workspace.id })
+        .pipe(bestEffort("live runs could not be read", []));
+      for (const row of rows) {
+        live.add(row.id);
+      }
+    }
+
+    const orphans = orphansOf({ held, live });
+    for (const orphan of orphans) {
+      yield* sandbox.remove(orphan.name);
+    }
+    return orphans.length;
+  }).pipe(Effect.withSpan("Orchestrator.reap"));
+
   /** This loop, as the audit log names it. */
   const loopInstance = () =>
     actor.kind === "orchestrator" ? actor.loopInstance : leases.instanceId;
@@ -848,7 +891,15 @@ const make = Effect.gen(function* () {
       }
     }
 
+    // After the rows are closed and not before: a run reconciled a moment ago
+    // is no longer live, so its container is now correctly an orphan. Asking
+    // first would leave exactly the containers this exists to remove.
+    const containersReaped = yield* reap.pipe(
+      bestEffort("containers could not be reaped", 0)
+    );
+
     return {
+      containersReaped,
       leasesReclaimed: reclaimed.length,
       runsClosed,
     } satisfies RecoveryReport;

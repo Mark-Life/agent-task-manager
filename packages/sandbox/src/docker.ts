@@ -86,6 +86,11 @@ import {
 } from "./errors";
 import { type Mount, mountSourcePaths } from "./mounts";
 import {
+  type LabelledContainer,
+  orphanListArgs,
+  parseOrphanList,
+} from "./reap";
+import {
   makeSandboxProgress,
   observeSandboxProgress,
   type SandboxProgress,
@@ -545,7 +550,41 @@ const makeDocker = ({ fs, spawner, telemetry }: DockerDeps) => {
       );
     });
 
-  return Sandbox.of({ run });
+  /**
+   * What the daemon is holding, or nothing at all when it cannot be asked.
+   *
+   * A sweep is housekeeping, and housekeeping that fails a boot is worse than
+   * the containers it meant to remove — a daemon that cannot answer `ps` is
+   * about to fail the first dispatch anyway, with a message about the run rather
+   * than about the tidying.
+   */
+  const held = capture(spawner, orphanListArgs()).pipe(
+    Effect.map((output) =>
+      output.exitCode === OK_EXIT ? parseOrphanList(output.stdout) : []
+    ),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("containers could not be listed", cause).pipe(
+        Effect.as([] as readonly LabelledContainer[])
+      )
+    )
+  );
+
+  const remove = (name: string) =>
+    capture(spawner, removeArgs(name)).pipe(
+      Effect.flatMap((output) =>
+        output.exitCode === OK_EXIT
+          ? Effect.void
+          : Effect.logWarning("container not removed", {
+              name,
+              stderr: output.stderr,
+            })
+      ),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("container removal failed", cause)
+      )
+    );
+
+  return Sandbox.of({ held, remove, run });
 };
 
 /** The docker sandbox as an effect, for a caller that already has the services. */

@@ -155,6 +155,7 @@ export {
   mountsFor,
   NO_MOUNT_EXTRAS,
 } from "./mounts";
+export { type LabelledContainer, orphansOf } from "./reap";
 export {
   BRANCH_PREFIX,
   baseRefOf,

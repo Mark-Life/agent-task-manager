@@ -39,7 +39,7 @@ const program = Effect.gen(function* () {
 
   const recovered = yield* orchestrator.recover;
   yield* Effect.logInfo(
-    `recovered — ${recovered.leasesReclaimed} stale leases reclaimed, ${recovered.runsClosed} runs closed as lost`
+    `recovered — ${recovered.leasesReclaimed} stale leases reclaimed, ${recovered.runsClosed} runs closed as lost, ${recovered.containersReaped} orphan containers removed`
   );
 
   // Never returns on its own: the trigger listens and the pool takes work until

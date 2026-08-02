@@ -46,6 +46,7 @@ import { Context, type Effect, Schema, type Scope } from "effect";
 import type { SandboxError } from "./errors";
 import type { HardeningSpec } from "./hardening";
 import type { Mount, MountSources } from "./mounts";
+import type { LabelledContainer } from "./reap";
 
 /**
  * The two implementations. `docker` is what production runs; `local` runs the
@@ -229,6 +230,21 @@ export interface SandboxRunInput<E, R> {
  * terms and a leftover container should not relabel it.
  */
 export interface SandboxInterface {
+  /**
+   * Every container this system started that the daemon still holds, whatever
+   * state it is in. Which of them is an orphan is the caller's to decide — it
+   * takes a database read this package must not do — so this only ever lists.
+   *
+   * Empty where there is no daemon to ask, which is not a degraded answer: a
+   * mode that starts no containers leaves none behind.
+   */
+  readonly held: Effect.Effect<readonly LabelledContainer[], SandboxError>;
+  /**
+   * Removes one container by name, whether or not it is still running. Used by
+   * the caller's sweep; the ordinary teardown is part of {@link run} and needs
+   * nothing from here.
+   */
+  readonly remove: (name: string) => Effect.Effect<void, SandboxError>;
   readonly run: <E, R>(
     input: SandboxRunInput<E, R>
   ) => Effect.Effect<SandboxResult, E | SandboxError, R>;
