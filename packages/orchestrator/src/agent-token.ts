@@ -50,6 +50,31 @@ export class AgentBundleMissing extends Schema.TaggedErrorClass<AgentBundleMissi
 }
 
 /**
+ * How much longer than its own turn a token lives. Enough to cover the turn's
+ * teardown and the clock skew between the host that signs and the container
+ * that presents, and nothing beyond it.
+ */
+const TOKEN_GRACE_MS = 300_000;
+
+/**
+ * How long this run's board credential should live.
+ *
+ * Derived from the turn's deadline rather than set on its own, because the two
+ * are the same fact: the token exists for the length of the run and is worth
+ * nothing after it. A fixed fifteen minutes was right when a turn was minutes,
+ * and is exactly what makes a twelve-hour run spend eleven of them unable to
+ * reach the board — a `401` per tool call, which an agent narrates rather than
+ * fails on, so the run looks like it worked and filed nothing.
+ *
+ * `ORCHESTRATOR_AGENT_TOKEN_TTL_MS` still overrides, for a deployment that
+ * wants a shorter blast radius and knows a long run pays for it.
+ */
+export const tokenTtlFor = (input: {
+  readonly configured: number | null;
+  readonly timeoutMs: number;
+}) => input.configured ?? input.timeoutMs + TOKEN_GRACE_MS;
+
+/**
  * Who this run's token speaks as. The one place the role changes what a
  * credential can reach, and it changes only what it is bound to.
  */

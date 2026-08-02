@@ -110,8 +110,13 @@ export {
   DEFAULT_USER,
   defaultHardening,
   type HardeningSpec,
+  hardeningFor,
   hostUser,
+  SANDBOX_CPUS_ENV_VAR,
+  SANDBOX_MEMORY_MB_ENV_VAR,
   type SandboxNetwork,
+  sandboxCpusConfig,
+  sandboxMemoryMbConfig,
   type TmpfsMount,
 } from "./hardening";
 export {

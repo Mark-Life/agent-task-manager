@@ -49,12 +49,14 @@ import {
 import {
   CONTAINER_AGENT_HOME_DIR,
   CONTAINER_WORKSPACE_DIR,
-  defaultHardening,
+  hardeningFor,
   hostUser,
   type Mount,
   type OutputChunk,
   Sandbox,
   type SandboxSpec,
+  sandboxCpusConfig,
+  sandboxMemoryMbConfig,
 } from "@workspace/sandbox";
 import { Effect, Option, Ref, Schedule, Schema, Semaphore } from "effect";
 import { FileSystem } from "effect/FileSystem";
@@ -160,14 +162,22 @@ export const specFor = (input: {
 /** The container one turn runs in, over the directories the run was given. */
 export const sandboxSpecFor = (input: {
   readonly context: DispatchContext;
+  /** This deployment's quota, from {@link sandboxCpusConfig}. */
+  readonly cpus: number;
   readonly env: Readonly<Record<string, string>>;
+  /** This deployment's ceiling, from {@link sandboxMemoryMbConfig}. */
+  readonly memoryMb: number;
   readonly mounts: readonly Mount[];
   readonly timeoutMs: number;
 }): SandboxSpec => ({
   args: [...containerEntrypointArgs()],
   command: CONTAINER_ENTRYPOINT_COMMAND,
   env: input.env,
-  hardening: { ...defaultHardening, user: hostUser() },
+  hardening: hardeningFor({
+    cpus: input.cpus,
+    memoryMb: input.memoryMb,
+    user: hostUser(),
+  }),
   identity: runIdentityOf(input.context),
   image: input.context.image,
   mounts: input.mounts,
@@ -290,6 +300,11 @@ export const containerTurn = <R>(input: ContainerTurnInput<R>) =>
     const sandbox = yield* Sandbox;
 
     const containerCapMs = innerCapMs(input.timeoutMs);
+    // Read here rather than redeclared in the loop's own config, for the reason
+    // `SANDBOX_MODE` is: a second spelling of a container's limits is a loop
+    // reporting one confinement on its rows while running another.
+    const cpus = yield* sandboxCpusConfig;
+    const memoryMb = yield* sandboxMemoryMbConfig;
     const spec = yield* encodeSpec(
       specFor({
         context,
@@ -354,7 +369,9 @@ export const containerTurn = <R>(input: ContainerTurnInput<R>) =>
           onOutput,
           spec: sandboxSpecFor({
             context,
+            cpus,
             env: input.env,
+            memoryMb,
             mounts: input.mounts,
             timeoutMs: containerCapMs,
           }),

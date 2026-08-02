@@ -206,7 +206,7 @@ describe("the second lane", () => {
 });
 
 describe("the configured pool", () => {
-  test("takes both caps from the environment, and defaults to two and one", async () => {
+  test("takes both caps from the environment, and defaults to two and two", async () => {
     const capacitiesOf = (environment: Readonly<Record<string, string>>) =>
       Effect.runPromise(
         Effect.gen(function* () {
@@ -226,12 +226,12 @@ describe("the configured pool", () => {
         )
       );
 
-    expect(await capacitiesOf({})).toEqual({ chat: 1, work: 2 });
+    expect(await capacitiesOf({})).toEqual({ chat: 2, work: 2 });
     expect(
       await capacitiesOf({
-        ORCHESTRATOR_MAX_CHAT_CONCURRENCY: "2",
-        ORCHESTRATOR_MAX_CONCURRENCY: "3",
+        ORCHESTRATOR_MAX_CHAT_CONCURRENCY: "3",
+        ORCHESTRATOR_MAX_CONCURRENCY: "4",
       })
-    ).toEqual({ chat: 2, work: 3 });
+    ).toEqual({ chat: 3, work: 4 });
   });
 });

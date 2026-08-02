@@ -56,9 +56,12 @@ turn as a plain host process for debugging a harness change without an image, an
 `kind: "local"` on the row so an unisolated run can never be mistaken for a contained one.
 
 **A run that goes quiet is closed, not waited on.** A stream that ends with no result is
-`lost`; one that never ends at all is torn down at `ORCHESTRATOR_RUN_TIMEOUT_MS` (an hour by
-default) and closed as `timeout`, so a wedged provider costs one slot for one hour rather than
-one slot forever.
+`lost`; one that never ends at all is torn down at `ORCHESTRATOR_RUN_TIMEOUT_MS` (a day by
+default, long enough for a run that is genuinely working through the night) and closed as
+`timeout`, so a wedged provider costs one slot for a day rather than one slot forever. The
+run's board credential is minted for that same span plus five minutes, because a token that
+expires under a live run is a `401` per tool call that the agent narrates instead of failing
+on.
 
 **A run that posted no comment gets its last message appended as one**, flagged
 `fallback` so the UI can collapse it. After the turn the loop reads the run's directory back:
@@ -99,7 +102,7 @@ the operator's `${DATA_ROOT}/bin/turn.js`. It skips the kill half, which is a cl
 loop and needs no container.
 
 Knobs: `ORCHESTRATOR_MAX_CONCURRENCY` (default 2, sized for a 4-core box),
-`ORCHESTRATOR_MAX_CHAT_CONCURRENCY` (default 1), `ORCHESTRATOR_POLL_INTERVAL_MS`,
+`ORCHESTRATOR_MAX_CHAT_CONCURRENCY` (default 2), `ORCHESTRATOR_POLL_INTERVAL_MS`,
 `ORCHESTRATOR_LEASE_STALE_MS`, `ORCHESTRATOR_MAX_ATTEMPTS`, `ORCHESTRATOR_RUN_TIMEOUT_MS`,
 `ORCHESTRATOR_CHAT_TIMEOUT_MS`, `ORCHESTRATOR_DEFAULT_PROVIDER`,
 `ORCHESTRATOR_GATEWAY_URL`, `ORCHESTRATOR_AGENT_TOKEN_TTL_MS`, `LOOP_SHUTDOWN_GRACE_MS`.

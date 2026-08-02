@@ -84,6 +84,7 @@ import {
   Tracer,
 } from "effect";
 import { FileSystem } from "effect/FileSystem";
+import { tokenTtlFor } from "./agent-token";
 import { rescanRunArtifacts } from "./artifacts";
 import {
   makeRunCommands,
@@ -291,9 +292,9 @@ const make = Effect.gen(function* () {
     attached.role === "manager" ? "chat" : "work";
 
   /**
-   * The deadline for one turn. A person is waiting on a chat turn, and a
-   * conversation silent for ten minutes has already failed as a conversation
-   * whatever the model is still doing; a worker run has an hour.
+   * The deadline for one turn. A person is waiting on a manager turn, so it is
+   * capped in minutes; a worker run is a whole piece of work and is capped in
+   * hours.
    */
   const timeoutFor = (attached: RunAttachment) =>
     attached.role === "manager" ? config.chatTimeoutMs : config.runTimeoutMs;
@@ -394,7 +395,10 @@ const make = Effect.gen(function* () {
         onClose: collect,
         sandboxKind: config.sandboxKind,
         timeoutMs: timeoutFor(context.attached),
-        tokenTtlMs: config.agentTokenTtlMs,
+        tokenTtlMs: tokenTtlFor({
+          configured: config.agentTokenTtlMs,
+          timeoutMs: timeoutFor(context.attached),
+        }),
       }).pipe(
         withRunEvent({
           dispatch: context,

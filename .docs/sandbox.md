@@ -20,9 +20,13 @@ A chat turn has no task and no project, so it gets four: the run directory, the 
 scratch `/workspace` released with the run, and the global promoted folder read-only. Nothing
 it writes to `/workspace` outlives the container, and the prompt says so.
 
-**Hardening**: `--cap-drop=ALL`, `no-new-privileges`, non-root, 2048 MB with swap pinned
-equal, 1.5 CPUs, 512 pids, `/tmp` as a capped tmpfs, `--init`. Network is fully open, and that
-is a decision: search, `bun install`, `gh` and the model APIs are the work.
+**Hardening**: `--cap-drop=ALL`, `no-new-privileges`, non-root, `SANDBOX_MEMORY_MB` (2048 by
+default) with swap pinned equal, `SANDBOX_CPUS` (1.5), 512 pids, `/tmp` as a capped tmpfs,
+`--init`. Both limits are ceilings and not reservations — nothing is allocated up front, so
+the sum across the slots may exceed the box; what the memory number decides is that a runaway
+run is OOM-killed and retried rather than the kernel choosing a victim on the host, and an
+over-committed CPU quota only ever costs contention. Network is fully open, and that is a
+decision: search, `bun install`, `gh` and the model APIs are the work.
 
 **Two implementations behind one service.** `SANDBOX_MODE=docker` (the default) or `local`,
 which runs the same spec as a plain host process for debugging a harness change without an

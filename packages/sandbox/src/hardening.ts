@@ -30,6 +30,7 @@
  */
 
 import process from "node:process";
+import { Config } from "effect";
 
 /**
  * Whether the container's root filesystem is writable. Off by default, and this
@@ -48,15 +49,57 @@ export const DEFAULT_READ_ONLY_ROOTFS = false;
 /**
  * Memory ceiling per container, in megabytes. Three of these fit in eight
  * gigabytes with room for the host, Postgres and the loop.
+ *
+ * The default stays sized for a laptop because that is where an unset variable
+ * is most likely to be. A rented box wants more — see
+ * {@link SANDBOX_MEMORY_MB_ENV_VAR}.
  */
 export const DEFAULT_MEMORY_MB = 2048;
+
+/** The variable that raises or lowers {@link DEFAULT_MEMORY_MB}. */
+export const SANDBOX_MEMORY_MB_ENV_VAR = "SANDBOX_MEMORY_MB";
+
+/**
+ * The memory ceiling this deployment gives a container.
+ *
+ * A ceiling and not a reservation: docker allocates none of it up front, so the
+ * sum of every container's limit may exceed the host's memory and routinely
+ * should. What the number buys is which process dies when something runs away —
+ * a container over its own limit is OOM-killed, counted and retried, while a
+ * host over its memory is a kernel picking a victim that may well be Postgres.
+ * Size it for the largest legitimate run rather than the typical one, and keep
+ * the sum of the slots' limits within a small multiple of the box.
+ */
+export const sandboxMemoryMbConfig = Config.int(SANDBOX_MEMORY_MB_ENV_VAR).pipe(
+  Config.withDefault(DEFAULT_MEMORY_MB)
+);
 
 /**
  * CPU quota per container. Slight oversubscription against four cores is right:
  * an agent spends most of its wall clock waiting on a model, and a hard 1.0
  * would make the one minute it does spend compiling take four.
+ *
+ * Sized for a laptop, like {@link DEFAULT_MEMORY_MB}, and raised the same way —
+ * see {@link SANDBOX_CPUS_ENV_VAR}.
  */
 export const DEFAULT_CPUS = 1.5;
+
+/** The variable that raises or lowers {@link DEFAULT_CPUS}. */
+export const SANDBOX_CPUS_ENV_VAR = "SANDBOX_CPUS";
+
+/**
+ * The CPU quota this deployment gives a container.
+ *
+ * Oversubscribing costs less here than it does with memory, and the reason is
+ * the workload: a quota is a share of time rather than a claim on a core, an
+ * idle container spends none of it, and an agent waiting on a model is idle for
+ * most of its run. Over-committed CPU is contention, which is slow; the memory
+ * equivalent is a kill. Fractional, because a whole core is rarely the right
+ * unit.
+ */
+export const sandboxCpusConfig = Config.number(SANDBOX_CPUS_ENV_VAR).pipe(
+  Config.withDefault(DEFAULT_CPUS)
+);
 
 /**
  * Process ceiling. High enough for an install fanning out across cores and a
@@ -171,6 +214,27 @@ export const defaultHardening: HardeningSpec = {
   tmpfs: DEFAULT_TMPFS,
   user: DEFAULT_USER,
 };
+
+/**
+ * The defaults with this deployment's limits and the operator's uid applied —
+ * the three things a real run changes about {@link defaultHardening}.
+ *
+ * Swap is set from the memory number rather than taken as a fourth argument,
+ * because the two are one decision: a container allowed to swap is not
+ * OOM-killed, it is slow, and it drags the box down while looking healthy.
+ * Passing them separately is how they drift apart.
+ */
+export const hardeningFor = (input: {
+  readonly cpus: number;
+  readonly memoryMb: number;
+  readonly user: string;
+}): HardeningSpec => ({
+  ...defaultHardening,
+  cpus: input.cpus,
+  memoryMb: input.memoryMb,
+  memorySwapMb: input.memoryMb,
+  user: input.user,
+});
 
 /** Docker reads a tmpfs mode as octal, so the bits are rendered in base 8. */
 const OCTAL = 8;

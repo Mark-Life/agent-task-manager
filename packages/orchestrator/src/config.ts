@@ -43,18 +43,18 @@ import { Config, Effect } from "effect";
 const DEFAULT_MAX_CONCURRENCY = 2;
 
 /**
- * How many chat turns may hold a container at once, on top of the work lane.
+ * How many manager turns may hold a container at once, on top of the work lane.
  *
- * One. A person has one conversation in flight, and a second chat container
- * buys latency nobody is waiting on. It is a lane of its own rather than a
- * share of the work cap because the failure it exists to prevent is a chat
- * starved behind two hour-long worker runs, and a reservation only guarantees
- * that when the reserved count is a separate count.
+ * Two, because one person genuinely does run more than one conversation at a
+ * time — the same way they would keep several terminals open — and with a
+ * single slot the second thread waits on the first for no reason a person can
+ * see. It is a lane of its own rather than a share of the work cap because the
+ * failure it exists to prevent is a reply starved behind day-long worker runs,
+ * and a reservation only guarantees that when the reserved count is separate.
  *
- * The box's cap is the sum: three containers of four cores, stated as one
- * number in two parts.
+ * The box's cap is the sum, stated as one number in two parts.
  */
-const DEFAULT_MAX_CHAT_CONCURRENCY = 1;
+const DEFAULT_MAX_CHAT_CONCURRENCY = 2;
 
 /**
  * How often the dispatcher looks for work regardless of notifications.
@@ -102,25 +102,29 @@ const DEFAULT_MAX_ATTEMPTS = 5;
 const DEFAULT_PARK_MS = 86_400_000;
 
 /**
- * The wall-clock cap on one run. An hour is longer than any turn we have seen
- * and far shorter than forever, which is what a run with no cap holds its slot
- * for — on a two-slot pool, one wedged container is half the factory.
+ * The wall-clock cap on one run. A day, because a worker run is a whole piece
+ * of work rather than a turn: an agent that spawns sub-agents and iterates on a
+ * task overnight is the thing this exists to run, and a cap that kills it at
+ * hour one turns the ordinary long run into a failure the ladder then repeats.
+ *
+ * It is still a cap, and what it is a cap on is a wedged provider — a run with
+ * none holds its slot forever. A day is what one wedge costs on a small pool,
+ * which is why a stop is a row anyone can write and never waits for this.
  */
-const DEFAULT_RUN_TIMEOUT_MS = 3_600_000;
+const DEFAULT_RUN_TIMEOUT_MS = 86_400_000;
 
 /**
- * The wall-clock cap on one chat turn. Ten minutes: a person is waiting on it,
- * and a conversation that has been silent that long has already failed as a
- * conversation whatever the model is still doing.
+ * The wall-clock cap on one manager turn — a reply into a conversation, with a
+ * person waiting on it.
+ *
+ * Half an hour, which is the compromise the role forces. It is not a worker
+ * run: a conversation silent for hours has already failed as a conversation
+ * whatever the model is still doing, so this can never grow to the run cap.
+ * Ten minutes was too tight for the manager's actual job, which is reading the
+ * board through its tools before it answers. Long work belongs in a task the
+ * manager files, where the run cap applies and nobody is sitting on the reply.
  */
-const DEFAULT_CHAT_TIMEOUT_MS = 600_000;
-
-/**
- * How long a turn's board credential lives. Fifteen minutes — a turn is seconds
- * to minutes, nothing can recall a token, and the defence is that it expires
- * before it is worth stealing.
- */
-const DEFAULT_AGENT_TOKEN_TTL_MS = 900_000;
+const DEFAULT_CHAT_TIMEOUT_MS = 1_800_000;
 
 /** The provider a task takes when neither it nor a resumed session names one. */
 const DEFAULT_PROVIDER: SessionProvider = "claude";
@@ -181,9 +185,13 @@ export const orchestratorConfig = Effect.gen(function* () {
     Config.withDefault(DEFAULT_CHAT_TIMEOUT_MS)
   );
 
+  // Absent is the useful default: the lifetime a board credential wants is the
+  // length of the turn holding it, which only the dispatch knows. `tokenTtlFor`
+  // in `./agent-token` derives it; a value here overrides, and a value shorter
+  // than the turn is a run that loses its board tools partway through.
   const agentTokenTtlMs = yield* Config.int(
     "ORCHESTRATOR_AGENT_TOKEN_TTL_MS"
-  ).pipe(Config.withDefault(DEFAULT_AGENT_TOKEN_TTL_MS));
+  ).pipe(Config.withDefault(null));
 
   // The gateway as a **container** sees it, which is rarely `localhost`. Absent
   // is a legal install: every turn then runs with no board tools, which the
