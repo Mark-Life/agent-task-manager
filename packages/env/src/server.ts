@@ -32,6 +32,12 @@ const DEFAULT_STUCK_DISTINCT_SIGNATURES = 2;
  * `Config`, and `@workspace/db` reads the `DATABASE_*` set the same way, so a
  * script wanting only a database handle need not build this layer. Names and
  * defaults must stay in sync by hand.
+ *
+ * The auth variables are the same kind of entry. `BETTER_AUTH_URL` is read by
+ * the library itself, and `DASHBOARD_ORIGIN` and `AUTH_COOKIE_DOMAIN` are read
+ * from `process.env` where the auth options are built, because that object is
+ * assembled at import time with no runtime around it. They are listed here so
+ * one file still says what the environment has to carry.
  */
 const load = Effect.gen(function* () {
   const databaseUrl = yield* Config.redacted("DATABASE_URL");
@@ -83,6 +89,36 @@ const load = Effect.gen(function* () {
   const gatewayPublicUrl = yield* Config.option(
     Config.string("GATEWAY_PUBLIC_URL")
   );
+
+  // The dashboard's exact origin — scheme and host, no path, no trailing slash.
+  // Two readers, one value: the gateway trusts it as an origin the browser may
+  // post from, and the bot builds the link on a notification out of it. The
+  // gateway serves no static assets, so a task link pointed at its origin is a
+  // 404 wherever the two are not the same host.
+  const dashboardOrigin = yield* Config.option(
+    Config.string("DASHBOARD_ORIGIN")
+  );
+
+  // The registrable domain the dashboard and the gateway share, leading dot
+  // included, e.g. `.example.com`. It widens the session cookie so the two
+  // hosts are the same site to a browser. Unset means the cookie stays on the
+  // gateway's own host, which is right for a local run and for anything served
+  // from one origin.
+  const authCookieDomain = yield* Config.option(
+    Config.string("AUTH_COOKIE_DOMAIN")
+  );
+
+  // The origin the auth library builds cookie and callback URLs from — the
+  // gateway's public one. Better Auth reads it from the environment itself; it
+  // is named here because it is required whenever the cookie domain above is
+  // set, and a boot that fails on that says so about a variable no typed
+  // config mentioned.
+  const betterAuthUrl = yield* Config.option(Config.string("BETTER_AUTH_URL"));
+
+  // The password the bootstrap gives the seeded owner. Read only by the seed,
+  // which links a credential account with it; unset means the owner exists and
+  // cannot sign in, which is a fine state for a database nobody logs into.
+  const ownerPassword = yield* Config.option(Config.redacted("OWNER_PASSWORD"));
 
   // Bot process and renderer knobs.
   const botShutdownGraceMs = yield* Config.int("BOT_SHUTDOWN_GRACE_MS").pipe(
@@ -166,10 +202,13 @@ const load = Effect.gen(function* () {
 
   return {
     anthropicApiKey,
+    authCookieDomain,
+    betterAuthUrl,
     botGatewayUrl,
     botShutdownGraceMs,
     botSplitAt,
     claudeSettingsJson,
+    dashboardOrigin,
     databaseConnectTimeoutMs,
     databasePoolMax,
     databaseUrl,
@@ -186,6 +225,7 @@ const load = Effect.gen(function* () {
     notifyRetryGraceMs,
     otlpEndpoint,
     otlpHeaders,
+    ownerPassword,
     serviceVersion,
     stuckDistinctSignatures,
     stuckMinToolCalls,

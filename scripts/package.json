@@ -23,6 +23,7 @@
     "grammy": "catalog:"
   },
   "devDependencies": {
+    "@types/bun": "catalog:",
     "@workspace/typescript-config": "workspace:*"
   }
 }

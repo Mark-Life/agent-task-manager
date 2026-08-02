@@ -37,7 +37,7 @@
 		}
 	}
 
-	# The dashboard is served from Cloudflare Pages and the gateway from here,
+	# The dashboard is served from Cloudflare and the gateway from here,
 	# so every call the SPA makes is cross-origin and carries a session cookie.
 	# `Allow-Origin` is one exact origin, never `*`: a wildcard and
 	# `Allow-Credentials` together are refused by every browser, and the refusal
@@ -52,6 +52,13 @@
 	# Preflight is answered here because the API has no OPTIONS routes at all —
 	# an `OPTIONS /projects` against the gateway is a 404 (checked), and a 404
 	# preflight fails the request the browser was about to make.
+	#
+	# `traceparent` and `b3` are on the allow list because the dashboard's typed
+	# client stamps both on every call, a plain board read included — neither is
+	# CORS-safelisted, so leaving them out preflights every request and then
+	# fails it. They are also the point: the gateway parents its request span on
+	# the inbound `traceparent`, so this is what makes a browser click and the
+	# run it starts one trace.
 	@preflight {
 		method OPTIONS
 		header Origin {$ATM_DASHBOARD_ORIGIN}
@@ -61,7 +68,7 @@
 			Access-Control-Allow-Origin {$ATM_DASHBOARD_ORIGIN}
 			Access-Control-Allow-Credentials true
 			Access-Control-Allow-Methods "GET, POST, PATCH, PUT, DELETE, OPTIONS"
-			Access-Control-Allow-Headers "Authorization, Content-Type"
+			Access-Control-Allow-Headers "Authorization, Content-Type, traceparent, b3"
 			Access-Control-Max-Age 86400
 			Vary Origin
 		}

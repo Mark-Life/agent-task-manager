@@ -86,6 +86,11 @@ export const AdminToken = scopedToken(
  * The browser's side of the same door: a Better Auth session cookie, which is
  * what the dashboard sends. It appears beside the bearer scheme on every
  * operation a person can perform, which in OpenAPI reads as "either of these".
+ *
+ * The name is the unprefixed one on purpose. Over https the library issues the
+ * same cookie as `__Secure-better-auth.session_token`, and the gateway accepts
+ * either spelling; a document can only name one, so it names the one that is
+ * true everywhere rather than the one that is true in production.
  */
 export const SessionCookie = HttpApiSecurity.apiKey({
   in: "cookie",

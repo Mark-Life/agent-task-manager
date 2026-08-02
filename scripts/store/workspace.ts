@@ -10,11 +10,15 @@
  * Reading is the other way round: the workspace comes back through our own
  * repository, so what a script goes on to use has been decoded into the domain
  * type like any other row rather than trusted straight off the library.
+ *
+ * The owner's password is made here too, from `OWNER_PASSWORD`. Sign-up is
+ * closed, so there is no route that would ever create the credential a sign-in
+ * looks for; a bootstrap is the only place it can come from.
  */
 
-import { Auth, WorkspaceRepo } from "@workspace/db";
+import { Auth, ensurePassword, WorkspaceRepo } from "@workspace/db";
 import { UserId } from "@workspace/domain";
-import { type Context, Effect, Schema } from "effect";
+import { Config, type Context, Effect, Option, Schema } from "effect";
 
 /**
  * The workspace the seed creates and every script reuses. The slug is the
@@ -65,6 +69,35 @@ const ownerAccount = (auth: AuthInstance) =>
   });
 
 /**
+ * Gives the owner the password the environment names, if it names one.
+ *
+ * A `user` row is not a login: sign-in looks for a credential account beside
+ * it, and with sign-up closed nothing on the HTTP surface will ever create one.
+ * So this is where the operator's way in is made — and it is optional, because
+ * a database seeded for the loop's own tests needs a workspace and nobody to
+ * sign in as.
+ */
+const ownerCredential = (auth: AuthInstance, userId: string) =>
+  Effect.gen(function* () {
+    const configured = yield* Config.option(Config.redacted("OWNER_PASSWORD"));
+    if (Option.isNone(configured)) {
+      return yield* Effect.logInfo(
+        `owner ${OWNER_EMAIL} has no OWNER_PASSWORD — nobody can sign in yet`
+      );
+    }
+    const outcome = yield* ensurePassword({
+      auth,
+      password: configured.value,
+      userId,
+    });
+    yield* Effect.logInfo(
+      outcome === "linked"
+        ? `owner ${OWNER_EMAIL} can now sign in`
+        : `owner ${OWNER_EMAIL} already has a password — left as it is`
+    );
+  });
+
+/**
  * Creates the organization on behalf of the owner. Passing `userId` with no
  * request headers is how the library recognizes a server-side call: there is no
  * browser session to read, and a script is not one.
@@ -86,6 +119,7 @@ export const ensureWorkspace = Effect.fn("Seed.ensureWorkspace")(function* () {
 
   const owner = yield* ownerAccount(auth);
   const ownerId = UserId.make(owner.id);
+  yield* ownerCredential(auth, ownerId);
 
   const bySlug = (found: { readonly slug: string }) =>
     found.slug === WORKSPACE_SLUG;

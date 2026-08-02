@@ -28,6 +28,10 @@ export { CurrentActor, withActor } from "./actor";
 // `options` is the name the Better Auth schema generator looks for on the
 // module it reads; out here it needs one that says which options it holds.
 export { options as authOptions } from "./auth/options";
+// The one auth write no route can make: sign-up is closed, so a bootstrap
+// script has to link the operator's password itself, and it belongs beside the
+// auth instance rather than in whichever script needs it first.
+export { ensurePassword, type PasswordOutcome } from "./auth/password";
 // `Database` is exported as a type and never as a value: a composition root
 // that merges the store out has the handle in its layer's type and cannot name
 // it otherwise, while a caller still has no way to obtain one and reach a row
