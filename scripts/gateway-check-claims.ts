@@ -324,6 +324,211 @@ export const runSurfaceClaims = (input: {
     });
   });
 
+/**
+ * A conversation with the manager, opened and spoken to over HTTP.
+ *
+ * This is the claim that the dashboard reaches what Telegram reaches. The
+ * thread has no chat behind it, the message is stored exactly as one typed into
+ * the bot is, and the insert is the dispatch source — so an answer, when a loop
+ * is running, comes from the same turn a chat message would have started.
+ * Nothing here waits for one: this check has no loop.
+ *
+ * The thread is archived at the end rather than deleted. There is no delete: an
+ * audit row naming the conversation that asked for a board write has to keep
+ * pointing at something.
+ */
+const openedThreadClaims = (input: {
+  readonly caller: Caller;
+  readonly token: string;
+  readonly userId: string;
+}) =>
+  Effect.gen(function* () {
+    const opened = yield* input.caller.call({
+      body: { title: "gateway-check conversation" },
+      method: "POST",
+      path: "/threads",
+      token: input.token,
+    });
+    const thread = opened.body as {
+      chatId?: number | null;
+      provider?: string;
+      status?: string;
+      userId?: string;
+    };
+    const threadId = idOf(opened.body);
+    yield* check({
+      detail: `${opened.status} ${threadId || "no id"}, ${thread.provider ?? "no provider"}, chat ${thread.chatId ?? "none"}`,
+      ok:
+        opened.status === OK &&
+        threadId !== "" &&
+        thread.status === "active" &&
+        thread.userId === input.userId &&
+        (thread.chatId ?? null) === null,
+      step: "a conversation is opened over HTTP, belonging to no Telegram chat",
+    });
+
+    const said = yield* input.caller.call({
+      body: { body: "asked over HTTP" },
+      method: "POST",
+      path: `/threads/${threadId}/messages`,
+      token: input.token,
+    });
+    const posted = said.body as {
+      message?: { body?: string; intakeKind?: string; role?: string };
+      queued?: boolean;
+    };
+    yield* check({
+      detail: `${said.status}, ${posted.message?.role ?? "no role"} by ${posted.message?.intakeKind ?? "no intake"}, queued ${String(posted.queued)}`,
+      ok:
+        said.status === OK &&
+        posted.message?.role === "user" &&
+        posted.message.intakeKind === "api" &&
+        posted.queued === false,
+      step: "a message posted over HTTP is stored as a user message that starts a turn",
+    });
+
+    const read = yield* input.caller.call({
+      path: `/threads/${threadId}`,
+      token: input.token,
+    });
+    const detail = read.body as {
+      liveRunId?: string | null;
+      thread?: { id?: string; title?: string | null };
+    };
+    yield* check({
+      detail: `${read.status}, ${detail.thread?.id ?? "no thread"}, live run ${detail.liveRunId ?? "none"}`,
+      ok:
+        read.status === OK &&
+        detail.thread?.id === threadId &&
+        (detail.liveRunId ?? null) === null,
+      step: "the conversation reads back by id, with no turn running on it",
+    });
+
+    const history = yield* input.caller.call({
+      path: `/threads/${threadId}/messages`,
+      token: input.token,
+    });
+    const page = history.body as {
+      messages?: { body?: string }[];
+      nextOffset?: number | null;
+    };
+    yield* check({
+      detail: `${history.status}, ${page.messages?.length ?? 0} said, next ${page.nextOffset ?? "nothing"}`,
+      ok:
+        history.status === OK &&
+        page.messages?.length === 1 &&
+        page.messages[0]?.body === "asked over HTTP" &&
+        (page.nextOffset ?? null) === null,
+      step: "what was said reads back as a page of the conversation",
+    });
+
+    const listed = yield* input.caller.call({
+      path: "/threads",
+      token: input.token,
+    });
+    const threads = listOf(listed.body) as { id?: string }[];
+    yield* check({
+      detail: `${listed.status}, ${threads.length} conversations`,
+      ok: listed.status === OK && threads.some((each) => each.id === threadId),
+      step: "the conversation is in the workspace's list, which belongs to no chat",
+    });
+
+    return threadId;
+  });
+
+/** The turns behind a conversation, and the two ways it is steered. */
+const answeredThreadClaims = (input: {
+  readonly caller: Caller;
+  readonly threadId: string;
+  readonly token: string;
+  readonly userId: string;
+}) =>
+  Effect.gen(function* () {
+    const { threadId } = input;
+
+    const turns = yield* input.caller.call({
+      path: `/threads/${threadId}/runs`,
+      token: input.token,
+    });
+    yield* check({
+      detail: `${turns.status}, ${listOf(turns.body).length} turns`,
+      ok: turns.status === OK && listOf(turns.body).length === 0,
+      step: "the conversation's turns are listed, and there are none without a loop",
+    });
+
+    const stopped = yield* input.caller.call({
+      body: {},
+      method: "POST",
+      path: `/threads/${threadId}/stop`,
+      token: input.token,
+    });
+    const intent = stopped.body as {
+      actorUserId?: string;
+      payload?: { kind?: string };
+      status?: string;
+      taskId?: string | null;
+      threadId?: string | null;
+    };
+    yield* check({
+      detail: `${stopped.status}, ${intent.payload?.kind ?? "no kind"} on thread ${intent.threadId ?? "none"} / task ${intent.taskId ?? "none"}`,
+      ok:
+        stopped.status === OK &&
+        intent.payload?.kind === "stop" &&
+        intent.status === "pending" &&
+        intent.threadId === threadId &&
+        (intent.taskId ?? null) === null &&
+        intent.actorUserId === input.userId,
+      step: "a force send is a stop intent naming the thread, not a task",
+    });
+
+    const archived = yield* input.caller.call({
+      body: { status: "archived" },
+      method: "PATCH",
+      path: `/threads/${threadId}`,
+      token: input.token,
+    });
+    const retired = archived.body as { isCurrent?: boolean; status?: string };
+    yield* check({
+      detail: `${archived.status}, ${retired.status ?? "no status"}, current ${String(retired.isCurrent)}`,
+      ok:
+        archived.status === OK &&
+        retired.status === "archived" &&
+        retired.isCurrent === false,
+      step: "archiving retires the conversation and drops its currency",
+    });
+
+    const active = yield* input.caller.call({
+      path: "/threads",
+      token: input.token,
+    });
+    const retiredOnes = yield* input.caller.call({
+      path: "/threads?status=archived",
+      token: input.token,
+    });
+    const idsOf = (body: unknown) =>
+      (listOf(body) as { id?: string }[]).map((each) => each.id);
+    yield* check({
+      detail: `${idsOf(active.body).length} active, ${idsOf(retiredOnes.body).length} archived`,
+      ok:
+        active.status === OK &&
+        retiredOnes.status === OK &&
+        !idsOf(active.body).includes(threadId) &&
+        idsOf(retiredOnes.body).includes(threadId),
+      step: "a retired conversation leaves the list until it is asked for by name",
+    });
+  });
+
+/** The whole of the conversation surface, opened and then answered. */
+export const threadClaims = (input: {
+  readonly caller: Caller;
+  readonly token: string;
+  readonly userId: string;
+}) =>
+  Effect.gen(function* () {
+    const threadId = yield* openedThreadClaims(input);
+    yield* answeredThreadClaims({ ...input, threadId });
+  });
+
 /** How much of a body is repeated back when the claim about it fails. */
 const DETAIL_CHARS = 48;
 

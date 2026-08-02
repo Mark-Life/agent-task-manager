@@ -34,6 +34,10 @@
  * anybody else's, checked once in the access middleware against the `:taskId`
  * every task-owned route nests below.
  *
+ * **The conversation.** Open a thread over HTTP, say something into it, read it
+ * and its turns back, file a force send, and archive it. The dashboard's door
+ * onto the manager is the bot's door: one row, one dispatch source, one queue.
+ *
  * **The stream.** A live run's timeline over SSE, and the row that is written
  * when the connection closes rather than when the handler returned.
  *
@@ -94,6 +98,7 @@ import {
   runSurfaceClaims,
   specClaims,
   streamClaims,
+  threadClaims,
 } from "./gateway-check-claims";
 import {
   CheckFailed,
@@ -159,13 +164,13 @@ const openRun = (input: {
 
     const session = yield* sessions.open({
       provider: "claude",
-      taskId: input.taskId,
+      subject: { id: input.taskId, kind: "task" },
       workspaceId: input.workspaceId,
     });
     const run = yield* runs.create({
       agentSessionId: session.id,
       provider: "claude",
-      taskId: input.taskId,
+      subject: { id: input.taskId, kind: "task" },
       trigger: "manual",
       workspaceId: input.workspaceId,
     });
@@ -180,7 +185,7 @@ const openRun = (input: {
       },
       runId: run.id,
       seq: 1,
-      taskId: input.taskId,
+      subject: { id: input.taskId, kind: "task" },
       workspaceId: input.workspaceId,
     });
     return { run, session };
@@ -364,6 +369,8 @@ const drive = (input: {
     refused.push(
       yield* bindingClaims({ caller, otherTaskId, taskId, workerToken })
     );
+    yield* threadClaims({ caller, token: adminToken, userId: CHECK_USER });
+
     const streamed = yield* streamClaims({
       caller,
       holdMs: STREAM_HOLD_MS,

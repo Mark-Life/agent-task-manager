@@ -8,11 +8,19 @@ import { SERVICE_NAME } from "./identity";
  * banner" is a question about the value and not about a coincidence.
  */
 const config: OrchestratorConfig = {
+  agentHomeDirs: {
+    claude: "/tmp/atm-banner-test/claude-home",
+    codex: "/tmp/atm-banner-test/codex-home",
+  },
+  agentTokenTtlMs: 1011,
+  chatTimeoutMs: 1012,
   dataRoot: "/tmp/atm-banner-test",
   defaultProvider: "codex",
+  gatewayUrl: "https://gateway.invalid",
   leaseHeartbeatMs: 1001,
   leaseStaleMs: 1002,
   maxAttempts: 1003,
+  maxChatConcurrency: 1013,
   maxConcurrency: 1004,
   parkMs: 1005,
   pollIntervalMs: 1006,

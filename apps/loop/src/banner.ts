@@ -51,8 +51,15 @@ export interface BannerInput {
  * is added.
  */
 export const bannerFields = (input: BannerInput) => ({
+  /** One per provider, and the one thing an operator has to create by hand. */
+  agentHomes: input.config.agentHomeDirs,
+  agentTokenTtlMs: input.config.agentTokenTtlMs,
+  chatConcurrency: input.config.maxChatConcurrency,
+  chatTimeoutMs: input.config.chatTimeoutMs,
   concurrency: input.config.maxConcurrency,
   dataRoot: input.config.dataRoot,
+  /** Null on an install that gave its agents no board tools, which is legal. */
+  gateway: input.config.gatewayUrl,
   instance: input.instance,
   leaseHeartbeatMs: input.config.leaseHeartbeatMs,
   leaseStaleMs: input.config.leaseStaleMs,
@@ -72,7 +79,7 @@ export const bannerFields = (input: BannerInput) => ({
 
 /** What the banner's message says, before the fields are annotated onto it. */
 const headline = (config: OrchestratorConfig) =>
-  `loop starting — ${config.sandboxKind} sandbox, ${config.maxConcurrency} slots, default provider ${config.defaultProvider}`;
+  `loop starting — ${config.sandboxKind} sandbox, ${config.maxConcurrency} work slots and ${config.maxChatConcurrency} chat slots, default provider ${config.defaultProvider}`;
 
 /**
  * Emits the banner, and — only when the sandbox is not isolating anything — the

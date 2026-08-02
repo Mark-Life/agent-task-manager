@@ -197,7 +197,7 @@ const storeCheck = Effect.gen(function* () {
   const session = yield* asOrchestrator(
     sessions.open({
       provider: "claude",
-      taskId: task.id,
+      subject: { id: task.id, kind: "task" },
       workspaceId,
     })
   );
@@ -205,7 +205,7 @@ const storeCheck = Effect.gen(function* () {
     runs.create({
       agentSessionId: session.id,
       provider: "claude",
-      taskId: task.id,
+      subject: { id: task.id, kind: "task" },
       trigger: "status_change",
       workspaceId,
     })
