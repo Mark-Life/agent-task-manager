@@ -225,9 +225,26 @@ const waitForRows = async (count: number) => {
   return readRows();
 };
 
+/**
+ * The annotation sinks, once they have seen `count` events.
+ *
+ * The emitter writes the ledger first and logs the annotated line second, so a
+ * row on disk does not yet mean the logger has been called. Waiting on the file
+ * alone and then reading the capture is a race the assertion loses on a busy
+ * machine and wins on an idle one.
+ */
+const waitForCapture = async (count: number) => {
+  const deadline = Date.now() + ROW_DEADLINE_MS;
+  while (capture.events.length < count && Date.now() < deadline) {
+    // biome-ignore lint/performance/noAwaitInLoops: polling the sink is the point
+    await sleep(ROW_POLL_MS);
+  }
+};
+
 /** The single row a request just wrote. Fails loudly when the count is not one. */
 const onlyRow = async () => {
   const rows = await waitForRows(1);
+  await waitForCapture(rows.length);
   const [row] = rows;
   if (!row || rows.length !== 1) {
     throw new Error(`expected exactly one row, found ${rows.length}`);
@@ -377,6 +394,7 @@ describe("the atm.request row", () => {
     await get("/health");
 
     await waitForRows(1);
+    await waitForCapture(1);
     expect(capture.events).toHaveLength(1);
     expect(readRows()).toHaveLength(1);
   });
