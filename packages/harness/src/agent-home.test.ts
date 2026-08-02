@@ -130,8 +130,12 @@ describe("prepareAgentHome", () => {
     ).toBe('{"userID":"user-1"}');
   });
 
+  // `.claude.json` rather than `.credentials.json`, because the latter has the
+  // login keychain as its alternate and would therefore be found or not found
+  // depending on whose machine ran the test. A temp directory has no parent
+  // holding a config file, so this one is absent everywhere.
   test("reports an optional file the host never had", async () => {
-    writeFileSync(join(source, ".claude.json"), "{}");
+    writeFileSync(join(source, ".credentials.json"), "{}");
     const report = await run(
       prepareAgentHome({
         layout: hostRunLayout({ dataRoot, runId: newRunId() }),
@@ -139,7 +143,27 @@ describe("prepareAgentHome", () => {
         sourceDir: source,
       })
     );
-    expect(report.missing).toEqual([".credentials.json"]);
+    expect(report.missing).toEqual([".claude.json"]);
+  });
+
+  test("takes Claude's config file from beside the directory when it is not inside it", async () => {
+    writeFileSync(join(source, ".credentials.json"), "{}");
+    const nested = join(source, "config");
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(
+      join(source, ".claude.json"),
+      JSON.stringify({ projects: { "/secret": 1 }, userID: "u1" })
+    );
+    const layout = hostRunLayout({ dataRoot, runId: newRunId() });
+    const report = await run(
+      prepareAgentHome({ layout, provider: "claude", sourceDir: nested })
+    );
+
+    expect(report.seeded).toContain(".claude.json");
+    const seeded = JSON.parse(
+      readFileSync(join(report.agentHomeDir, ".claude.json"), "utf8")
+    );
+    expect(seeded).toEqual({ userID: "u1" });
   });
 
   test("fails before the container starts when the login is absent", async () => {

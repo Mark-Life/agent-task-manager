@@ -24,16 +24,20 @@
  */
 
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { SessionProvider } from "@workspace/domain";
 import { Config, Effect, Option, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
+import { claudeKeychainCredential } from "./keychain";
 import {
   AGENT_HOME_ENV_VAR,
   agentHomeEnv,
   agentHomeOf,
   type RunLayout,
 } from "./paths";
+
+/** Claude's account identity and onboarding flags, wherever it is keeping them. */
+const CLAUDE_CONFIG_FILE = ".claude.json";
 
 /** The run home is the operator's alone: no group, no other. */
 export const AGENT_HOME_MODE = 0o700;
@@ -93,6 +97,18 @@ export const pruneClaudeConfig = (raw: string): string => {
 
 /** One file copied into a run home. */
 interface CredentialFile {
+  /**
+   * Where else this file's contents live when the source directory does not
+   * hold them. Null means the directory is the only place to look.
+   *
+   * Both harnesses document one config directory and then keep part of the
+   * login somewhere else on some hosts, so a seeder that reads only the
+   * directory silently produces an unauthenticated run on a machine where
+   * interactive use works. An alternate is how that stays an allow-list: it
+   * names the other place for one named file, rather than widening what gets
+   * copied.
+   */
+  readonly alternate: ((source: string) => AlternateSource) | null;
   /** Its name in both the source and the run home; the layout is the vendor's. */
   readonly name: string;
   /** Whether a run can start without it. */
@@ -102,13 +118,45 @@ interface CredentialFile {
 }
 
 /**
+ * A second place one credential file's contents can come from: the body to
+ * write, or nothing when this host does not keep it there either.
+ */
+type AlternateSource = Effect.Effect<
+  Option.Option<string>,
+  AgentHomeFailed,
+  FileSystem
+>;
+
+/**
+ * Claude's `.claude.json` as the CLI actually places it: inside the config
+ * directory when that directory has been relocated, and beside it — at
+ * `~/.claude.json`, a sibling of `~/.claude` — when it has not. The default
+ * layout is the one an operator who has never set `CLAUDE_CONFIG_DIR` has, so
+ * looking only inside finds nothing on the ordinary host.
+ */
+const claudeConfigBesideDir = (source: string): AlternateSource =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem;
+    const beside = join(dirname(source), CLAUDE_CONFIG_FILE);
+    const present = yield* fs.exists(beside).pipe(failingAt(beside));
+    return present
+      ? Option.some(yield* fs.readFileString(beside).pipe(failingAt(beside)))
+      : Option.none();
+  });
+
+/**
  * What each provider's login actually consists of.
  *
- * Claude's `.credentials.json` is not required, because on macOS the CLI keeps
- * the same tokens in the login keychain and writes no file at all. A run seeded
- * from such a host carries no credential and fails as unauthenticated inside
- * the container, which is the honest outcome — the alternative is refusing to
- * start on a machine where an interactive run works fine.
+ * Claude splits it across two files and two hosts: the tokens are
+ * `.credentials.json` on Linux and the login keychain on macOS, while the
+ * account identity and onboarding flags are `.claude.json`, which sits inside
+ * the config directory only when that directory has been moved. Each file names
+ * the other place it lives, so one seeder covers both kinds of host.
+ *
+ * Neither is required. A run seeded from a host that has genuinely never logged
+ * in fails as unauthenticated inside the container, which is the honest
+ * outcome — the alternative is refusing to start on a machine where an
+ * interactive run works fine.
  *
  * Codex keeps everything in `auth.json`, and a run without it cannot do
  * anything, so its absence is a failure rather than a report. `config.toml` is
@@ -117,10 +165,22 @@ interface CredentialFile {
  */
 const CREDENTIAL_FILES = {
   claude: [
-    { name: ".credentials.json", required: false, transform: null },
-    { name: ".claude.json", required: false, transform: pruneClaudeConfig },
+    {
+      alternate: () => claudeKeychainCredential(),
+      name: ".credentials.json",
+      required: false,
+      transform: null,
+    },
+    {
+      alternate: claudeConfigBesideDir,
+      name: CLAUDE_CONFIG_FILE,
+      required: false,
+      transform: pruneClaudeConfig,
+    },
   ],
-  codex: [{ name: "auth.json", required: true, transform: null }],
+  codex: [
+    { alternate: null, name: "auth.json", required: true, transform: null },
+  ],
 } as const satisfies Record<SessionProvider, readonly CredentialFile[]>;
 
 /** Where each provider keeps its config directory under a home directory. */
@@ -208,7 +268,15 @@ const seedFile = Effect.fnUntraced(function* (input: {
   // a credential file that is there but unreadable is a permissions problem
   // someone must fix, not a host that was never logged in.
   const present = yield* fs.exists(from).pipe(failingAt(from));
-  if (!present) {
+  // The directory is asked first and the alternate only answers for a file that
+  // is not in it, so a host keeping the file where the vendor documents it is
+  // never second-guessed by a fallback.
+  const found = present
+    ? Option.some(yield* fs.readFileString(from).pipe(failingAt(from)))
+    : yield* input.file.alternate?.(input.source) ??
+        Effect.succeed(Option.none<string>());
+
+  if (Option.isNone(found)) {
     if (input.file.required) {
       return yield* Effect.fail(
         new CredentialsMissing({
@@ -221,7 +289,7 @@ const seedFile = Effect.fnUntraced(function* (input: {
     return { copied: false, name: input.file.name } satisfies SeedResult;
   }
 
-  const raw = yield* fs.readFileString(from).pipe(failingAt(from));
+  const raw = found.value;
   const body = input.file.transform === null ? raw : input.file.transform(raw);
   yield* fs
     .writeFileString(to, body, { mode: CREDENTIAL_MODE })

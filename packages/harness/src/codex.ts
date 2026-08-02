@@ -19,6 +19,7 @@
  * `turn.completed` fails with a typed error rather than completing quietly.
  */
 
+import { resolve } from "node:path";
 import * as BunChildProcessSpawner from "@effect/platform-bun/BunChildProcessSpawner";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as BunPath from "@effect/platform-bun/BunPath";
@@ -120,13 +121,18 @@ const CODEX_DEFAULT_EFFORT = "medium";
  * Order matters twice. The flags precede `resume`, because `resume` is a
  * subcommand and everything after it belongs to the subcommand. And the prompt
  * is always the last positional and always `-`, so it travels on stdin.
+ *
+ * The workspace is made absolute because the child is already started in it: a
+ * relative `--cd` would be resolved a second time, against the directory it
+ * names, and Codex would exit on a directory that does not exist. A data root
+ * is relative by default, so this is the ordinary case rather than the odd one.
  */
 export const codexArgs = (options: RunOptions): readonly string[] => [
   "exec",
   JSON_FLAG,
   ...HEADLESS_FLAGS,
   "--cd",
-  options.workspaceDir,
+  resolve(options.workspaceDir),
   ...(options.model === null ? [] : ["--model", options.model]),
   ...(options.effort === null
     ? []

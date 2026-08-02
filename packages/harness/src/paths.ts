@@ -18,7 +18,7 @@
  * container — so the two views cannot disagree about anything but the prefix.
  */
 
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { RunId, SessionProvider } from "@workspace/domain";
 
 /** Directory under the data root holding one subdirectory per run. */
@@ -127,12 +127,22 @@ export const agentHomeOf = (layout: RunLayout, provider: SessionProvider) =>
  * starting the provider was handed one — by the seeding step, or by a sandbox
  * that mounted it — and re-deriving it from a run layout is where the two
  * spellings of the same path came from.
+ *
+ * The path is made absolute here, which is the one place it can be. A data root
+ * is ordinarily relative — `.data` is the default — so the layout built over it
+ * is relative too, and that is harmless right up to the moment it crosses into
+ * a child process. The provider is started with the run's workspace as its
+ * working directory, so a relative config directory resolves against the
+ * workspace rather than against us: the CLI looks for the credential under the
+ * checkout, finds nothing, and reports a host that has never logged in. An
+ * absolute path is already its own resolution, so a container's `/run/...` is
+ * untouched.
  */
 export const agentHomeEnvAt = (
   provider: SessionProvider,
   agentHomeDir: string
 ): Readonly<Record<string, string>> => ({
-  [AGENT_HOME_ENV_VAR[provider]]: agentHomeDir,
+  [AGENT_HOME_ENV_VAR[provider]]: resolve(agentHomeDir),
 });
 
 /**
