@@ -60,7 +60,13 @@ import {
   type TaskId,
   type WorkspaceId,
 } from "@workspace/domain";
-import { entrypointBundlePathOf, hostRunLayout } from "@workspace/harness";
+import {
+  EXECUTOR_KEY_ENV_VAR,
+  EXECUTOR_URL_ENV_VAR,
+  entrypointBundlePathOf,
+  hostRunLayout,
+  readExecutorMcp,
+} from "@workspace/harness";
 import { sandboxImageFor } from "@workspace/sandbox";
 import {
   Cause,
@@ -68,6 +74,7 @@ import {
   Effect,
   FiberMap,
   Layer,
+  Redacted,
   Schedule,
   Stream,
 } from "effect";
@@ -152,6 +159,49 @@ const bestEffort =
       Effect.catchCause(() => Effect.succeed<A | F>(fallback))
     );
 
+/**
+ * The environment every turn is handed, on top of its own ids and agent home.
+ *
+ * **Named one variable at a time, never forwarded wholesale.** A turn gets
+ * exactly what the design says it needs — the Executor endpoint and its key,
+ * which is the connector layer every task that touches Notion, Jira or a
+ * calendar runs on — and nothing else this process happens to have been started
+ * with. The list *is* the allow-list, which is what makes a credential an
+ * operator exported for some other tool absent from a container by default
+ * rather than by a filter somebody remembered to write.
+ *
+ * **The host's observability export is not on the list and never will be.** The
+ * OTLP endpoint and the bearer token in `OTEL_EXPORTER_OTLP_HEADERS` belong to
+ * the operator: a container writes its wide events to a file on the run mount
+ * and this loop forwards them. `@workspace/sandbox` drops the whole `OTEL_*`
+ * family on the way in, and this list never offering one is the other half of
+ * the same rule.
+ *
+ * **The key travels as a value nobody can read off the host.** `docker run` is
+ * given `--env=NAME` and reads the value out of the CLI's own environment, so
+ * the argv every `ps` on the box shows carries names alone — and the only thing
+ * said about the key in a log or on a span is that it was set.
+ *
+ * Both halves or neither, through {@link readExecutorMcp}: a url with no key is
+ * an endpoint that answers 401 to every tool call. An install that configured
+ * neither runs with no connector tools, which is a smaller agent and not a
+ * broken one, so an unreadable configuration is an empty environment rather
+ * than a loop that refuses to boot.
+ */
+export const turnEnvironment = Effect.gen(function* () {
+  const executor = yield* readExecutorMcp.pipe(
+    Effect.orElseSucceed(() => null)
+  );
+  const env: Readonly<Record<string, string>> =
+    executor === null
+      ? {}
+      : {
+          [EXECUTOR_KEY_ENV_VAR]: Redacted.value(executor.key),
+          [EXECUTOR_URL_ENV_VAR]: executor.url,
+        };
+  return env;
+});
+
 const make = Effect.gen(function* () {
   const config = yield* orchestratorConfig;
   const actor = yield* CurrentActor;
@@ -163,6 +213,11 @@ const make = Effect.gen(function* () {
   const sessions = yield* AgentSessionRepo;
   const tasks = yield* TaskRepo;
   const workspaces = yield* WorkspaceRepo;
+
+  // Read once, here, and handed to every run: the same reasoning as
+  // `SANDBOX_MODE` below — one read is one answer, and a per-run read is where
+  // two turns in the same process come to disagree about what they were given.
+  const turnEnv = yield* turnEnvironment;
 
   // The row reports the sandbox that ran the turn. One read of `SANDBOX_MODE`,
   // handed to `./run` and written onto the row, so the implementation that
@@ -245,6 +300,9 @@ const make = Effect.gen(function* () {
       return yield* runOpened({
         context,
         dataRoot: planned.claim.dataRoot,
+        // Without this a contained turn starts with no Executor credentials at
+        // all, and the connector layer is simply absent inside the sandbox.
+        env: turnEnv,
         onClose: collect,
         sandboxKind: config.sandboxKind,
         timeoutMs: config.runTimeoutMs,
@@ -738,8 +796,23 @@ const make = Effect.gen(function* () {
         );
   });
 
+  /**
+   * Which variables a turn is given, said once at boot. Names only — the value
+   * of `EXECUTOR_MCP_KEY` is a credential, and the operator's question is
+   * whether a run has connector tools at all, which the name answers.
+   */
+  const announceTurnEnv = Effect.gen(function* () {
+    const names = Object.keys(turnEnv).sort();
+    yield* names.length === 0
+      ? Effect.logWarning(
+          `turns run with no connector tools: set ${EXECUTOR_URL_ENV_VAR} and ${EXECUTOR_KEY_ENV_VAR} to give them Executor`
+        )
+      : Effect.logInfo(`turns are given ${names.join(", ")}`);
+  });
+
   const run = Effect.gen(function* () {
     yield* announceSandbox;
+    yield* announceTurnEnv;
     yield* Effect.logInfo(
       `loop listening on ${config.maxConcurrency} slots, polling every ${config.pollIntervalMs}ms`
     );

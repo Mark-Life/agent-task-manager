@@ -123,10 +123,14 @@ export interface ExecuteRunInput {
  * Materializes the run's directories, runs the turn, and streams what it says
  * into the timeline.
  *
- * The scope is the run's lifetime: the checkout and the seeded agent home are
- * acquired inside it and released when it closes, on every path including an
- * interrupt. What survives is what should — the run directory with its event
- * file and its transcript, and the artifacts folder, which is the point.
+ * **The scope is the caller's, not this function's.** The checkout and the
+ * seeded agent home are acquired into whichever scope this is run in, and
+ * released when *that* closes — which is what lets {@link runOpened} read the
+ * transcript out of the agent home before the credentials in it are removed.
+ * Everything acquired here is released on every path including an interrupt,
+ * because that is what a scope does; the only thing this file decides is how
+ * far the scope reaches. What survives it is what should — the run directory
+ * with its event file, and the artifacts folder, which is the point.
  *
  * A failure of the turn itself is an answer rather than an error: it becomes a
  * failed terminus, because a crashed run is still a run that has to close out
@@ -136,253 +140,247 @@ export interface ExecuteRunInput {
  * `onExit` closes the run out from those too.
  */
 export const executeRun = (input: ExecuteRunInput) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const { context, progress } = input;
-      const contained = input.sandboxKind === "docker";
-      const fs = yield* FileSystem;
-      const registry = yield* ProviderRegistry;
-      const runEvents = yield* RunEventRepo;
-      const runs = yield* RunRepo;
-      const workspaces = yield* Workspace;
+  Effect.gen(function* () {
+    const { context, progress } = input;
+    const contained = input.sandboxKind === "docker";
+    const fs = yield* FileSystem;
+    const registry = yield* ProviderRegistry;
+    const runEvents = yield* RunEventRepo;
+    const runs = yield* RunRepo;
+    const workspaces = yield* Workspace;
 
-      const asActor = withActor(context.actor);
-      const workspaceId = workspaceIdOf(context);
-      const taskId = taskIdOf(context);
-      const identity = runIdentityOf(context);
-      const eventLogPath = eventLogPathOf(context);
+    const asActor = withActor(context.actor);
+    const workspaceId = workspaceIdOf(context);
+    const taskId = taskIdOf(context);
+    const identity = runIdentityOf(context);
+    const eventLogPath = eventLogPathOf(context);
 
-      const made = yield* workspaces.materialize({
+    const made = yield* workspaces.materialize({
+      dataRoot: input.dataRoot,
+      identity,
+      projectId: projectIdOf(context),
+      repo: repoSourceFor({
         dataRoot: input.dataRoot,
-        identity,
-        projectId: projectIdOf(context),
-        repo: repoSourceFor({
-          dataRoot: input.dataRoot,
-          defaultBranch: context.project?.repoDefaultBranch ?? null,
-          repoUrl: context.repoUrl,
-          taskId,
-        }),
-      });
-      yield* Ref.update(progress, (current) => ({
-        ...current,
-        branch: made.branch,
-      }));
+        defaultBranch: context.project?.repoDefaultBranch ?? null,
+        repoUrl: context.repoUrl,
+        taskId,
+      }),
+    });
+    yield* Ref.update(progress, (current) => ({
+      ...current,
+      branch: made.branch,
+    }));
 
-      const home = yield* scopedAgentHome({
-        layout: context.layout,
-        provider: context.provider,
-        sourceDir: null,
-      });
+    const home = yield* scopedAgentHome({
+      layout: context.layout,
+      provider: context.provider,
+      sourceDir: null,
+    });
 
-      // The prompt is built after the directories exist, because it names them:
-      // where to write an artifact worth keeping, and which branch the checkout
-      // is on. It also advances the session's watermark, so the comments that
-      // went into it are not delivered twice.
-      const prompt = yield* buildRunPrompt({
-        context,
-        placement: placementOf({ kind: input.sandboxKind, workspace: made }),
-      });
-      yield* Ref.update(progress, (current) => ({
-        ...current,
-        promptChars: prompt.chars,
-      }));
-      const mapping: MappingContext = {
-        exitCode: null,
-        promptChars: prompt.chars,
-        sandboxImage: context.image,
-      };
+    // The prompt is built after the directories exist, because it names them:
+    // where to write an artifact worth keeping, and which branch the checkout
+    // is on. It also advances the session's watermark, so the comments that
+    // went into it are not delivered twice.
+    const prompt = yield* buildRunPrompt({
+      context,
+      placement: placementOf({ kind: input.sandboxKind, workspace: made }),
+    });
+    yield* Ref.update(progress, (current) => ({
+      ...current,
+      promptChars: prompt.chars,
+    }));
+    const mapping: MappingContext = {
+      exitCode: null,
+      promptChars: prompt.chars,
+      sandboxImage: context.image,
+    };
 
-      /** One line of the run's own event file, appended before the row is stored. */
-      const appendLine = (record: {
-        readonly event: AgentEvent;
-        readonly occurredAt: DateTime.Utc;
-      }) =>
-        encodeRecord(record).pipe(
-          Effect.flatMap((encoded) =>
-            fs.writeFileString(eventLogPath, `${JSON.stringify(encoded)}\n`, {
-              flag: "a",
-            })
-          ),
-          Effect.tapError((cause) =>
-            Effect.logWarning("run event not written to the event file", {
-              cause,
-              path: eventLogPath,
-            })
-          ),
-          Effect.ignore
-        );
+    /** One line of the run's own event file, appended before the row is stored. */
+    const appendLine = (record: {
+      readonly event: AgentEvent;
+      readonly occurredAt: DateTime.Utc;
+    }) =>
+      encodeRecord(record).pipe(
+        Effect.flatMap((encoded) =>
+          fs.writeFileString(eventLogPath, `${JSON.stringify(encoded)}\n`, {
+            flag: "a",
+          })
+        ),
+        Effect.tapError((cause) =>
+          Effect.logWarning("run event not written to the event file", {
+            cause,
+            path: eventLogPath,
+          })
+        ),
+        Effect.ignore
+      );
 
-      /**
-       * One event of the run's timeline, stored and folded into what the run
-       * knows. The `seq` is handed in rather than counted here: it is the
-       * ordinal of the line in the event file, which is the only numbering a
-       * re-ingest can collide with — the local path appends the line itself and
-       * so knows the ordinal, and the container path reads it off the file.
-       */
-      const onRecord = (input_: {
-        readonly event: AgentEvent;
-        readonly occurredAt: DateTime.Utc;
-        readonly seq: number;
-      }) =>
-        Effect.gen(function* () {
-          const { event, occurredAt, seq } = input_;
-          const before = yield* Ref.get(progress);
+    /**
+     * One event of the run's timeline, stored and folded into what the run
+     * knows. The `seq` is handed in rather than counted here: it is the
+     * ordinal of the line in the event file, which is the only numbering a
+     * re-ingest can collide with — the local path appends the line itself and
+     * so knows the ordinal, and the container path reads it off the file.
+     */
+    const onRecord = (input_: {
+      readonly event: AgentEvent;
+      readonly occurredAt: DateTime.Utc;
+      readonly seq: number;
+    }) =>
+      Effect.gen(function* () {
+        const { event, occurredAt, seq } = input_;
+        const before = yield* Ref.get(progress);
 
-          // A row the database refuses is one line of the timeline lost, and
-          // the file still has it. The ordinal is spent either way, so a later
-          // re-ingest lands the missing row in its own place rather than
-          // shifting everything after it.
-          yield* runEvents
-            .append({
-              occurredAt,
-              payload: toRunEventPayload(event, mapping),
-              runId: context.runId,
-              seq,
-              taskId,
+        // A row the database refuses is one line of the timeline lost, and
+        // the file still has it. The ordinal is spent either way, so a later
+        // re-ingest lands the missing row in its own place rather than
+        // shifting everything after it.
+        yield* runEvents
+          .append({
+            occurredAt,
+            payload: toRunEventPayload(event, mapping),
+            runId: context.runId,
+            seq,
+            taskId,
+            workspaceId,
+          })
+          .pipe(
+            Effect.tapError((cause) =>
+              Effect.logWarning("run event not stored", { cause, seq })
+            ),
+            Effect.ignore
+          );
+
+        const after = observeTurn(before, event);
+        yield* Ref.set(progress, after);
+
+        // The run is only `running` once the harness has answered, and this
+        // is the one event that says what actually ran. Recording it here
+        // rather than before the stream is what keeps `model` on the row and
+        // `startedAt` a measurement rather than an intention.
+        if (event.kind === "session_init") {
+          yield* asActor(
+            runs.start({
+              agentHomePath: agentHomeRelativePath(context.runId),
+              id: context.runId,
+              model: event.model ?? undefined,
+              sandboxImage: context.image,
               workspaceId,
             })
-            .pipe(
-              Effect.tapError((cause) =>
-                Effect.logWarning("run event not stored", { cause, seq })
-              ),
-              Effect.ignore
-            );
+          ).pipe(
+            Effect.tapError((cause) =>
+              Effect.logWarning("run not marked started", { cause })
+            ),
+            Effect.ignore
+          );
+        }
 
-          const after = observeTurn(before, event);
-          yield* Ref.set(progress, after);
-
-          // The run is only `running` once the harness has answered, and this
-          // is the one event that says what actually ran. Recording it here
-          // rather than before the stream is what keeps `model` on the row and
-          // `startedAt` a measurement rather than an intention.
-          if (event.kind === "session_init") {
-            yield* asActor(
-              runs.start({
-                agentHomePath: agentHomeRelativePath(context.runId),
-                id: context.runId,
-                model: event.model ?? undefined,
-                sandboxImage: context.image,
-                workspaceId,
-              })
-            ).pipe(
-              Effect.tapError((cause) =>
-                Effect.logWarning("run not marked started", { cause })
-              ),
-              Effect.ignore
-            );
-          }
-
-          // The marker the stop hook reads. Written the moment the comment tool
-          // answers, so a turn ending in the same second is not refused for a
-          // comment it has already posted.
-          if (after.commentPosted && !before.commentPosted) {
-            yield* markCommentPosted(context);
-          }
-        });
-
-      /** The container path: the file is the container's, and it is only read. */
-      const fromContainer = ({ record, seq }: ContainerRecord) =>
-        onRecord({ event: record.event, occurredAt: record.occurredAt, seq });
-
-      /**
-       * The local path: this process is the writer, so the line goes into the
-       * event file first and its ordinal is the count of events already seen.
-       */
-      const fromProvider = (event: AgentEvent) =>
-        Effect.gen(function* () {
-          const before = yield* Ref.get(progress);
-          const occurredAt = yield* DateTime.now;
-          yield* appendLine({ event, occurredAt });
-          yield* onRecord({ event, occurredAt, seq: before.eventsSeen });
-        });
-
-      /** The turn in this process, against host paths. The escape hatch. */
-      const hostTurn = Effect.gen(function* () {
-        const events = registry.get(context.provider).run({
-          agentHomeDir: home.agentHomeDir,
-          effort: null,
-          env: {
-            ...identityEnv(identity),
-            ...input.env,
-            // The hook runs outside a container here, so it is told where the
-            // marker really is rather than assuming the container's own path.
-            [COMMENT_MARKER_ENV_VAR]: commentMarkerPathOf(context.layout),
-            ...home.env,
-          },
-          model: null,
-          prompt: prompt.text,
-          resumeSessionId: resumeSessionIdOf(context),
-          runId: context.runId,
-          signal: null,
-          taskId,
-          workspaceDir: made.workspaceDir,
-        });
-        yield* Stream.runForEach(events, fromProvider);
-        const state = yield* Ref.get(progress);
-        return (
-          state.terminus ??
-          // No terminus and no failure: the process went away mid-stream. Its
-          // own ending, because the count of how far it got is the only thing
-          // there is to say about it.
-          lostTerminus({
-            eventsSeen: state.eventsSeen,
-            exitCode: null,
-            finalText: state.finalText,
-            providerSessionId: state.providerSessionId,
-          })
-        );
+        // The marker the stop hook reads. Written the moment the comment tool
+        // answers, so a turn ending in the same second is not refused for a
+        // comment it has already posted.
+        if (after.commentPosted && !before.commentPosted) {
+          yield* markCommentPosted(context);
+        }
       });
 
-      /**
-       * The typed failure of either path, as the ending it is. A provider that
-       * crashed and a daemon that refused are the same kind of answer, so both
-       * turns are recovered here rather than each naming its own vocabulary. An
-       * interrupt is a stop command and belongs to the caller's `onExit`, and a
-       * defect is a bug that should not be filed as a run that merely errored.
-       */
-      const asEnding = (error: unknown) =>
-        Effect.map(Ref.get(progress), (state) =>
-          terminusOfFailure(error, state)
-        );
+    /** The container path: the file is the container's, and it is only read. */
+    const fromContainer = ({ record, seq }: ContainerRecord) =>
+      onRecord({ event: record.event, occurredAt: record.occurredAt, seq });
 
-      if (contained) {
-        return yield* containerTurn({
-          context,
-          dataRoot: input.dataRoot,
-          env: input.env,
-          onRecord: fromContainer,
-          progress,
-          prompt: prompt.text,
-          timeoutMs: input.timeoutMs,
-          workspace: made,
-        }).pipe(Effect.catch(asEnding));
-      }
-      return yield* hostTurn.pipe(Effect.catch(asEnding));
-    }).pipe(
-      // The cap over everything above, and an ending rather than an error: a
-      // turn that outlived its deadline is one more way a run finishes, so it
-      // closes out through the same path a crash does. `Harness.TimedOut` is
-      // the class the vocabulary already has for it — the harness names it and
-      // deliberately enforces none — so the row says `timeout` and the thread
-      // says which cap, instead of a wedged run being filed as the same
-      // `interrupted` a human pressing Stop produces.
-      //
-      // The whole body is under it, not only the stream: a `git clone` against
-      // a host that black-holes packets hangs exactly as quietly as a wedged
-      // model does, and the scope releases the checkout on the way out either
-      // way.
-      Effect.timeoutOrElse({
-        duration: input.timeoutMs,
-        orElse: () =>
-          Effect.map(Ref.get(input.progress), (state) =>
-            terminusOfFailure(
-              new TimedOut({ timeoutMs: input.timeoutMs }),
-              state
-            )
-          ),
-      })
-    )
-  ).pipe(Effect.withSpan("Run.execute"));
+    /**
+     * The local path: this process is the writer, so the line goes into the
+     * event file first and its ordinal is the count of events already seen.
+     */
+    const fromProvider = (event: AgentEvent) =>
+      Effect.gen(function* () {
+        const before = yield* Ref.get(progress);
+        const occurredAt = yield* DateTime.now;
+        yield* appendLine({ event, occurredAt });
+        yield* onRecord({ event, occurredAt, seq: before.eventsSeen });
+      });
+
+    /** The turn in this process, against host paths. The escape hatch. */
+    const hostTurn = Effect.gen(function* () {
+      const events = registry.get(context.provider).run({
+        agentHomeDir: home.agentHomeDir,
+        effort: null,
+        env: {
+          ...identityEnv(identity),
+          ...input.env,
+          // The hook runs outside a container here, so it is told where the
+          // marker really is rather than assuming the container's own path.
+          [COMMENT_MARKER_ENV_VAR]: commentMarkerPathOf(context.layout),
+          ...home.env,
+        },
+        model: null,
+        prompt: prompt.text,
+        resumeSessionId: resumeSessionIdOf(context),
+        runId: context.runId,
+        signal: null,
+        taskId,
+        workspaceDir: made.workspaceDir,
+      });
+      yield* Stream.runForEach(events, fromProvider);
+      const state = yield* Ref.get(progress);
+      return (
+        state.terminus ??
+        // No terminus and no failure: the process went away mid-stream. Its
+        // own ending, because the count of how far it got is the only thing
+        // there is to say about it.
+        lostTerminus({
+          eventsSeen: state.eventsSeen,
+          exitCode: null,
+          finalText: state.finalText,
+          providerSessionId: state.providerSessionId,
+        })
+      );
+    });
+
+    /**
+     * The typed failure of either path, as the ending it is. A provider that
+     * crashed and a daemon that refused are the same kind of answer, so both
+     * turns are recovered here rather than each naming its own vocabulary. An
+     * interrupt is a stop command and belongs to the caller's `onExit`, and a
+     * defect is a bug that should not be filed as a run that merely errored.
+     */
+    const asEnding = (error: unknown) =>
+      Effect.map(Ref.get(progress), (state) => terminusOfFailure(error, state));
+
+    if (contained) {
+      return yield* containerTurn({
+        context,
+        dataRoot: input.dataRoot,
+        env: input.env,
+        onRecord: fromContainer,
+        progress,
+        prompt: prompt.text,
+        timeoutMs: input.timeoutMs,
+        workspace: made,
+      }).pipe(Effect.catch(asEnding));
+    }
+    return yield* hostTurn.pipe(Effect.catch(asEnding));
+  }).pipe(
+    // The cap over everything above, and an ending rather than an error: a
+    // turn that outlived its deadline is one more way a run finishes, so it
+    // closes out through the same path a crash does. `Harness.TimedOut` is
+    // the class the vocabulary already has for it — the harness names it and
+    // deliberately enforces none — so the row says `timeout` and the thread
+    // says which cap, instead of a wedged run being filed as the same
+    // `interrupted` a human pressing Stop produces.
+    //
+    // The whole body is under it, not only the stream: a `git clone` against
+    // a host that black-holes packets hangs exactly as quietly as a wedged
+    // model does, and the caller's scope releases the checkout on the way out
+    // either way.
+    Effect.timeoutOrElse({
+      duration: input.timeoutMs,
+      orElse: () =>
+        Effect.map(Ref.get(input.progress), (state) =>
+          terminusOfFailure(new TimedOut({ timeoutMs: input.timeoutMs }), state)
+        ),
+    }),
+    Effect.withSpan("Run.execute")
+  );
 
 /** What running one claimed task needs. */
 export interface PerformRunInput {
@@ -428,6 +426,10 @@ export interface RunOpenedInput<R = never> {
    * This is where reading the run's directory back belongs: the container is
    * gone by then, and a caller that waited for the value would never run it on
    * the path where there is no value.
+   *
+   * It runs inside the run's own scope, so everything the turn was given is
+   * still on disk — the checkout, and the agent home holding the transcript the
+   * provider wrote. Both are removed as this returns.
    *
    * Total by contract. A hook that could fail would be a run that closed and
    * then failed to close.
@@ -484,26 +486,40 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
         }) ?? Effect.void;
       });
 
-    const terminus = yield* executeRun({
-      context,
-      dataRoot: input.dataRoot,
-      env: input.env ?? {},
-      progress,
-      sandboxKind: input.sandboxKind,
-      timeoutMs: input.timeoutMs,
-    }).pipe(
-      Effect.onExit((exit) =>
-        exit._tag === "Success"
-          ? closeFrom(exit.value)
-          : Effect.gen(function* () {
-              const state = yield* Ref.get(progress);
-              // An interrupt squashes to an interruption, which the harness's
-              // own classifier already names — so a stopped run is filed as
-              // `interrupted` rather than as an unnamed error.
-              yield* closeFrom(
-                terminusOfFailure(Cause.squash(exit.cause), state)
-              );
-            })
+    // The scope is opened here and not inside the turn, and the ordering that
+    // buys is the whole reason: turn, then close, then release. The close hook
+    // reads the run's directory back — the transcript above all, which the
+    // provider writes *inside* the run's agent home — and the release is what
+    // deletes that agent home. Released first, the ingest reads a directory
+    // that is no longer there and every run's conversation is lost.
+    //
+    // It is this way round rather than by keeping the agent home alive longer:
+    // the directory holds a copy of a live subscription credential, which is
+    // why it is torn down at all, so the release still runs on every path an
+    // `onExit` runs on — a value, a failure, a defect, an interrupt from a stop
+    // command — and no run leaves credentials on disk behind it.
+    const terminus = yield* Effect.scoped(
+      executeRun({
+        context,
+        dataRoot: input.dataRoot,
+        env: input.env ?? {},
+        progress,
+        sandboxKind: input.sandboxKind,
+        timeoutMs: input.timeoutMs,
+      }).pipe(
+        Effect.onExit((exit) =>
+          exit._tag === "Success"
+            ? closeFrom(exit.value)
+            : Effect.gen(function* () {
+                const state = yield* Ref.get(progress);
+                // An interrupt squashes to an interruption, which the harness's
+                // own classifier already names — so a stopped run is filed as
+                // `interrupted` rather than as an unnamed error.
+                yield* closeFrom(
+                  terminusOfFailure(Cause.squash(exit.cause), state)
+                );
+              })
+        )
       )
     );
 

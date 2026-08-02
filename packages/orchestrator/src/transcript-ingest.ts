@@ -6,9 +6,11 @@
  * The Phase 1 schema has `agent_session` for the conversation and `run_event`
  * for what happened in it, and those are the two mechanisms used here: the
  * provider's own session id lands on the session row, which is what a resume is
- * pointed at, and the conversation itself lands as run events. The file stays on
- * disk as the full, unclipped record — it is the only place the whole thing
- * exists, and it survives the container.
+ * pointed at, and the conversation itself lands as run events. The file itself
+ * does not outlive the run: the provider writes it inside the run's agent home,
+ * which is removed with its credential copy as the run's scope closes. That is
+ * why this pass runs inside that scope, and why whatever it does not store here
+ * — the full, unclipped text above all — is gone.
  *
  * **The timeline is written from the transcript only when the event stream left
  * none.** A run that streamed normally already has its timeline: those rows are

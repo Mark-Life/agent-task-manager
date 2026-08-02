@@ -10,7 +10,7 @@
  * the host reads all of it exactly as it reads a real turn's. Faking the model
  * and nothing else is the point: a fake sandbox would only ever prove the fake.
  *
- * The three claims are the three seams a container crosses.
+ * The claims are the seams a container crosses.
  *
  * **The timeline fills while the container is alive.** The stub writes its first
  * events, then waits for a file the host creates only after those rows are in
@@ -27,18 +27,32 @@
  * The container has no database handle and never will; the row travels out as a
  * JSON line on the event mount and `./ingest` folds it in on `runId`.
  *
+ * **A turn is given the credentials it needs and none of the host's own, and
+ * what it wrote in its agent home is read before that home is removed.** The
+ * stub reports back the *names* of the variables it was started with — never a
+ * value — and writes a transcript where a real provider writes one, so the
+ * close hook reading it back is the same crossing a real run makes.
+ *
  * Skipped, loudly, when the daemon is unreachable or the image has not been
  * built. It is not skipped for anything else — a failure here is a real one.
  */
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import process from "node:process";
 import { BunFileSystem } from "@effect/platform-bun";
 import {
+  AgentSessionRepo,
   Auth,
   RunEventRepo,
   RunRepo,
@@ -49,6 +63,7 @@ import {
 } from "@workspace/db";
 import {
   Actor,
+  type AgentSessionId,
   type Task,
   type TaskId,
   UserId,
@@ -59,6 +74,8 @@ import {
   AgentEventRecord,
   type AgentProvider,
   containerRunLayout,
+  EXECUTOR_KEY_ENV_VAR,
+  EXECUTOR_URL_ENV_VAR,
   entrypointBundlePathOf,
   makeProviderRegistry,
   ProviderRegistry,
@@ -77,9 +94,14 @@ import {
 import { Telemetry } from "@workspace/telemetry";
 import { DateTime, Effect, Layer, Schedule, Schema, Stream } from "effect";
 import { ingestRunEvents, ingestTurnLedger } from "./ingest";
-import type { RunClaim } from "./open-run";
-import { performRun } from "./run";
+import { openRun, type RunClaim } from "./open-run";
+import { performRun, runOpened } from "./run";
 import { loadRootEnv } from "./testing/root-env";
+import {
+  ingestTranscript,
+  TRANSCRIPT_SEQ_BASE,
+  type TranscriptIngestReport,
+} from "./transcript-ingest";
 
 loadRootEnv();
 
@@ -113,6 +135,59 @@ const HANDSHAKE_TIMEOUT_MS = 30_000;
 
 /** The file the host creates once it has seen the container's first rows. */
 const HANDSHAKE_FILE = "host-saw-the-events";
+
+/** Where the container writes the names of the variables it was started with. */
+const ENV_REPORT_FILE = "env-received.json";
+
+/**
+ * The variables the report is asked about: the two halves of the Executor
+ * credential, and one of the run's own ids to show the report is reading a real
+ * environment rather than an empty one. Every `OTEL_*` name is reported too,
+ * whatever it is called — the claim is that none of them crosses at all.
+ */
+const WATCHED_ENV_NAMES = [
+  EXECUTOR_KEY_ENV_VAR,
+  EXECUTOR_URL_ENV_VAR,
+  TURN_ENV_VARS.runId,
+] as const;
+
+/** The conversation id the transcript written inside the container names itself with. */
+const TRANSCRIPT_SESSION_ID = "container-transcript-session";
+
+/** The line a restored row can be recognized by. */
+const TRANSCRIPT_TEXT = "what the container wrote inside its own agent home";
+
+/** A Claude transcript, in the layout the CLI writes one in. */
+const TRANSCRIPT_LINES = [
+  JSON.stringify({
+    message: { content: "the brief", role: "user" },
+    sessionId: TRANSCRIPT_SESSION_ID,
+    timestamp: "2026-08-01T10:00:00.000Z",
+    type: "user",
+  }),
+  JSON.stringify({
+    message: {
+      content: [{ text: TRANSCRIPT_TEXT, type: "text" }],
+      role: "assistant",
+    },
+    sessionId: TRANSCRIPT_SESSION_ID,
+    timestamp: "2026-08-01T10:00:04.000Z",
+    type: "assistant",
+  }),
+];
+
+/**
+ * What the loop hands a turn, plus what it must never hand one. The OTLP
+ * endpoint and its bearer token are the host's own: the container writes its
+ * wide events to a file on the mount and the loop forwards them, so a token for
+ * the operator's backend has no business inside a sandbox an agent controls.
+ */
+const TURN_ENV = {
+  [EXECUTOR_KEY_ENV_VAR]: "executor-key-that-never-leaves-the-host",
+  [EXECUTOR_URL_ENV_VAR]: "https://executor.invalid/org_test/mcp",
+  OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.invalid",
+  OTEL_EXPORTER_OTLP_HEADERS: "Authorization=Bearer must-not-cross",
+} as const;
 
 /** What the silent container exits with, so a code that survives is visibly this one. */
 const SILENT_EXIT_CODE = 4;
@@ -240,6 +315,13 @@ interface StubPlan {
   readonly after: readonly string[];
   /** Written to the spec's event log path, one per line, before the handshake. */
   readonly before: readonly string[];
+  /**
+   * Report which of {@link WATCHED_ENV_NAMES} — and any `OTEL_*` at all — the
+   * container was started with. Names, never values: the point of the claim is
+   * that a credential arrives, and printing one would put it on the host's disk
+   * and in this process's log.
+   */
+  readonly envReport: boolean;
   readonly exitCode: number;
   /** Waits for the host's acknowledgement between the two batches. */
   readonly handshake: boolean;
@@ -247,6 +329,15 @@ interface StubPlan {
   readonly result: Record<string, unknown> | null;
   /** The `atm.turn` row, or null for a container that reported nothing. */
   readonly row: Record<string, unknown> | null;
+  /** A transcript to write into the run's agent home, as a real provider does. */
+  readonly transcript: StubTranscript | null;
+}
+
+/** One transcript the stub leaves inside the container's agent home. */
+interface StubTranscript {
+  readonly lines: readonly string[];
+  /** Names the file, which is how both vendors name theirs. */
+  readonly sessionId: string;
 }
 
 /**
@@ -263,7 +354,7 @@ const writeStubEntrypoint = (plan: StubPlan) => {
   mkdirSync(dirname(bundle), { recursive: true });
   writeFileSync(
     bundle,
-    `import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+    `import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import process from "node:process";
 
 const plan = ${JSON.stringify(plan)};
@@ -274,6 +365,24 @@ const say = (lines) => {
     appendFileSync(spec.eventLogPath, line + "\\n");
   }
 };
+
+if (plan.envReport) {
+  const watched = ${JSON.stringify(WATCHED_ENV_NAMES)};
+  const received = Object.keys(process.env)
+    .filter((name) => watched.includes(name) || name.startsWith("OTEL_"))
+    .sort();
+  console.log("env received: " + received.join(","));
+  writeFileSync(${JSON.stringify(join(containerRunLayout.runDir, ENV_REPORT_FILE))}, JSON.stringify(received) + "\\n");
+}
+
+if (plan.transcript !== null) {
+  const directory = spec.agentHomeDir + "/projects/-workspace";
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(
+    directory + "/" + plan.transcript.sessionId + ".jsonl",
+    plan.transcript.lines.join("\\n") + "\\n"
+  );
+}
 
 say(plan.before);
 
@@ -500,10 +609,12 @@ test.skipIf(!containerized)(
     writeStubEntrypoint({
       after: [eventLine(TERMINUS)],
       before: [eventLine(SESSION_INIT), eventLine(ASSISTANT)],
+      envReport: false,
       exitCode: 0,
       handshake: true,
       result: DONE_RESULT,
       row: turnRowTemplate,
+      transcript: null,
     });
 
     const seen = await provide(
@@ -589,10 +700,12 @@ test.skipIf(!containerized)(
     writeStubEntrypoint({
       after: [],
       before: [eventLine(SESSION_INIT)],
+      envReport: false,
       exitCode: SILENT_EXIT_CODE,
       handshake: false,
       result: null,
       row: null,
+      transcript: null,
     });
 
     const seen = await provide(
@@ -636,6 +749,109 @@ test.skipIf(!containerized)(
     // What it did manage to say is still the timeline, at its own ordinal.
     expect(seen.timeline.map((event) => event.seq)).toEqual([0]);
     expect(seen.rollup.turnCount).toBe(0);
+  },
+  RUN_TIMEOUT_MS
+);
+
+test.skipIf(!containerized)(
+  "the container is given the executor credentials and none of the host's export, and its transcript is read before the agent home goes",
+  async () => {
+    writeStubEntrypoint({
+      after: [],
+      // No events at all: the stream leaves no timeline, so the transcript the
+      // container wrote is the only account of the run there is.
+      before: [],
+      envReport: true,
+      exitCode: 0,
+      handshake: false,
+      result: null,
+      row: null,
+      transcript: { lines: TRANSCRIPT_LINES, sessionId: TRANSCRIPT_SESSION_ID },
+    });
+
+    const seen = await provide(
+      Effect.gen(function* () {
+        const { owner } = yield* ensureWorkspace;
+        const task = yield* seedTask({ owner, title: "contained credentials" });
+        const context = yield* openRun(claimOf(task));
+        const ingested: TranscriptIngestReport[] = [];
+
+        yield* runOpened({
+          context,
+          dataRoot,
+          env: TURN_ENV,
+          // What the loop's own close hook does, reduced to the one step these
+          // claims are about.
+          onClose: (closed) =>
+            withActor(context.actor)(
+              ingestTranscript({
+                context,
+                providerSessionId: closed.terminus.providerSessionId,
+              })
+            ).pipe(
+              Effect.tap((report) =>
+                Effect.sync(() => {
+                  ingested.push(report);
+                })
+              ),
+              Effect.asVoid,
+              Effect.orDie
+            ),
+          sandboxKind: "docker",
+          timeoutMs: RUN_TIMEOUT_MS,
+        });
+
+        const runEvents = yield* RunEventRepo;
+        const sessions = yield* AgentSessionRepo;
+        const { workspaceId } = task;
+        return {
+          context,
+          // Names only, as the container reported them.
+          envNames: JSON.parse(
+            readFileSync(
+              join(
+                runDirOf({ dataRoot, runId: context.runId }),
+                ENV_REPORT_FILE
+              ),
+              "utf8"
+            )
+          ) as readonly string[],
+          report: ingested[0],
+          session: yield* sessions.byId({
+            id: context.session.session.id as AgentSessionId,
+            workspaceId,
+          }),
+          timeline: yield* runEvents.listByRun({
+            runId: context.runId,
+            workspaceId,
+          }),
+        };
+      })
+    );
+
+    // The credentials the connector layer needs arrived, beside the run's own
+    // ids, and the host's export token did not.
+    expect(seen.envNames).toEqual([...WATCHED_ENV_NAMES].sort());
+    expect(seen.envNames.some((name) => name.startsWith("OTEL_"))).toBe(false);
+
+    // The transcript the container wrote, read on the host through the mount
+    // while the agent home was still there.
+    expect(seen.report?.found).toBe(true);
+    expect(seen.report?.entries).toBe(2);
+    expect(seen.report?.restored).toBe(true);
+    expect(seen.report?.providerSessionId).toBe(TRANSCRIPT_SESSION_ID);
+    expect(seen.session.providerSessionId).toBe(TRANSCRIPT_SESSION_ID);
+    expect(seen.timeline.map((event) => event.seq)).toEqual([
+      TRANSCRIPT_SEQ_BASE,
+      TRANSCRIPT_SEQ_BASE + 1,
+    ]);
+    expect(
+      seen.timeline.find((event) => event.payload.kind === "assistant_message")
+        ?.payload
+    ).toMatchObject({ text: TRANSCRIPT_TEXT });
+
+    // And the copied credentials are gone with it.
+    expect(existsSync(seen.context.layout.agentHomeDir)).toBe(false);
   },
   RUN_TIMEOUT_MS
 );

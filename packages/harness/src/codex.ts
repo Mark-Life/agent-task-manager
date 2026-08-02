@@ -32,6 +32,7 @@ import {
   PROVIDER_ID,
   stepCodexLine,
 } from "./codex-events";
+import { CODEX_HOOKS_FILE, writeCodexHooks } from "./codex-hooks";
 import {
   classify,
   type HarnessError,
@@ -64,7 +65,10 @@ const CODEX_COMMAND = "codex";
  * hooks are silently skipped: no error, no non-zero exit, just a turn that ends
  * when the model wants it to. The stop hook is what forces a second turn out of
  * a run that posted no comment, so dropping this flag disables that check
- * everywhere at once and looks like the model simply behaving well.
+ * everywhere at once and looks like the model simply behaving well. The flag on
+ * its own registers nothing: the definition it trusts is the
+ * {@link CODEX_HOOKS_FILE} written into this run's `CODEX_HOME` below, and the
+ * two only work together.
  *
  * `--skip-git-repo-check` is there because a workspace is not always a checkout.
  */
@@ -250,6 +254,13 @@ const spawnerLayer = BunChildProcessSpawner.layer.pipe(
 );
 
 /**
+ * The services one invocation needs. The filesystem is named again alongside
+ * the spawner because the spawner keeps its own copy to itself, and the hook
+ * definition below is written through this one.
+ */
+const codexLayer = Layer.mergeAll(spawnerLayer, BunFileSystem.layer);
+
+/**
  * One invocation as a stream. The child is acquired in the stream's own scope,
  * so a consumer that stops consuming — a stop command, a shutdown, a timeout
  * wrapped around this — kills the process group on the way out without anyone
@@ -258,6 +269,23 @@ const spawnerLayer = BunChildProcessSpawner.layer.pipe(
 const runCodex = (options: RunOptions) =>
   Stream.unwrap(
     Effect.gen(function* () {
+      // Before the child, because Codex reads its hooks out of `CODEX_HOME`
+      // once at startup. A definition that cannot be written costs the run its
+      // stop hook and nothing else — the orchestrator's fallback comment covers
+      // the same rule from the other side — so it is a warning, not an ending.
+      yield* writeCodexHooks({
+        agentHomeDir: options.agentHomeDir,
+        // The command names an executable inside the image, so the sandbox that
+        // built the image is what sets it; it reaches us on the process
+        // environment rather than through `options.env`.
+        env: process.env,
+      }).pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning("codex stop hook not registered", { cause })
+        ),
+        Effect.ignore
+      );
+
       const startedAtMs = yield* Clock.currentTimeMillis;
       const state = yield* Ref.make(
         initialCodexTurnState({
@@ -332,7 +360,7 @@ const runCodex = (options: RunOptions) =>
         ? turn
         : Stream.interruptWhen(turn, abortAsFailure(options.signal));
     })
-  ).pipe(Stream.provide(spawnerLayer));
+  ).pipe(Stream.provide(codexLayer));
 
 /**
  * The Codex harness. `cost` is false and stays false: Codex bills a

@@ -23,7 +23,14 @@
  */
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
@@ -61,9 +68,14 @@ import {
 import { localSandboxLayer, localWorkspaceLayer } from "@workspace/sandbox";
 import { Telemetry } from "@workspace/telemetry";
 import { Effect, Layer, Stream } from "effect";
-import type { RunClaim } from "./open-run";
-import { performRun } from "./run";
+import { openRun, type RunClaim } from "./open-run";
+import { performRun, runOpened } from "./run";
 import { loadRootEnv } from "./testing/root-env";
+import {
+  ingestTranscript,
+  TRANSCRIPT_SEQ_BASE,
+  type TranscriptIngestReport,
+} from "./transcript-ingest";
 
 /** What the scripted clean turn reports it cost. Trusted construction. */
 const COST_USD = CostUsd.make("0.1234");
@@ -98,12 +110,54 @@ const dataRoot = mkdtempSync(join(tmpdir(), "atm-run-test-"));
 process.env.DATA_ROOT = dataRoot;
 process.env.EVENT_LOG_DIR = join(dataRoot, "events");
 
+/** The conversation id the written transcript names itself with. */
+const TRANSCRIPT_SESSION_ID = "transcript-session-1";
+
+/** The one line of the written transcript a restored row can be recognized by. */
+const TRANSCRIPT_TEXT = "what the provider wrote inside its own agent home";
+
+/**
+ * A transcript in the run's agent home, in the layout Claude Code uses:
+ * `projects/<workspace>/<session>.jsonl` under the config directory.
+ *
+ * Written by the provider rather than by the test, because that is what makes
+ * the claim about ordering real — the file exists exactly as long as the agent
+ * home does, and the agent home is torn down with the run.
+ */
+const writeTranscript = (agentHomeDir: string) => {
+  const directory = join(agentHomeDir, "projects", "-workspace");
+  mkdirSync(directory, { recursive: true });
+  const lines = [
+    JSON.stringify({
+      message: { content: "the brief", role: "user" },
+      sessionId: TRANSCRIPT_SESSION_ID,
+      timestamp: "2026-08-01T10:00:00.000Z",
+      type: "user",
+    }),
+    JSON.stringify({
+      message: {
+        content: [{ text: TRANSCRIPT_TEXT, type: "text" }],
+        role: "assistant",
+      },
+      sessionId: TRANSCRIPT_SESSION_ID,
+      timestamp: "2026-08-01T10:00:04.000Z",
+      type: "assistant",
+    }),
+  ];
+  writeFileSync(
+    join(directory, `${TRANSCRIPT_SESSION_ID}.jsonl`),
+    `${lines.join("\n")}\n`
+  );
+};
+
 /** One scripted turn, standing in for a provider. */
 const providerOf = (input: {
   readonly events: readonly AgentEvent[];
   readonly failure: ProviderCrashed | null;
   /** Say the events and then never end, which is what a wedged provider looks like. */
   readonly hang?: boolean;
+  /** Write a transcript into the agent home, as both real providers do. */
+  readonly transcript?: boolean;
 }): AgentProvider => ({
   capabilities: {
     cost: true,
@@ -118,15 +172,21 @@ const providerOf = (input: {
   efforts: [],
   id: "claude",
   models: [],
-  run: () => {
-    const said = Stream.fromIterable(input.events);
-    if (input.hang === true) {
-      return said.pipe(Stream.concat(Stream.never));
-    }
-    return input.failure === null
-      ? said
-      : said.pipe(Stream.concat(Stream.fail(input.failure)));
-  },
+  run: (options) =>
+    Stream.unwrap(
+      Effect.sync(() => {
+        if (input.transcript === true) {
+          writeTranscript(options.agentHomeDir);
+        }
+        const said = Stream.fromIterable(input.events);
+        if (input.hang === true) {
+          return said.pipe(Stream.concat(Stream.never));
+        }
+        return input.failure === null
+          ? said
+          : said.pipe(Stream.concat(Stream.fail(input.failure)));
+      })
+    ),
 });
 
 /** The registry, with both providers answering with the same scripted turn. */
@@ -507,4 +567,82 @@ test("the fallback comment appears only when the run posted none", async () => {
       )
     )
   ).toBe(true);
+});
+
+test("the close hook reads the transcript before the agent home is removed", async () => {
+  const seen = await provide(
+    Effect.gen(function* () {
+      const { owner } = yield* ensureWorkspace;
+      const task = yield* seedTask({ owner, title: "transcript ingest" });
+      const context = yield* openRun(claimOf(task));
+      const ingested: TranscriptIngestReport[] = [];
+
+      yield* runOpened({
+        context,
+        dataRoot,
+        // What the loop's own close hook does, reduced to the one step this
+        // claim is about.
+        onClose: (closed) =>
+          withActor(context.actor)(
+            ingestTranscript({
+              context,
+              providerSessionId: closed.terminus.providerSessionId,
+            })
+          ).pipe(
+            Effect.tap((report) =>
+              Effect.sync(() => {
+                ingested.push(report);
+              })
+            ),
+            Effect.asVoid,
+            Effect.orDie
+          ),
+        sandboxKind: "local",
+        timeoutMs: TURN_TIMEOUT_MS,
+      });
+
+      const runEvents = yield* RunEventRepo;
+      const sessions = yield* AgentSessionRepo;
+      const { workspaceId } = task;
+      return {
+        context,
+        report: ingested[0],
+        session: yield* sessions.byId({
+          id: context.session.session.id as AgentSessionId,
+          workspaceId,
+        }),
+        timeline: yield* runEvents.listByRun({
+          runId: context.runId,
+          workspaceId,
+        }),
+      };
+    }).pipe(
+      // No events at all: the stream leaves no timeline, so the transcript is
+      // the only account of the run there is — and the rows it restores are the
+      // proof it was read rather than merely looked for.
+      Effect.provide(
+        registryLayer({ events: [], failure: null, transcript: true })
+      )
+    )
+  );
+
+  expect(seen.report?.found).toBe(true);
+  expect(seen.report?.entries).toBe(2);
+  expect(seen.report?.restored).toBe(true);
+  expect(seen.report?.providerSessionId).toBe(TRANSCRIPT_SESSION_ID);
+  expect(seen.session.providerSessionId).toBe(TRANSCRIPT_SESSION_ID);
+
+  // The conversation, in the restored band, on the run's own timeline.
+  expect(seen.timeline.map((event) => event.seq)).toEqual([
+    TRANSCRIPT_SEQ_BASE,
+    TRANSCRIPT_SEQ_BASE + 1,
+  ]);
+  const said = seen.timeline.find(
+    (event) => event.payload.kind === "assistant_message"
+  );
+  expect(said?.payload).toMatchObject({ text: TRANSCRIPT_TEXT });
+
+  // And the credentials the transcript sat beside are gone: the agent home is
+  // released as the close hook returns, not before it and not never.
+  expect(existsSync(seen.context.layout.agentHomeDir)).toBe(false);
 });

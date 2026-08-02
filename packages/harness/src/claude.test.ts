@@ -9,13 +9,38 @@
  * for a window to roll over, or stops until a human logs in again.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
+import process from "node:process";
 import { AbortError } from "@anthropic-ai/claude-agent-sdk";
-import { buildQuery, harnessErrorOf } from "./claude";
+import { BunFileSystem } from "@effect/platform-bun";
+import type { SessionProvider } from "@workspace/domain";
+import { Effect } from "effect";
+import {
+  buildQuery,
+  CLAUDE_CLI_PATH_ENV_VAR,
+  harnessErrorOf,
+  useImageClaudeCli,
+} from "./claude";
 import { DEFAULT_CLAUDE_SETTINGS } from "./claude-settings";
 import type { RunOptions } from "./provider";
 
 const RUN_DIR = "/run";
+
+/** Sets one variable and answers with what puts the environment back. */
+const setEnv = (name: string, value: string | undefined) => {
+  const previous = process.env[name];
+  if (value === undefined) {
+    Reflect.deleteProperty(process.env, name);
+  } else {
+    process.env[name] = value;
+  }
+  return () => {
+    setEnv(name, previous);
+  };
+};
 
 const runOptions = (overrides: Partial<RunOptions> = {}): RunOptions => ({
   agentHomeDir: `${RUN_DIR}/agent-home/claude`,
@@ -100,6 +125,97 @@ describe("buildQuery", () => {
 
   test("carries the prompt through untouched", () => {
     expect(queryFor().prompt).toBe("ship it");
+  });
+
+  test("leaves the executable to the sdk when nothing names one", () => {
+    const restore = setEnv(CLAUDE_CLI_PATH_ENV_VAR, undefined);
+    try {
+      expect("pathToClaudeCodeExecutable" in queryFor().options).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  test("spawns the cli the environment names — how an offline container starts", () => {
+    const restore = setEnv(CLAUDE_CLI_PATH_ENV_VAR, "/usr/local/bin/claude");
+    try {
+      expect(queryFor().options.pathToClaudeCodeExecutable).toBe(
+        "/usr/local/bin/claude"
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  test("treats a blank cli path as none, rather than spawning nothing", () => {
+    const restore = setEnv(CLAUDE_CLI_PATH_ENV_VAR, "  ");
+    try {
+      expect("pathToClaudeCodeExecutable" in queryFor().options).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("useImageClaudeCli", () => {
+  let binDir = "";
+  let restorePath = () => {
+    // Replaced in `beforeEach`; the initial value is never the one that runs.
+  };
+  let restoreCli = restorePath;
+
+  beforeEach(() => {
+    binDir = mkdtempSync(join(tmpdir(), "atm-claude-cli-"));
+    // The whole PATH, so the host's own `claude` cannot decide these cases:
+    // what is on PATH is exactly what each test puts in this directory.
+    restorePath = setEnv("PATH", `${binDir}${delimiter}/nonexistent-bin`);
+    restoreCli = setEnv(CLAUDE_CLI_PATH_ENV_VAR, undefined);
+  });
+
+  afterEach(() => {
+    restoreCli();
+    restorePath();
+    rmSync(binDir, { force: true, recursive: true });
+  });
+
+  /** The CLI the image would have installed, at a real path on this PATH. */
+  const installCli = () => {
+    const path = join(binDir, "claude");
+    writeFileSync(path, "#!/bin/sh\n", { mode: 0o755 });
+    return path;
+  };
+
+  const prime = (provider: SessionProvider) =>
+    Effect.runPromise(
+      useImageClaudeCli(provider).pipe(Effect.provide(BunFileSystem.layer))
+    );
+
+  test("names the claude on PATH, so the sdk resolves nothing itself", async () => {
+    const path = installCli();
+    await prime("claude");
+    expect(process.env[CLAUDE_CLI_PATH_ENV_VAR]).toBe(path);
+  });
+
+  test("keeps a path somebody already chose", async () => {
+    installCli();
+    const restore = setEnv(CLAUDE_CLI_PATH_ENV_VAR, "/opt/claude");
+    try {
+      await prime("claude");
+      expect(process.env[CLAUDE_CLI_PATH_ENV_VAR]).toBe("/opt/claude");
+    } finally {
+      restore();
+    }
+  });
+
+  test("names nothing for a codex turn", async () => {
+    installCli();
+    await prime("codex");
+    expect(process.env[CLAUDE_CLI_PATH_ENV_VAR]).toBeUndefined();
+  });
+
+  test("leaves the sdk to its own resolution when PATH has no claude", async () => {
+    await prime("claude");
+    expect(process.env[CLAUDE_CLI_PATH_ENV_VAR]).toBeUndefined();
   });
 });
 

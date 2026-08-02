@@ -45,6 +45,7 @@ import {
   Stream,
 } from "effect";
 import { FileSystem } from "effect/FileSystem";
+import { useImageClaudeCli } from "./claude";
 import {
   describeError,
   type HarnessError,
@@ -440,9 +441,10 @@ const runSpec = (input: {
     );
     const counters = yield* makeTurnCounters;
 
-    // The hook command is read off the process environment by the provider as
-    // it builds its settings for the turn, so it has to be there rather than in
-    // `RunOptions.env`. It names this same bundle in its other mode.
+    // The hook command and the provider's CLI are read off the process
+    // environment as the provider builds its options, not from `RunOptions.env`.
+    // The hook names this bundle in its other mode; the CLI is the image's own.
+    yield* useImageClaudeCli(spec.provider);
     yield* Effect.sync(() => {
       process.env[STOP_HOOK_COMMAND_ENV_VAR] = containerStopHookCommand();
     });

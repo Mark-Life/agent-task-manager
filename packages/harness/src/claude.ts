@@ -20,14 +20,17 @@
  * `claude-events`, which is pure and testable without ever starting a process.
  */
 
+import { delimiter, join } from "node:path";
 import {
   AbortError,
   type Options,
   query,
   type Settings,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { SessionProvider } from "@workspace/domain";
 import { clipError } from "@workspace/telemetry";
-import { Effect, Stream } from "effect";
+import { Effect, Option, Stream } from "effect";
+import { FileSystem } from "effect/FileSystem";
 import {
   makeCursor,
   normalize,
@@ -43,6 +46,7 @@ import {
   mergeClaudeSettings,
   stopHookSettings,
 } from "./claude-settings";
+import { trimmedOrNull } from "./env";
 import {
   classify,
   type HarnessError,
@@ -114,6 +118,78 @@ const SUBSCRIPTION_CONFLICTS = new Set([
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
 ]);
+
+/**
+ * Names the `claude` executable the SDK should spawn. The path is a property of
+ * the image and not of this package, so the party that starts the run sets it
+ * and the provider reads it — the same arrangement as the stop-hook command.
+ *
+ * Absence is the SDK's own resolution, which looks the CLI up through
+ * `createRequire` against the file the SDK was imported from. That is right
+ * wherever a real `node_modules` sits beside that file and wrong for a single
+ * mounted bundle, which has none: bun then fetches the native CLI over the
+ * network on every run, and with networking off the turn dies before it starts.
+ */
+export const CLAUDE_CLI_PATH_ENV_VAR = "ATM_CLAUDE_CLI_PATH";
+
+/** The name the CLI is installed under, on PATH. */
+const CLAUDE_CLI_FILE = "claude";
+
+/** The configured CLI path, or null when nothing names one. */
+export const claudeCliPath = (
+  env: Readonly<Record<string, string | undefined>>
+) => trimmedOrNull(env[CLAUDE_CLI_PATH_ENV_VAR]);
+
+/**
+ * The `claude` on a PATH, or null when that PATH has none.
+ *
+ * Searched rather than composed, because only the image knows where it put the
+ * CLI: `atm.local/base` installs it globally with npm and proves it by running
+ * `claude --version`, so PATH is the one thing the image guarantees and a
+ * literal path here would be this package guessing at somebody else's layout.
+ */
+export const findClaudeCli = Effect.fn("Claude.findCli")(function* (
+  path: string | undefined
+) {
+  const fs = yield* FileSystem;
+  const candidates = (path ?? "")
+    .split(delimiter)
+    .filter((dir) => dir.length > 0)
+    .map((dir) => join(dir, CLAUDE_CLI_FILE));
+  const found = yield* Effect.findFirst(candidates, (candidate) =>
+    fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))
+  );
+  return Option.getOrNull(found);
+});
+
+/**
+ * Points this process's Claude turns at the CLI on PATH, for a caller — the
+ * container's entrypoint — that knows the image pinned one.
+ *
+ * A path already in the environment wins: whoever set it named a specific
+ * executable, and searching PATH over the top of that would quietly run a
+ * different one. A PATH with no `claude` is left alone rather than failed on,
+ * which leaves the SDK's own resolution and the error it raises when that finds
+ * nothing either — a truthful message about a missing CLI beats one about a
+ * missing environment variable nobody was asked to set.
+ */
+export const useImageClaudeCli = Effect.fn("Claude.useImageCli")(function* (
+  provider: SessionProvider
+) {
+  if (provider !== PROVIDER_ID || claudeCliPath(process.env) !== null) {
+    return;
+  }
+  const found = yield* findClaudeCli(process.env.PATH);
+  if (found === null) {
+    yield* Effect.logWarning("no claude cli on PATH", {
+      path: process.env.PATH,
+    });
+    return;
+  }
+  yield* Effect.sync(() => {
+    process.env[CLAUDE_CLI_PATH_ENV_VAR] = found;
+  });
+});
 
 /** The exit code the SDK reports in the text of its process-exit error. */
 const EXIT_CODE_PATTERN = /exited with code (\d+)/;
@@ -221,9 +297,11 @@ interface QueryInput {
  * `settingSources` stays explicit rather than defaulted so the repository's
  * `CLAUDE.md` is loaded on purpose and not by accident of an SDK default.
  *
- * The stop hook is merged in here rather than baked into the settings constant
- * because the command is a path inside whichever image is running, so it is
- * known at run time and never at import time.
+ * The stop hook and the CLI path are read off the environment here rather than
+ * baked into a constant, for the same reason: both are paths inside whichever
+ * image is running, so they are known at run time and never at import time. A
+ * CLI nobody named is left out of the options entirely, which is what keeps the
+ * SDK's own resolution — correct wherever this runs with its `node_modules`.
  */
 export const buildQuery = ({
   abortController,
@@ -231,6 +309,7 @@ export const buildQuery = ({
   options,
   settings,
 }: QueryInput) => {
+  const cliPath = claudeCliPath(process.env);
   const sdkOptions: Options = {
     abortController,
     allowDangerouslySkipPermissions: true,
@@ -242,6 +321,7 @@ export const buildQuery = ({
     settings: mergeClaudeSettings(settings, stopHookSettings(process.env)),
     stderr: onStderr,
     systemPrompt: { preset: "claude_code", type: "preset" },
+    ...(cliPath === null ? {} : { pathToClaudeCodeExecutable: cliPath }),
     ...(options.model === null ? {} : { model: options.model }),
     ...(options.resumeSessionId === null
       ? {}

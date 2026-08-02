@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
@@ -7,6 +13,7 @@ import { BunFileSystem } from "@effect/platform-bun";
 import { RunId, TaskId, WorkspaceId } from "@workspace/domain";
 import { Telemetry } from "@workspace/telemetry";
 import { Effect, Layer, Schema, Stream } from "effect";
+import { CLAUDE_CLI_PATH_ENV_VAR } from "./claude";
 import { runTurn, specPathFrom } from "./entrypoint";
 import { Unauthenticated } from "./errors";
 import type { AgentEvent } from "./events";
@@ -169,6 +176,22 @@ describe("runTurn", () => {
     expect(result.outcome).toBe("done");
     expect(result.providerSessionId).toBe("prov-1");
     expect(result.eventsSeen).toBe(2);
+  });
+
+  it("names the cli this image put on PATH, so the sdk resolves none itself", async () => {
+    const binDir = join(runDir, "bin");
+    mkdirSync(binDir);
+    writeFileSync(join(binDir, "claude"), "#!/bin/sh\n", { mode: 0o755 });
+    const previousPath = process.env.PATH;
+    process.env.PATH = binDir;
+    Reflect.deleteProperty(process.env, CLAUDE_CLI_PATH_ENV_VAR);
+    try {
+      await run(scripted([SESSION_INIT, TERMINUS]));
+      expect(process.env[CLAUDE_CLI_PATH_ENV_VAR]).toBe(join(binDir, "claude"));
+    } finally {
+      process.env.PATH = previousPath;
+      Reflect.deleteProperty(process.env, CLAUDE_CLI_PATH_ENV_VAR);
+    }
   });
 
   it("reports a stream that ended without a terminus", async () => {
