@@ -143,28 +143,19 @@ const handleUpdate = <A, E>(options: {
     options.level ?? "Info"
   );
 
-/** What a manager turn that finished folds back into the row. */
-const COMPLETED_TURN: Partial<ChatProgress> = {
-  containerExitCode: 0,
-  costUsd: 0.0134,
-  gatewayToolCalls: 3,
-  gatewayToolErrors: 0,
+/** What handling one message folds back into the row. */
+const ACCEPTED_MESSAGE: Partial<ChatProgress> = {
   promptChars: 812,
   provider: "claude",
-  providerSessionId: "sess_abc",
-  queueWaitMs: 12,
-  replyChars: 240,
   runId: "run_7",
   taskId: "task_3",
   threadId: "thread_1",
-  totalTokens: 4096,
-  turns: 2,
 };
 
 describe("the atm.chat row", () => {
-  test("a handled message leaves exactly one row, carrying what the turn produced", async () => {
+  test("a handled message leaves exactly one row, carrying who and what", async () => {
     const exit = await handleUpdate({
-      handle: observeChat(COMPLETED_TURN),
+      handle: observeChat(ACCEPTED_MESSAGE),
     });
 
     expect(exit._tag).toBe("Success");
@@ -182,22 +173,19 @@ describe("the atm.chat row", () => {
     expect(row.threadId).toBe("thread_1");
     expect(row.taskId).toBe("task_3");
     expect(row.runId).toBe("run_7");
-    // a manager turn is not an agent session; the provider's own id is beside it
+    // the session a conversation is answered in belongs to its run
     expect(row.sessionId).toBeNull();
     expect(row.provider).toBe("claude");
-    expect(row.providerSessionId).toBe("sess_abc");
-    // the economics a finished turn really produced
-    expect(row.costUsd).toBe(0.0134);
-    expect(row.totalTokens).toBe(4096);
-    expect(row.turns).toBe(2);
-    expect(row.queueWaitMs).toBe(12);
-    expect(row.gatewayToolCalls).toBe(3);
-    expect(row.containerExitCode).toBe(0);
+    // what a turn spent is the turn's own row, never copied here
+    expect(row.costUsd).toBeNull();
+    expect(row.totalTokens).toBeNull();
+    expect(row.turns).toBeNull();
+    expect(row.queueWaitMs).toBeNull();
+    // the one number this row measures itself
     expect(typeof row.durationMs).toBe("number");
     expect(row.errorClass).toBeNull();
     // content is measured, never carried
     expect(row.promptChars).toBe(812);
-    expect(row.replyChars).toBe(240);
     expect(row).not.toHaveProperty("prompt");
     expect(row).not.toHaveProperty("body");
     // nothing about a voice note happened, so neither field invents a 0
@@ -217,7 +205,7 @@ describe("the atm.chat row", () => {
         workspaceId: null,
       }),
       // the middleware replies once and returns: a refusal is an answer
-      handle: observeChat({ outcome: "not_allowed", replyChars: 46 }),
+      handle: observeChat({ outcome: "not_allowed" }),
     });
 
     expect(exit._tag).toBe("Success");
@@ -233,7 +221,6 @@ describe("the atm.chat row", () => {
     expect(row.totalTokens).toBeNull();
     expect(row.turns).toBeNull();
     expect(row.queueWaitMs).toBeNull();
-    expect(row.replyChars).toBeNull();
     // the one number a degraded row still carries, because it was measured
     expect(typeof row.durationMs).toBe("number");
   });
@@ -249,19 +236,12 @@ describe("the atm.chat row", () => {
     expect(row.updateKind).toBe("callback");
   });
 
-  test("a failed turn leaves one row with null economics and a sanitized class", async () => {
+  test("a handler that threw leaves one row with a sanitized class", async () => {
     const exit = await handleUpdate({
       handle: Effect.gen(function* () {
-        yield* observeChat({
-          ...COMPLETED_TURN,
-          // the container died: what it had spent is partial, what it counted is real
-          containerExitCode: 137,
-          costUsd: 0.004,
-          gatewayToolCalls: 2,
-          gatewayToolErrors: 1,
-        });
+        yield* observeChat(ACCEPTED_MESSAGE);
         return yield* Effect.fail(
-          new Error("manager turn failed: Bearer atm1.secret-token")
+          new Error("the update failed: Bearer atm1.secret-token")
         );
       }),
     });
@@ -274,16 +254,13 @@ describe("the atm.chat row", () => {
     expect(row.totalTokens).toBeNull();
     expect(row.turns).toBeNull();
     expect(row.queueWaitMs).toBeNull();
-    expect(row.replyChars).toBeNull();
     // what the bot measured itself stays: this is what makes a failure readable
-    expect(row.containerExitCode).toBe(137);
-    expect(row.gatewayToolCalls).toBe(2);
-    expect(row.gatewayToolErrors).toBe(1);
     expect(row.promptChars).toBe(812);
+    expect(row.threadId).toBe("thread_1");
     expect(typeof row.durationMs).toBe("number");
     // the failure names itself, and its text never carries a credential
     expect(row.errorClass).toBe("Error");
-    expect(row.errorMessage).toContain("manager turn failed");
+    expect(row.errorMessage).toContain("the update failed");
     expect(JSON.stringify(row)).not.toContain("secret-token");
   });
 
@@ -312,14 +289,14 @@ describe("the atm.chat row", () => {
     expect(row.costUsd).toBeNull();
   });
 
-  test("a turn stopped by /stop leaves one row, as an interrupt", async () => {
+  test("an update interrupted mid-flight leaves one row, as an interrupt", async () => {
     await run(
       Effect.gen(function* () {
         const progress = yield* makeChatProgress;
         const started = yield* Deferred.make<void>();
         const fiber = yield* Effect.forkChild(
           Effect.gen(function* () {
-            yield* observeChat(COMPLETED_TURN);
+            yield* observeChat(ACCEPTED_MESSAGE);
             yield* Deferred.succeed(started, undefined);
             return yield* Effect.never;
           }).pipe(withChatEvent(inbound(progress)))
@@ -332,11 +309,8 @@ describe("the atm.chat row", () => {
     const row = onlyRow();
     expect(row.outcome).toBe("interrupted");
     expect(row.errorClass).toBe("Interrupted");
-    // a deliberate stop is not a crash, and it did not cost what it would have
-    expect(row.costUsd).toBeNull();
-    expect(row.totalTokens).toBeNull();
-    // it did really run three tools before it was stopped
-    expect(row.gatewayToolCalls).toBe(3);
+    // it still names the conversation it was interrupted in
+    expect(row.threadId).toBe("thread_1");
   });
 
   test("a voice note carries its two measurements, and only it does", async () => {
@@ -367,7 +341,6 @@ describe("the atm.chat row", () => {
       }),
       handle: observeChat({
         notifyKind: "run_failed",
-        replyChars: 310,
         taskId: "task_3",
         threadId: "thread_1",
       }),
@@ -377,7 +350,6 @@ describe("the atm.chat row", () => {
     expect(row.updateKind).toBe("notify");
     expect(row.notifyKind).toBe("run_failed");
     expect(row.outcome).toBe("done");
-    expect(row.replyChars).toBe(310);
     expect(row.promptChars).toBe(0);
   });
 
@@ -407,21 +379,16 @@ describe("the atm.chat row", () => {
     const encoded = ChatEvent.encode({
       chatId: "1",
       commandName: `/stop ${"x".repeat(400)}`,
-      containerExitCode: null,
       costUsd: null,
       durationMs: 4,
       errorClass: null,
       errorMessage: null,
-      gatewayToolCalls: null,
-      gatewayToolErrors: null,
       notifyKind: null,
       outcome: "done",
       phase: "end",
       promptChars: 0,
       provider: null,
-      providerSessionId: null,
       queueWaitMs: null,
-      replyChars: null,
       runId: null,
       sessionId: null,
       spanId: null,
@@ -452,7 +419,7 @@ const seriesOf = (id: string) =>
 
 describe("the chat metrics", () => {
   test("atm_chat_updates_total is tagged by kind, outcome and provider only", async () => {
-    await handleUpdate({ handle: observeChat(COMPLETED_TURN) });
+    await handleUpdate({ handle: observeChat(ACCEPTED_MESSAGE) });
 
     const series = await seriesOf(COUNTER);
     expect(series.length).toBeGreaterThan(0);

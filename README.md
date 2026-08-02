@@ -15,7 +15,7 @@ imports nothing of ours.
 | `packages/harness` | Agent providers, normalized events, session identity, transcripts. | `domain` |
 | `packages/sandbox` | Container lifecycle, mounts, images, repo and artifact materialization. | `domain` |
 | `packages/api` | HttpApi contract + OpenAPI. Types only, no handlers. | `domain` |
-| `packages/orchestrator` | Dispatch, leases, pool, run lifecycle, ingest, artifact index. | `domain` `db` `harness` `sandbox` |
+| `packages/orchestrator` | Dispatch, leases, pool, run lifecycle, ingest, artifact index — for a worker run and a chat turn alike. | `domain` `db` `harness` `sandbox` `prompts` `agent-tools` `token` |
 | `packages/telemetry` | Logger and OTLP layers, wide-event schema, sanitizers, JSONL sink, metrics. | — |
 | `packages/env` | Env parsing. | — |
 | `packages/ui` | Shared shadcn/ui components. | — |
@@ -23,14 +23,15 @@ imports nothing of ours.
 | `apps/gateway` | HttpApi server, SSE, auth, artifact serving. | `api` `db` `domain` `sandbox` |
 | `apps/loop` | Runtime host for the orchestrator. | `orchestrator` |
 | `packages/token` | The scoped bearer token: mint, verify, actor ceiling. | `domain` |
-| `packages/manager-tools` | The manager's fourteen board tools, as a stdio MCP server. | `api` `domain` `harness` |
-| `apps/bot` | Telegram bot + manager agent. | `api` `db` `domain` `env` `harness` `sandbox` `token` `manager-tools` |
+| `packages/agent-tools` | The eighteen board tools every agent gets, as a stdio MCP server. | `api` `domain` `harness` |
+| `packages/prompts` | The prompt text and the unread-watermark algebra, per role. | `domain` |
+| `apps/bot` | Telegram: intake, rendering, queueing, buttons. No agent runtime. | `api` `db` `domain` `env` `token` |
 | `apps/dashboard` | Vite SPA. | `api` `ui` |
 | `apps/web` | Next.js marketing app. | — |
 
 `domain`, `db`, `harness`, `sandbox`, `orchestrator`, `api`, `telemetry`, `token`,
-`manager-tools`, `apps/loop`, `apps/gateway` and `apps/bot` are built. `apps/dashboard` is a
-scaffold: it carries its wiring and nothing else.
+`agent-tools`, `prompts`, `apps/loop`, `apps/gateway` and `apps/bot` are built. `apps/dashboard`
+is a scaffold: it carries its wiring and nothing else.
 
 ## Stack
 
@@ -95,9 +96,10 @@ The `upgrade` command updates Next.js, refreshes all shadcn/ui components, updat
 | `bun run gateway:start` / `gateway:dev` | Run the HTTP gateway (watch mode for `dev`) |
 | `bun run gateway:token` | Mint a scoped bearer token (`--scope read\|task-write\|admin --user <id> [--ttl-days N]`) |
 | `bun run gateway:check` | Drive a whole task lifecycle over HTTP against a real gateway and audit the rows it left |
-| `bun run bot:start` / `bot:dev` | Run the Telegram bot and its manager agent (watch mode for `dev`) |
+| `bun run bot:start` / `bot:dev` | Run the Telegram bot (watch mode for `dev`) |
 | `bun run bot:check` | Drive the bot's own handlers with synthetic updates — no token, no Telegram call, no container |
-| `bun run manager-mcp:build` | Bundle the manager's board tools to `${DATA_ROOT}/bin/manager-mcp.js` |
+| `bun run agent-mcp:build` | Bundle the board tools to `${DATA_ROOT}/bin/agent-mcp.js` |
+| `bun run agent-home:login` | Create a provider's agent home and put its login in it, once per host |
 | `bun run openapi` | Write `openapi.json` from the contract (`--check` fails when it has drifted) |
 | `bun run upgrade` | Upgrade Next.js, shadcn/ui, and all deps |
 
@@ -130,6 +132,8 @@ Read from `.env` / `.env.local` at the repo root (see `packages/env`). Telemetry
 | `LOG_FORMAT` | `pretty` on a TTY, else `logfmt` | console log shape (`pretty`/`logfmt`/`json`) |
 | `LOG_LEVEL` | `Info` | minimum log level |
 | `DATA_ROOT` | `.data` | root for local, non-database state |
+| `ATM_AGENT_HOME_DIR_CLAUDE` | `~/.claude-task-management` | the host directory holding Claude's login, mounted into every container |
+| `ATM_AGENT_HOME_DIR_CODEX` | `~/.codex-task-management` | the same for Codex |
 | `EVENT_LOG_DIR` | `${DATA_ROOT}/events` | JSONL event ledger directory, one file per service |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP collector URL; unset disables export entirely, no HTTP client built |
 | `OTEL_EXPORTER_OTLP_HEADERS` | unset | `k=v,k=v`, split on the first `=` per entry |
@@ -143,11 +147,62 @@ Read from `.env` / `.env.local` at the repo root (see `packages/env`). Telemetry
 | `TELEGRAM_ALLOWLIST` | required by the bot | `telegramUserId:workspaceId:userId`, comma separated |
 | `GROQ_API_KEY` | unset | voice-note transcription; unset means voice notes are refused and text still works |
 | `BOT_GATEWAY_URL` | `http://localhost:3100` | the gateway as the bot process reaches it |
-| `MANAGER_GATEWAY_URL` | `http://localhost:3100` | the gateway as the manager's **container** resolves it |
+| `ORCHESTRATOR_GATEWAY_URL` | unset | the gateway as a *container* reaches it; unset means turns run with no board tools |
+| `ORCHESTRATOR_MAX_CONCURRENCY` | `2` | worker runs at once |
+| `ORCHESTRATOR_MAX_CHAT_CONCURRENCY` | `1` | chat turns at once, on their own slots; the box's ceiling is the sum |
 
-`.env.example` carries the rest of the bot's knobs — the manager's provider, model, timeout and
-token TTL, the renderer's split and draft interval, the notification retry window and the four
-stuck-run thresholds — each commented out at its default.
+`.env.example` carries the rest — the bot's renderer split, the notification retry window, the
+four stuck-run thresholds, and the loop's timeouts, retry ladder and token lifetime — each
+commented out at its default. Every `ORCHESTRATOR_*` variable is read in
+`packages/orchestrator/src/config.ts` and nowhere else.
+
+## Agent homes (one-time setup, before any run)
+
+There is **one system-owned directory per provider** on the host, and every container mounts it
+read-write at `/agent-home`. It is not under `DATA_ROOT`, it is never copied, and it outlives
+every run.
+
+That is not tidiness. Both CLIs refresh their subscription token in place, so a private copy
+per run means the refresh is discarded with the container while the source goes permanently
+stale — which is a failure this repo has already had with Codex. One shared directory, written
+by whichever container refreshed last, is the same arrangement several interactive CLI sessions
+on one laptop already rely on. Claude locks its credential writes cross-process
+(`<dir>/.storage-write`), which is what makes concurrent containers safe there.
+
+**Nothing on the run path creates or seeds these directories.** An auto-created empty home is a
+container that boots and reports an auth error nobody can tell from an expired subscription, so
+a missing one fails the dispatch by name instead.
+
+```bash
+bun run agent-home:login                     # creates both at 0700, says what each still needs
+CLAUDE_CONFIG_DIR=~/.claude-task-management claude    # then /login
+CODEX_HOME=~/.codex-task-management codex login
+bun run harness:check                        # tells you whether that worked
+```
+
+On macOS Claude stores its tokens in the login keychain rather than in the directory, and it
+names the keychain item after the config directory — so `/login` with `CLAUDE_CONFIG_DIR` set
+leaves the directory empty. `bun run agent-home:login claude` covers that: it exports the existing
+keychain item to `<dir>/.credentials.json` at `0600`, once. It refuses to overwrite an existing
+file, because that file may be a token a container refreshed after you last logged in. The
+container is Linux, has no keychain, and writes the plaintext file itself from then on.
+
+**Ownership.** Create the directory as yourself, at `0700` — which `mkdir` gives it. A bind
+mount does no id translation, and every container this repo starts runs as
+`--user=<your uid>:<your gid>`, so a write from inside lands as you on a directory only you can
+read. Nothing needs chowning and nothing needs to be uid 1000; `DEFAULT_USER = "1000:1000"` in
+`packages/sandbox/src/hardening.ts` is only the fallback for a runtime with no `getuid`.
+`sandbox:check` proves this rather than asserting it: it writes a file from inside the container
+into a throwaway agent home and checks the owner on the host afterwards.
+
+**What a run can see, stated plainly.** Every worker run and every conversation writes its
+transcript into the one tree, so a run can read every other run's conversation. That is a
+capability the manager needs and a leak for a worker, accepted for v1. Nothing prunes
+`projects/-workspace/` either — that tree grows one JSONL per run forever.
+
+Override either path with `ATM_AGENT_HOME_DIR_CLAUDE` / `ATM_AGENT_HOME_DIR_CODEX`. They are
+deliberately not spelled `CLAUDE_CONFIG_DIR` / `CODEX_HOME`: those two relocate the config
+directory of whatever process exports them, including your own shell's.
 
 ## Agent harness (`bun run harness:check`)
 
@@ -157,11 +212,12 @@ the orchestrator selects a harness from a row and never imports either SDK. Capa
 (`cost`, `hooks`, `resume`, `rateLimitSignal`, `reasoning`, `subagents`) answer what a provider
 can be relied on to do before a run starts. The package never imports `packages/db`.
 
-Every run gets a private agent home at `${DATA_ROOT}/runs/<runId>/agent-home/<provider>`,
-pointed at through `CLAUDE_CONFIG_DIR` / `CODEX_HOME` and seeded with the credential files and
-nothing else, so a container never sees the operator's history and the transcript lands
-somewhere the run owns. It is removed when the run ends. One invocation leaves exactly one
-`atm.turn` row in the ledger, on every exit path including an interrupt.
+The provider is pointed at the mounted agent home through `CLAUDE_CONFIG_DIR` / `CODEX_HOME`
+(see above), so every session's transcript lands in one tree and the reader finds this run's by
+its provider session id — never by "the newest file", which under a shared tree is a
+neighbour's conversation. A run that ended before naming a session has no transcript rather
+than the wrong one. One invocation leaves exactly one `atm.turn` row in the ledger, on every
+exit path including an interrupt.
 
 A stop hook (`packages/harness/scripts/stop-hook.ts`) refuses a turn that tries to end without
 having posted a comment, capped at one retry; the refusal is fed back to the model as its next
@@ -169,7 +225,7 @@ prompt. The sandbox names the executable through `ATM_STOP_HOOK_COMMAND` and the
 marker through `ATM_COMMENT_MARKER`.
 
 ```bash
-bun run harness:check                        # no model call: layout, seeding, registry, hook
+bun run harness:check                        # no model call: agent homes, layout, registry, hook
 bun run harness:check --live                 # one real turn per provider, transcript, rows
 bun run harness:check --live --provider codex  # just the one harness
 ```
@@ -182,14 +238,19 @@ it, and removes it — on every exit path including the interrupt a stop command
 Interrupting the fiber *is* how a run is stopped, which is why there is no `kill` method. The
 package never imports `packages/db`.
 
-**Five mounts, and nothing else.** The run directory (rw, mounted at `/run`, holding the
-agent home and the event ledger), the workspace checkout (rw, `/workspace`), the task's
-artifacts folder (rw, `/artifacts/task`), and the project's and global promoted folders
+**Six mounts, and nothing else.** The run directory (rw, mounted at `/run`, holding the comment
+marker, the turn spec and the event ledger), the provider's agent home (rw, `/agent-home`, the
+one mount shared between runs — see above), the workspace checkout (rw, `/workspace`), the
+task's artifacts folder (rw, `/artifacts/task`), and the project's and global promoted folders
 (**ro**, `/artifacts/project` and `/artifacts/global`). Read-only on the shared folders is
 load-bearing: promotion is a deliberate act performed on the host, and that separation is the
 audit trail. Never the docker socket — that one mount turns a sandbox into host root. A
 container that runs our own turn entrypoint gets one more, read-only: the bundled entrypoint
 at `/opt/atm/turn.js` (see below).
+
+A chat turn has no task and no project, so it gets four: the run directory, the agent home, a
+scratch `/workspace` released with the run, and the global promoted folder read-only. Nothing
+it writes to `/workspace` outlives the container, and the prompt says so.
 
 **Hardening**: `--cap-drop=ALL`, `no-new-privileges`, non-root, 2048 MB with swap pinned
 equal, 1.5 CPUs, 512 pids, `/tmp` as a capped tmpfs, `--init`. Network is fully open, and that
@@ -213,7 +274,7 @@ harness writes inside the container land on the host through the run mount, carr
 `runId` the host minted, so one query joins the two.
 
 ```bash
-bun run sandbox:check          # alpine, seconds: mounts, isolation, correlation, the rows
+bun run sandbox:check          # alpine, seconds: mounts, isolation, the agent home, the rows
 bun run sandbox:check --agent  # the same, against atm.local/base:latest and its tools
 bun run sandbox:check --image X  # against any image by name
 ```
@@ -225,12 +286,26 @@ straight through; everything else in the default confinement is untouched. See
 
 ## Orchestrator loop (`bun run loop:start`, `bun run loop:check`)
 
-**Moving a card into *in progress* is the trigger, every time.** A Postgres trigger notifies
-`atm_task_dispatch` and a slow poll runs beside it as the safety net for a notification
-delivered to nobody; either wakes one sweep, and the sweep reads the column in rank order.
-There is no queue anywhere but the board.
+**Two things wake the loop, and they are the same thing.** Moving a card into *in progress*
+fires `atm_task_dispatch`; a person saying something into a conversation fires
+`atm_chat_dispatch` from the `chat_message` insert. A slow poll runs beside both as the safety
+net for a notification delivered to nobody. Either wakes one sweep, which reads the column in
+rank order and the conversations with something unanswered. There is no queue anywhere but the
+database.
 
-Each task goes through the same sequence, and the order is the design:
+**A worker run and a chat turn are one runtime.** A run carries a `role` — `worker` or
+`manager` — and the role selects exactly four things: the system prompt, what the run is
+attached to (a task or a conversation), the container image, and what the run's board
+credential is bound to. Everything else is shared: one dispatch, one lease, one pool, one quota
+gate, one `run` row, one event ingest, one retry ladder, one `atm.run`. A pull request that adds
+a role check inside the lease, the pool, the quota gate or the turn is wrong by construction.
+
+The two lanes are the one exception, and they are a capacity decision rather than a behaviour
+one: `ORCHESTRATOR_MAX_CONCURRENCY` worker slots and `ORCHESTRATOR_MAX_CHAT_CONCURRENCY` chat
+slots, so a person waiting on an answer is never queued behind two hour-long worker runs. The
+box's ceiling is the sum.
+
+Each unit of work goes through the same sequence, and the order is the design:
 
 ```
 signal → drain run commands → read the column → plan → quota → pool → lease →
@@ -296,7 +371,8 @@ bun run loop:check --docker  # the same claims with the turn in a real container
 bun run loop:check --live    # the same, on the real provider — this one costs money
 ```
 
-`loop:check` files a task, watches the loop run it into *review*, then kills a second loop
+`loop:check` files a task, watches the loop run it into *review*, opens a conversation and
+watches the same loop answer it as a `role: manager` run with no task, then kills a second loop
 mid-run with `SIGKILL` and proves the restart closes the killed run as `lost`.
 
 `--docker` runs that first half with the turn inside `atm.local/base:latest` and adds the three
@@ -309,13 +385,24 @@ the operator's `${DATA_ROOT}/bin/turn.js`. It skips the kill half, which is a cl
 loop and needs no container.
 
 Knobs: `ORCHESTRATOR_MAX_CONCURRENCY` (default 2, sized for a 4-core box),
-`ORCHESTRATOR_POLL_INTERVAL_MS`, `ORCHESTRATOR_LEASE_STALE_MS`, `ORCHESTRATOR_MAX_ATTEMPTS`,
-`ORCHESTRATOR_RUN_TIMEOUT_MS`, `ORCHESTRATOR_DEFAULT_PROVIDER`, `LOOP_SHUTDOWN_GRACE_MS`.
+`ORCHESTRATOR_MAX_CHAT_CONCURRENCY` (default 1), `ORCHESTRATOR_POLL_INTERVAL_MS`,
+`ORCHESTRATOR_LEASE_STALE_MS`, `ORCHESTRATOR_MAX_ATTEMPTS`, `ORCHESTRATOR_RUN_TIMEOUT_MS`,
+`ORCHESTRATOR_CHAT_TIMEOUT_MS`, `ORCHESTRATOR_DEFAULT_PROVIDER`,
+`ORCHESTRATOR_GATEWAY_URL`, `ORCHESTRATOR_AGENT_TOKEN_TTL_MS`, `LOOP_SHUTDOWN_GRACE_MS`.
+
+**Every turn gets the board tools**, worker and manager alike: the loop mints a scoped token
+per run, writes an `mcp-servers.json` onto that run's mount before the container starts and
+deletes it on every exit path. A worker's token is bound to its one task, a manager's to its
+conversation — the same credential, one bound narrower. `ORCHESTRATOR_GATEWAY_URL` is the
+gateway **as a container resolves it** (`http://host.docker.internal:3100` on macOS); unset, a
+turn runs with no board tools and the loop says so once at boot. `bun run agent-mcp:build` has
+to have bundled the tools to `${DATA_ROOT}/bin/agent-mcp.js` first; a missing bundle fails the
+run rather than producing an agent that answers confidently with no board access.
 
 ## Gateway (`bun run gateway:start`, `bun run gateway:check`)
 
 **One typed contract, four consumers.** `packages/api` declares every operation — projects,
-tasks, comments, sessions, runs, run commands, artifacts — as an Effect `HttpApi` and holds no
+tasks, comments, sessions, runs, run commands, artifacts, conversations — as an Effect `HttpApi` and holds no
 handlers at all. `apps/gateway` implements it group by group over the repositories, and
 `openapi.json` falls out of the same value. That derivation is the whole reason this is HttpApi
 rather than RPC: an external agent reaching the board through [Executor](https://executor.sh)
@@ -372,62 +459,75 @@ bun run gateway:check   # own data root and port, seconds, no model calls
 
 `gateway:check` starts the gateway as a child process, drives a whole task lifecycle over a real
 socket — file a project, file a task, comment, walk it `ideas → backlog → in progress → review →
-done`, list its runs, queue a run command, upload and read an artifact, stream a run's timeline —
-then stops it with `SIGTERM` and audits the ledger it flushed: every request left exactly one
+done`, list its runs, queue a run command, upload and read an artifact, stream a run's timeline,
+then open a conversation belonging to no chat, say something into it, read it and its turns
+back, force-send and archive it — then stops it with `SIGTERM` and audits the ledger it flushed: every request left exactly one
 row, no row carries a path where a pattern belongs, and each of the four refusals left a row
 saying why. Each call mints its own `traceparent`, which is what makes both halves of that
 provable at once.
 
-**One thing on the Phase 5 list is not wired, and the check says so out loud.** The `traceId` of
-a task-create request reaches the audit row that request wrote, but it does not reach the
-`atm.run` row of the run that follows: nothing the gateway writes can carry a trace to the loop —
-`run_command` has no trace column, `task` has none either, and `RunRepo.create`'s only caller is
-the orchestrator passing its own claim span. `gateway:check` prints it as a `GAP` line on every
-run rather than asserting something weaker.
+**The trace reaches the run, and both halves are checked.** A card filed into *in progress*
+carries the asking request's `traceparent` on `task.dispatch_traceparent`; the loop adopts it
+when it claims the card, so the `atm.run` row of the run that follows shares the trace of the
+request that asked for it. `gateway:check` claims the stamp is written and cleared on the way
+out of the column — so no later run joins a spent request — and `loop:check` claims the run row
+carries it.
 
-## Telegram bot and manager agent (`bun run bot:start`, `bun run bot:check`)
+## Telegram bot (`bun run bot:start`, `bun run bot:check`)
 
-`apps/bot` is the conversational way in. One inbound message becomes one manager turn: a
-container running the same agent CLI a worker run uses, with no repo, no task folder and
-exactly one set of tools — the board, over the gateway's own HTTP contract as a stdio MCP
-server. The manager files and moves tasks; the loop runs them.
+`apps/bot` is an interface and nothing else: intake, rendering, queueing, buttons. It starts no
+container, builds no prompt, mints no turn credential and holds no turn in a fiber. An inbound
+message becomes a `chat_message` row; the insert trigger wakes the loop, which runs the turn as
+a `role: manager` run and writes the answer back as another row. The bot renders that row.
 
 **The boundary.** The bot owns the conversation and the gateway owns the board. `chat_thread`,
 `chat_message` and `chat_notification` are read and written directly, on the bot's own pool.
-Every project, task, comment and run command — whether a tapped button or a manager tool call —
-goes over the gateway with a freshly minted `manager` token carrying the conversation that
-caused it, so `actor_thread_id` lands on the audit row and a later notice about that task comes
-back to the same chat. There is no third path, and it is a compile error rather than a rule:
-the bot's store provides no `CurrentActor`, so a board write from this app names the missing
-service.
+Every project, task, comment and run command a *tapped button* asks for goes over the gateway
+with a freshly minted `manager` token carrying the conversation that caused it, so
+`actor_thread_id` lands on the audit row and a later notice about that task comes back to the
+same chat. There is no third path, and it is a compile error rather than a rule: the bot's
+store provides no `CurrentActor`, so a board write from this app names the missing service.
 
 **Who it answers.** `TELEGRAM_ALLOWLIST`, as `telegramUserId:workspaceId:userId` entries
 separated by commas. There is no link-code flow. A malformed entry fails the boot rather than
 dropping one person's messages silently, and an account that is not on the list gets one
 sentence and one `atm.chat` row saying `not_allowed`.
 
+**One live turn per conversation.** A message that arrives while a turn is running is stored
+anyway and answered with one line saying how many are waiting, carrying a *Force send* button;
+a second one edits that line rather than sending another. The button files a `stop` run command
+naming the thread, so the turn closes as `interrupted` and everything said since it started is
+still unread — which is what the next turn reads. Nothing coalesces messages in the bot: a
+watermark does it, the same one that gives a resumed worker every comment since it last looked.
+A conversation opened over `POST /threads` from a dashboard behaves identically, because it is
+the same row and the same trigger.
+
 **What it says without being asked.** A run that finishes, fails or lands in review wakes the
-listener on `atm_run_event` — the same channel the loop publishes on, not a second poller — and
-the notice goes into the conversation that asked for the work, with *Start* / *Approve* /
-*Comment* buttons. `chat_notification` is a claim ledger keyed on
+listener on `atm_run_event` — the same channel the loop publishes on, not a second poller. A
+terminal event carrying a task is a notice into the conversation that asked for the work, with
+*Start* / *Approve* / *Comment* buttons; one carrying none is a manager turn ending, and its
+answer goes into its thread. `chat_notification` is a claim ledger keyed on
 `${kind}:${taskId}:${runId}`, so a restart between claim and send re-sends rather than losing
 it, and a duplicate is the failure it chooses. Beside it, a scan looks at live runs every
 minute for a run repeating the same tool calls with no file edit — surfaced, never acted on.
 
-**Before the first turn**, `bun run manager-mcp:build` has to have bundled the board tools to
-`${DATA_ROOT}/bin/manager-mcp.js`. A missing bundle is a readable failure, not a manager that
-answers confidently with no board access. `MANAGER_GATEWAY_URL` is the gateway **as the
-container resolves it** (`http://host.docker.internal:3100` on macOS); `BOT_GATEWAY_URL` is the
-same server as the bot process reaches it.
+There is no `/clear`. A conversation's session is a row on the thread, so the honest way to
+start from nothing is `/new`, whose first turn is prompted from the whole thread with no
+session behind it. `BOT_GATEWAY_URL` is the gateway as the bot process reaches it; the loop's
+`ORCHESTRATOR_GATEWAY_URL` is a different address for the same server, resolved from inside a
+container.
 
 `bun run bot:check` proves the wiring without a token and without one call to Telegram: the real
 handlers, registered in the real order on a real grammy `Bot`, driven with synthetic updates
 through `bot.handleUpdate`, against a real Postgres. Every Telegram API call is answered by a
-transformer on `bot.api`, and the manager turn is a layer that answers without a container. It
-asserts that a refused account leaves a row with no identity on it, that a text message opens a
-conversation and stores the message, that `/new` and a *Switch* button move the current thread,
-that a run-finished notice renders, and that the stuck rule fires on a repeating window and
-holds off on one that edited a file.
+transformer on `bot.api`, and the gateway client is the one substitution the composition root
+allows. It asserts that a refused account leaves a row with no identity on it, that a text
+message opens a conversation and stores it, that a message sent mid-turn is stored and answered
+with a *Force send* line a second one edits rather than repeats, that the tap asks the board to
+stop *that thread* by name, that the finished turn's own row is what the conversation is
+answered with, that `/new` and a *Switch* button move the current thread, that a run-finished
+notice renders, and that the stuck rule fires on a repeating window and holds off on one that
+edited a file.
 
 ## Event ledger (`bun run logs`)
 

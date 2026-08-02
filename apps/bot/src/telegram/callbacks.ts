@@ -19,7 +19,7 @@
  * the dashboard.
  */
 
-import type { SessionProvider, ThreadId } from "@workspace/domain";
+import type { ThreadId } from "@workspace/domain";
 import { Effect, FiberSet, Option } from "effect";
 import type { Bot } from "grammy";
 import { CurrentChatProgress, observeChat } from "../chat-event";
@@ -54,8 +54,6 @@ const TRANSITIONS = {
 export interface CallbackOptions {
   readonly bot: Bot<BotContext>;
   readonly pending: PendingComments;
-  /** Which harness a freshly opened thread talks to. */
-  readonly provider: SessionProvider;
 }
 
 /**
@@ -67,7 +65,7 @@ export interface CallbackOptions {
 export const registerCallbacks = Effect.fnUntraced(function* (
   options: CallbackOptions
 ) {
-  const { bot, pending, provider } = options;
+  const { bot, pending } = options;
   const board = yield* Board;
   const run = yield* FiberSet.makeRuntimePromise<CommandServices>();
 
@@ -96,7 +94,6 @@ export const registerCallbacks = Effect.fnUntraced(function* (
   const currentThread = (ctx: BotContext, chatId: number) =>
     ensureThread({
       chatId: telegramChatIdOf(chatId),
-      provider,
       userId: ctx.identity.userId,
       workspaceId: ctx.identity.workspaceId,
     });
@@ -158,8 +155,37 @@ export const registerCallbacks = Effect.fnUntraced(function* (
     );
   });
 
+  /**
+   * Stop the turn a conversation is waiting on — what *Force send* does.
+   *
+   * A stop naming the thread, filed on the same queue a human's Stop on a task
+   * goes through. What was said while the turn ran is still unread, so the next
+   * turn reads it; nothing is handed to a container from here.
+   */
+  const onForceSend = Effect.fnUntraced(function* (input: {
+    readonly ctx: BotContext;
+    readonly threadId: ThreadId;
+  }) {
+    const { ctx, threadId } = input;
+    const queued = yield* board
+      .stopThread({ actor: actorOf(ctx, threadId), threadId })
+      .pipe(Effect.option);
+
+    if (Option.isNone(queued)) {
+      yield* answer(ctx, "That did not reach the board.");
+      return;
+    }
+    const { rejectedReason } = queued.value;
+    yield* answer(
+      ctx,
+      rejectedReason === null
+        ? "Stopping this turn — the next one reads what is waiting."
+        : `Refused: ${rejectedReason}`
+    );
+  });
+
   /** Make one conversation the chat's current one. */
-  const onThread = Effect.fnUntraced(function* (input: {
+  const onSwitch = Effect.fnUntraced(function* (input: {
     readonly ctx: BotContext;
     readonly threadId: ThreadId;
   }) {
@@ -200,7 +226,10 @@ export const registerCallbacks = Effect.fnUntraced(function* (
           return;
         }
         if (data.kind === "thread") {
-          yield* onThread({ ctx, threadId: data.threadId });
+          yield* (data.verb === "thfs" ? onForceSend : onSwitch)({
+            ctx,
+            threadId: data.threadId,
+          });
           return;
         }
 
@@ -209,7 +238,6 @@ export const registerCallbacks = Effect.fnUntraced(function* (
           ctx,
           key: data.key,
           page: data.page,
-          provider,
           threadId: thread.id,
         });
         yield* redraw(ctx, rendered);

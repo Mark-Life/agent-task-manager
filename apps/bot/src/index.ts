@@ -12,21 +12,21 @@
  *
  * **The update is handled in a fiber grammy does not wait for.** grammy's
  * built-in poller runs updates one at a time (`for (const update of updates)
- * await this.handleUpdate(update)`), so awaiting a five-minute manager turn here
- * would make the bot deaf to the `/stop` that ends it. Forking is what makes the
- * queue in `dispatch.ts`, and `/stop` itself, reachable at all. The fibers live
- * in a set the program's scope owns, so a `SIGTERM` interrupts them and their
- * containers rather than leaving them behind.
+ * await this.handleUpdate(update)`), so awaiting a slow transcription here would
+ * make the bot deaf to the `/stop` that follows it. The fibers live in a set the
+ * program's scope owns, so a `SIGTERM` interrupts them rather than leaving them
+ * behind.
  *
  * **Two long-lived fibers run beside the poller.** The notification listener
- * hears `atm_run_event` on the store's own connection and repairs undelivered
- * claims on a tick; the stuck watch scans live runs for a run repeating itself.
- * Both are forked into the same scope and interrupted with it.
+ * hears `atm_run_event` on the store's own connection — that is where a
+ * finished worker run becomes a notice and a finished conversation turn becomes
+ * an answer — and repairs undelivered claims on a tick; the stuck watch scans
+ * live worker runs for one repeating itself. Both are forked into the same scope
+ * and interrupted with it.
  */
 
 import type { Telemetry } from "@workspace/telemetry";
 import { Effect, FiberSet, type Ref } from "effect";
-import type { FileSystem } from "effect/FileSystem";
 import type { ChatProgress, ChatUpdateKind } from "./chat-event";
 import {
   CurrentChatProgress,
@@ -35,20 +35,16 @@ import {
   withChatEvent,
 } from "./chat-event";
 import type { BotWiring } from "./layers";
-import { ManagerTurn } from "./manager/turn";
 import { runNotifyListener } from "./notify";
 import { StuckScan } from "./stuck/scan";
 import { registerAccess } from "./telegram/access";
 import { Allowlist, type AllowlistOps } from "./telegram/allowlist";
+import { makeQueueNotices } from "./telegram/answer";
 import { BotService } from "./telegram/bot-service";
 import { registerCallbacks } from "./telegram/callbacks";
 import { publishBotCommands, registerCommands } from "./telegram/commands";
 import type { BotContext } from "./telegram/context";
-import {
-  makeDispatcher,
-  makePendingComments,
-  type RunManagerTurn,
-} from "./telegram/dispatch";
+import { makeDispatcher, makePendingComments } from "./telegram/dispatch";
 import { registerIntake } from "./telegram/intake";
 
 /**
@@ -102,7 +98,7 @@ const chatContextOf = (options: {
 };
 
 /** What the update-handling fibers and the background fibers need. */
-type UpdateServices = FileSystem | ManagerTurn | Telemetry;
+type UpdateServices = Telemetry;
 
 /**
  * Registers every handler on the bot, in the order the module note gives.
@@ -110,15 +106,13 @@ type UpdateServices = FileSystem | ManagerTurn | Telemetry;
  * Separate from {@link runBot} because registration and *running* are different
  * things: this one is complete without a network, which is what lets
  * `bun run bot:check` drive the real handlers with synthetic updates and no
- * token. Scoped — the router's fiber map and the update fiber set belong to the
- * caller's scope, so closing it interrupts a turn and its container rather than
- * orphaning them.
+ * token. Scoped — the update fiber set belongs to the caller's scope, so closing
+ * it interrupts an update in flight rather than orphaning it.
  */
 export const registerHandlers = Effect.fnUntraced(function* (
   wiring: BotWiring
 ) {
   const allowlist = yield* Allowlist;
-  const manager = yield* ManagerTurn;
   const telegram = yield* BotService;
   const { bot } = telegram;
 
@@ -155,52 +149,21 @@ export const registerHandlers = Effect.fnUntraced(function* (
       ).then(() => undefined),
   });
 
-  const services = yield* Effect.context<FileSystem>();
-
-  /**
-   * One message into one container turn.
-   *
-   * The turn answers into the chat, writes its own `chat_message` row and
-   * records the session the next turn resumes; what comes back is what the
-   * update's row folds in. It is handed plain values rather than a grammy
-   * context, because a context captured before a long turn replies into a
-   * conversation that has moved on.
-   */
-  const runTurn: RunManagerTurn = (request) =>
-    manager
-      .run({
-        chatId: request.thread.chatId,
-        isPrivateChat: request.isPrivateChat,
-        message: request.message,
-        messageId: request.messageId,
-        replyToMessageId: request.replyToMessageId,
-        thread: request.thread,
-      })
-      .pipe(Effect.provideContext(services));
-
+  const notices = makeQueueNotices();
   const pending = makePendingComments();
   const dispatcher = yield* makeDispatcher({
     api: telegram.api,
     botToken: wiring.botToken,
+    notices,
     pending,
-    provider: wiring.env.managerProvider,
-    runTurn,
   });
 
-  yield* registerCommands({
-    bot,
-    dispatcher,
-    provider: wiring.env.managerProvider,
-  });
-  yield* registerCallbacks({
-    bot,
-    pending,
-    provider: wiring.env.managerProvider,
-  });
+  yield* registerCommands({ bot });
+  yield* registerCallbacks({ bot, pending });
   // Last: it claims every message the commands above did not.
   registerIntake(bot, dispatcher.handleUpdate);
 
-  return { dispatcher, pending, runUpdate, telegram } as const;
+  return { dispatcher, notices, pending, runUpdate, telegram } as const;
 });
 
 /**
@@ -213,10 +176,13 @@ export const registerHandlers = Effect.fnUntraced(function* (
 export const runBot = Effect.fnUntraced(function* (wiring: BotWiring) {
   const allowlist = yield* Allowlist;
   const scan = yield* StuckScan;
-  const { runUpdate, telegram } = yield* registerHandlers(wiring);
+  const { notices, runUpdate, telegram } = yield* registerHandlers(wiring);
 
   yield* Effect.forkScoped(
-    runNotifyListener({ repairIntervalMs: wiring.env.notifyRepairIntervalMs })
+    runNotifyListener({
+      notices,
+      repairIntervalMs: wiring.env.notifyRepairIntervalMs,
+    })
   );
   yield* Effect.forkScoped(
     scan.watch({ workspaceIds: allowlist.workspaceIds })
@@ -227,8 +193,9 @@ export const runBot = Effect.fnUntraced(function* (wiring: BotWiring) {
   );
 
   // Pending updates are dropped: a bot that was down for an hour would otherwise
-  // wake up and spend a container turn on every message it missed, all at once,
-  // answering conversations that have moved on.
+  // wake up and file a row for every message it missed, all at once, and the
+  // loop would spend a turn on each of them answering conversations that have
+  // moved on.
   return yield* telegram
     .runPolling({
       dropPendingUpdates: true,
@@ -237,7 +204,7 @@ export const runBot = Effect.fnUntraced(function* (wiring: BotWiring) {
     .pipe(
       Effect.onInterrupt(() =>
         Effect.logInfo(
-          "shutdown requested — stopping the poller, interrupting live turns, flushing telemetry"
+          "shutdown requested — stopping the poller, draining updates in flight, flushing telemetry"
         )
       )
     );

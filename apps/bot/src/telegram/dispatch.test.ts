@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { TaskId } from "@workspace/domain";
 import { BOT_COMMANDS, HELP_TEXT } from "./commands";
-import { ManagerTurnError, makePendingComments } from "./dispatch";
+import { makePendingComments } from "./dispatch";
 import { BUTTON_COMMANDS } from "./keyboard";
 
 const TASK_ID = TaskId.make("0195f2a0-1c3d-7a11-8f2e-0b1c2d3e4f50");
@@ -73,22 +73,5 @@ describe("makePendingComments", () => {
     pending.arm({ chatId: CHAT, taskId: OTHER_TASK_ID });
 
     expect(pending.take(CHAT)).toBe(OTHER_TASK_ID);
-  });
-});
-
-describe("ManagerTurnError", () => {
-  test("a stop and a crash are different endings", () => {
-    const stopped = new ManagerTurnError({
-      detail: "interrupted by /stop",
-      kind: "interrupted",
-    });
-    const crashed = new ManagerTurnError({
-      detail: "Sandbox.ContainerFailed",
-      kind: "errored",
-    });
-
-    expect(stopped.kind).not.toBe(crashed.kind);
-    expect(stopped.message).toContain("interrupted");
-    expect(crashed.message).toContain("Sandbox.ContainerFailed");
   });
 });

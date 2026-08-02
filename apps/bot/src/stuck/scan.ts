@@ -248,8 +248,12 @@ const make = Effect.gen(function* () {
     yield* Effect.annotateCurrentSpan({ workspaceId: input.workspaceId });
     const now = yield* DateTime.now;
     const live = yield* runs.listLive({ workspaceId: input.workspaceId });
+    // Worker runs only. A conversation's turn is minutes at most and has no
+    // task to announce against, so the repetition rule has nothing to say
+    // about one and nowhere to say it.
+    const working = live.filter((run) => run.taskId !== null);
 
-    const judged = yield* Effect.forEach(live, (run) =>
+    const judged = yield* Effect.forEach(working, (run) =>
       judge({ now, run }).pipe(
         Effect.map((result) => ({ ...result, run })),
         Effect.catchCause((cause) =>
@@ -274,15 +278,20 @@ const make = Effect.gen(function* () {
 
     const alerts: StuckAlert[] = [];
     for (const result of judged) {
-      if (result === null || result.verdict.kind !== "stuck") {
+      if (
+        result === null ||
+        result.verdict.kind !== "stuck" ||
+        result.run.taskId === null
+      ) {
         continue;
       }
+      const { taskId } = result.run;
       const task = yield* tasks
-        .byId({ id: result.run.taskId, workspaceId: input.workspaceId })
+        .byId({ id: taskId, workspaceId: input.workspaceId })
         .pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("stuck scan: task unreadable", cause).pipe(
-              Effect.annotateLogs({ taskId: result.run.taskId }),
+              Effect.annotateLogs({ taskId }),
               Effect.as(null)
             )
           )

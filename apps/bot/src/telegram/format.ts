@@ -1,22 +1,15 @@
 /**
- * The two markup dialects this bot speaks, and where the line between them is.
+ * The one markup dialect this bot speaks: Telegram HTML, with a small closed
+ * tag set and every interpolated value escaped on the way in.
  *
- * **Markdown is for what a model wrote.** The manager's answers are markdown
- * because that is what a coding model produces unprompted, and Telegram's rich
- * message API takes it raw — no escaping, because escaping a model's markdown
- * is how a code fence turns into literal backslashes.
- *
- * **HTML is for what this bot wrote.** Every list of tasks, every footer, every
- * status line is assembled here and rendered as Telegram HTML, where the tag
- * set is small and closed and every interpolated value goes through
- * `escapeHtml` on the way in. A task title is somebody's text; a repository
- * name came off the internet. The one rule this module exists to hold is that
- * bot chrome and model output never share a parse mode, because the escaping
- * they need is opposite.
+ * Everything that reaches a chat is assembled here — a list of tasks, a
+ * notice, a footer, an answer somebody's model wrote. A task title is
+ * somebody's text and a repository name came off the internet, so the escape
+ * is not optional and there is no second parse mode to forget it in.
  *
  * `blockquote expandable` is doing real work rather than decorating: Telegram
- * collapses it to a few lines with a tap to open, which is what keeps a
- * forty-line tool trace from burying the answer under it.
+ * collapses it to a few lines with a tap to open, which is what keeps a long
+ * quoted body from burying the line above it.
  */
 
 import type { RunOutcome, TaskStatus } from "@workspace/domain";
@@ -24,9 +17,6 @@ import { escapeHtml, formatDuration } from "./helpers";
 
 /** Lines past which a quoted block is worth collapsing. */
 const EXPANDABLE_FROM_LINES = 4;
-
-/** Room left for the markup around a quoted body inside one message. */
-const QUOTE_MARKUP_HEADROOM = 200;
 
 /** Decimal places on a dollar figure a person reads, not one an accountant sums. */
 const COST_DECIMALS = 4;
@@ -84,43 +74,6 @@ export const blockquote = (options: {
   return escaped.split("\n").length >= expandFrom
     ? `<blockquote expandable>${escaped}</blockquote>`
     : `<blockquote>${escaped}</blockquote>`;
-};
-
-/**
- * Render the tool calls of a turn as one italic block, collapsed once there are
- * enough of them to matter. Returns the HTML and the plain text behind it, so a
- * send that loses its parse mode still says something.
- */
-export const renderToolLines = (lines: readonly string[]) => {
-  const plain = lines.join("\n");
-  const body = lines.map((line) => italic(line)).join("\n");
-  const html =
-    lines.length >= EXPANDABLE_FROM_LINES
-      ? `<blockquote expandable>${body}</blockquote>`
-      : body;
-  return { html, plain };
-};
-
-/**
- * Render reasoning as a collapsed italic quote, keeping the tail when it does
- * not fit. The tail rather than the head: the last thing the model thought is
- * the part that explains what it did next.
- */
-export const renderReasoning = (options: {
-  readonly maxChars: number;
-  readonly text: string;
-}) => {
-  const budget = Math.max(1, options.maxChars - QUOTE_MARKUP_HEADROOM);
-  const plain =
-    options.text.length > budget
-      ? `...${options.text.slice(options.text.length - budget)}`
-      : options.text;
-  const escaped = escapeHtml(plain);
-  const html =
-    escaped.split("\n").length >= EXPANDABLE_FROM_LINES
-      ? `<blockquote expandable><i>${escaped}</i></blockquote>`
-      : `<i>${escaped}</i>`;
-  return { html, plain };
 };
 
 /** What a finished turn cost, in the shape a footer wants. */

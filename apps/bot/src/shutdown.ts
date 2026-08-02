@@ -3,19 +3,18 @@
  *
  * The ordinary path belongs to the runtime and the layer scope, not to this
  * file. `BunRuntime.runMain` interrupts the root fiber on SIGINT and SIGTERM,
- * grammy stops asking for updates and finishes the one it is holding, the fiber
- * map interrupts whatever manager turns are still in a container, and only then
- * do the layers finalize. That last step is the one worth naming: the OTLP
+ * grammy stops asking for updates and finishes the one it is holding, and only
+ * then do the layers finalize. That last step is the one worth naming: the OTLP
  * exporter buffers and ships on scope finalization, so a process that exits
  * without closing its scope drops the last batch of events it produced —
  * exactly the ones somebody will be looking for.
  *
  * The two failures this file does own:
  *
- * **Shutdown that never finishes.** A container ignoring SIGTERM, a long-poll
- * that will not cancel, a connection that will not drain. Under a supervisor
- * that is an outage which looks like a graceful stop, so the graceful path gets
- * a budget and exits non-zero when it runs out.
+ * **Shutdown that never finishes.** A long-poll that will not cancel, a
+ * connection that will not drain. Under a supervisor that is an outage which
+ * looks like a graceful stop, so the graceful path gets a budget and exits
+ * non-zero when it runs out.
  *
  * **An operator who wants out now.** A second signal skips the budget: a
  * deliberate loss of the last events, chosen out loud.

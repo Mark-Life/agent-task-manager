@@ -1,14 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  blockquote,
-  bold,
-  code,
-  formatFooter,
-  link,
-  renderReasoning,
-  renderToolLines,
-  taskLine,
-} from "./format";
+import { blockquote, bold, code, formatFooter, link, taskLine } from "./format";
 
 describe("html primitives", () => {
   test("escape what they wrap", () => {
@@ -33,36 +24,6 @@ describe("blockquote", () => {
   test("collapses once it is long enough to be in the way", () => {
     expect(blockquote({ text: "a\nb\nc\nd" })).toContain(
       "<blockquote expandable>"
-    );
-  });
-});
-
-describe("renderToolLines", () => {
-  test("keeps the plain text beside the markup", () => {
-    const rendered = renderToolLines(["Read: a.ts", "Edit: b.ts"]);
-    expect(rendered.plain).toBe("Read: a.ts\nEdit: b.ts");
-    expect(rendered.html).toBe("<i>Read: a.ts</i>\n<i>Edit: b.ts</i>");
-  });
-
-  test("collapses a long trace", () => {
-    const rendered = renderToolLines(["a", "b", "c", "d"]);
-    expect(rendered.html.startsWith("<blockquote expandable>")).toBe(true);
-  });
-
-  test("escapes a tool summary", () => {
-    expect(renderToolLines(["Bash: <rm>"]).html).toContain("&lt;rm&gt;");
-  });
-});
-
-describe("renderReasoning", () => {
-  test("keeps the tail, not the head", () => {
-    const rendered = renderReasoning({ maxChars: 203, text: "abcdefghij" });
-    expect(rendered.plain).toBe("...hij");
-  });
-
-  test("leaves short text whole", () => {
-    expect(renderReasoning({ maxChars: 1000, text: "short" }).plain).toBe(
-      "short"
     );
   });
 });

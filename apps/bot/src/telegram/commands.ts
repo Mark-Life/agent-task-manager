@@ -3,12 +3,12 @@
  *
  * A command is the surface a person reaches for when they know what they want,
  * and there are only three kinds of them here. **Conversation** — `/new`,
- * `/threads`, `/switch`, `/clear`, `/history` — is the bot's own state, held in
- * Postgres and reached through the thread repository. **Board** — `/tasks`,
- * `/board`, `/stop`, `/rerun`, `/next` — is not the bot's, and every one of
- * them is a gateway call under a freshly minted manager token; nothing here
- * writes a task row or touches a container. **Orientation** — `/start`,
- * `/help`, `/status` — says where you are.
+ * `/threads`, `/switch`, `/history` — is the bot's own state, held in Postgres
+ * and reached through the thread repository. **Board** — `/tasks`, `/board`,
+ * `/stop`, `/rerun`, `/next` — is not the bot's, and every one of them is a
+ * gateway call under a freshly minted token; nothing here writes a task row or
+ * touches a container. **Orientation** — `/start`, `/help`, `/status` — says
+ * where you are.
  *
  * The lists themselves are drawn in `./views`, because a tapped *Next* has to
  * redraw exactly what the command drew and both go through the same function
@@ -16,29 +16,28 @@
  *
  * `/stop` is the one command with two meanings, and they are not ambiguous:
  * with a task id it queues a stop for that task's run, and with nothing it
- * interrupts the manager turn this conversation is waiting on. A person who
- * types `/stop` while the bot is thinking means the thinking.
+ * queues one for the turn this conversation is waiting on. A person who types
+ * `/stop` while the bot is thinking means the thinking. Both are the same row
+ * on the same queue, which is why neither is a second way to kill a container.
  */
 
 import {
   type ChatMessageRepo,
-  ChatThreadRepo,
+  type ChatThreadRepo,
   RunRepo,
   THREAD_TITLE_MAX_CHARS,
 } from "@workspace/db";
-import { type SessionProvider, TaskId } from "@workspace/domain";
+import { TaskId } from "@workspace/domain";
 import { DateTime, Effect, FiberSet, Option, Schema } from "effect";
 import type { Api, Bot, InlineKeyboard } from "grammy";
 import { CurrentChatProgress, observeChat } from "../chat-event";
 import { actorFor, Board } from "./board";
 import type { PageKey } from "./callback-data";
 import type { BotContext } from "./context";
-import type { Dispatcher } from "./dispatch";
 import { bold, code, italic } from "./format";
 import { escapeHtml, formatRelativeTime } from "./helpers";
 import { mainKeyboard } from "./keyboard";
 import {
-  clearThread,
   ensureThread,
   startThread,
   telegramChatIdOf,
@@ -63,7 +62,6 @@ export const BOT_COMMANDS = [
   { command: "new", description: "Start a new conversation" },
   { command: "threads", description: "Your conversations" },
   { command: "switch", description: "Switch to another conversation" },
-  { command: "clear", description: "Forget this conversation's session" },
   { command: "history", description: "What was said in this conversation" },
   { command: "stop", description: "Stop the turn, or a task's run" },
   { command: "rerun", description: "Run a task again" },
@@ -76,23 +74,22 @@ export const HELP_TEXT = [
   "Send a message, a voice note or a forward. It becomes one turn of the conversation, and the manager works the board through it.",
   "",
   bold("Conversation"),
-  `${code("/new")} — start a fresh conversation`,
+  `${code("/new")} — start a fresh conversation, with no session behind it`,
   `${code("/threads")} — your conversations, newest first`,
   `${code("/switch")} — make another conversation the current one`,
-  `${code("/clear")} — forget the provider's session, keep the history`,
   `${code("/history")} — what was said here`,
   "",
   bold("Board"),
   `${code("/tasks")} — every task, by column`,
   `${code("/board")} — the board`,
-  `${code("/stop")} — interrupt the turn in flight`,
+  `${code("/stop")} — stop the turn in flight, so what is queued is read next`,
   `${code("/stop <taskId>")} — ask the orchestrator to stop that task's run`,
   `${code("/rerun <taskId>")} — run that task again`,
   `${code("/next <taskId>")} — move it to the top of its column, which is the queue`,
   "",
   bold("Orientation"),
   `${code("/start")} — the menu, and a conversation to say it in`,
-  `${code("/status")} — live runs, and what this conversation is resuming`,
+  `${code("/status")} — live runs, and what this conversation is doing`,
 ].join("\n");
 
 /**
@@ -139,9 +136,6 @@ const parseTaskId = Schema.decodeUnknownOption(TaskId);
 /** What registering the commands takes. */
 export interface CommandOptions {
   readonly bot: Bot<BotContext>;
-  readonly dispatcher: Dispatcher;
-  /** Which harness a freshly opened thread talks to. */
-  readonly provider: SessionProvider;
 }
 
 /** What the command handlers need from the layer stack. */
@@ -161,10 +155,9 @@ export type CommandServices =
 export const registerCommands = Effect.fnUntraced(function* (
   options: CommandOptions
 ) {
-  const { bot, dispatcher, provider } = options;
+  const { bot } = options;
   const board = yield* Board;
   const runs = yield* RunRepo;
-  const threadRepo = yield* ChatThreadRepo;
   const run = yield* FiberSet.makeRuntimePromise<CommandServices>();
 
   /**
@@ -211,7 +204,6 @@ export const registerCommands = Effect.fnUntraced(function* (
   const currentThread = (ctx: BotContext, chatId: number) =>
     ensureThread({
       chatId: telegramChatIdOf(chatId),
-      provider,
       userId: ctx.identity.userId,
       workspaceId: ctx.identity.workspaceId,
     });
@@ -282,22 +274,26 @@ export const registerCommands = Effect.fnUntraced(function* (
         const live = yield* runs.listLive({
           workspaceId: ctx.identity.workspaceId,
         });
-        const busy = yield* dispatcher.isBusy(thread.id);
-        const depth = dispatcher.queueDepth(thread.id);
+        const turn = yield* runs.liveForThread({
+          threadId: thread.id,
+          workspaceId: thread.workspaceId,
+        });
         const now = yield* DateTime.now;
         yield* say(
           ctx,
           [
             `${bold(threadTitle(thread))}`,
             `provider: ${code(thread.provider)}`,
-            `session: ${thread.providerSessionId === null ? italic("fresh") : code(thread.providerSessionId)}`,
             `last message: ${formatRelativeTime({ at: thread.lastMessageAt, now })}`,
-            busy
-              ? `turn: ${italic(`working${depth > 0 ? `, ${depth} queued` : ""}`)}`
-              : `turn: ${italic("idle")}`,
+            turn === null
+              ? `turn: ${italic("idle")}`
+              : `turn: ${italic(turn.status)} since ${formatRelativeTime({ at: turn.createdAt, now })}`,
             "",
             `${bold("Live runs")}: ${live.length}`,
-            ...live.map((entry) => `${code(entry.taskId)} ${entry.status}`),
+            ...live.map(
+              (entry) =>
+                `${code(entry.taskId ?? entry.threadId ?? entry.id)} ${entry.status}`
+            ),
           ].join("\n")
         );
       })
@@ -313,20 +309,15 @@ export const registerCommands = Effect.fnUntraced(function* (
         if (chatId === undefined) {
           return;
         }
-        const previous = yield* threadRepo.current({
-          chatId: telegramChatIdOf(chatId),
-          workspaceId: ctx.identity.workspaceId,
-        });
-        if (previous !== null) {
-          yield* dispatcher.interrupt(previous.id);
-        }
         yield* startThread({
           chatId: telegramChatIdOf(chatId),
-          provider,
           userId: ctx.identity.userId,
           workspaceId: ctx.identity.workspaceId,
         });
-        yield* say(ctx, "New conversation. The old one is still in /threads.");
+        yield* say(
+          ctx,
+          "New conversation, with no session behind it. The old one is still in /threads."
+        );
       })
     )
   );
@@ -341,14 +332,7 @@ export const registerCommands = Effect.fnUntraced(function* (
           return;
         }
         const thread = yield* currentThread(ctx, chatId);
-        yield* sendPage({
-          chatId,
-          ctx,
-          key,
-          page: 0,
-          provider,
-          threadId: thread.id,
-        });
+        yield* sendPage({ chatId, ctx, key, page: 0, threadId: thread.id });
       })
     );
 
@@ -357,29 +341,6 @@ export const registerCommands = Effect.fnUntraced(function* (
   bot.command("history", listCommand("history", "history"));
   bot.command("tasks", listCommand("tasks", "tasks"));
   bot.command("board", listCommand("board", "board"));
-
-  bot.command("clear", (ctx) =>
-    runCommand(
-      ctx,
-      "clear",
-      Effect.gen(function* () {
-        const chatId = ctx.chat?.id;
-        if (chatId === undefined) {
-          return;
-        }
-        const cleared = yield* clearThread({
-          chatId: telegramChatIdOf(chatId),
-          workspaceId: ctx.identity.workspaceId,
-        });
-        yield* say(
-          ctx,
-          cleared === null
-            ? "Nothing to clear yet."
-            : "Session cleared. The history stays; the next turn starts cold."
-        );
-      })
-    )
-  );
 
   bot.command("stop", (ctx) =>
     runCommand(
@@ -393,11 +354,21 @@ export const registerCommands = Effect.fnUntraced(function* (
         const raw = (ctx.match ?? "").trim();
         if (raw === "") {
           const thread = yield* currentThread(ctx, chatId);
-          const stopped = yield* dispatcher.interrupt(thread.id);
-          yield* say(
-            ctx,
-            stopped ? "Stopped this turn." : "Nothing is running here."
-          );
+          yield* board
+            .stopThread({
+              actor: actorFor({ ctx, threadId: thread.id }),
+              threadId: thread.id,
+            })
+            .pipe(
+              Effect.flatMap((queued) =>
+                reportCommand(
+                  ctx,
+                  queued,
+                  "Stopping this turn — the next one reads what is waiting."
+                )
+              ),
+              Effect.catch((error) => say(ctx, escapeHtml(error.message)))
+            );
           return;
         }
         const thread = yield* currentThread(ctx, chatId);

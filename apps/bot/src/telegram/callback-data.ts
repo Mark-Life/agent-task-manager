@@ -45,6 +45,14 @@ export const TASK_VERBS = [
   "cadd",
 ] as const;
 
+/** The buttons that act on one conversation. */
+export const THREAD_VERBS = [
+  /** Make this conversation the chat's current one. */
+  "thsw",
+  /** Stop the turn running in it, so what is queued behind it is read next. */
+  "thfs",
+] as const;
+
 /** The lists that paginate in place. Closed, because the key picks a renderer. */
 export const PAGE_KEYS = ["threads", "history", "tasks", "board"] as const;
 
@@ -58,11 +66,11 @@ const TaskCallback = Schema.Struct({
   verb: Schema.Literals(TASK_VERBS),
 });
 
-/** A button that makes one thread the chat's current thread. */
+/** A button that acts on one conversation. */
 const ThreadCallback = Schema.Struct({
   kind: Schema.tag("thread"),
   threadId: ThreadId,
-  verb: Schema.tag("thsw"),
+  verb: Schema.Literals(THREAD_VERBS),
 });
 
 /** A button that re-renders a paginated list in place. */
@@ -83,6 +91,9 @@ export type CallbackData = typeof CallbackData.Type;
 
 /** A task-scoped verb, derived so the button table and the router cannot drift. */
 export type TaskVerb = (typeof TASK_VERBS)[number];
+
+/** A conversation-scoped verb, derived the same way. */
+export type ThreadVerb = (typeof THREAD_VERBS)[number];
 
 /** Which paginated list a page button belongs to. */
 export type PageKey = (typeof PAGE_KEYS)[number];
@@ -131,7 +142,7 @@ const shapeOf = (parts: { readonly rest: string[]; readonly verb: string }) => {
   if ((TASK_VERBS as readonly string[]).includes(parts.verb)) {
     return { kind: "task", taskId: parts.rest[0], verb: parts.verb };
   }
-  if (parts.verb === "thsw") {
+  if ((THREAD_VERBS as readonly string[]).includes(parts.verb)) {
     return { kind: "thread", threadId: parts.rest[0], verb: parts.verb };
   }
   if (parts.verb === "pg") {

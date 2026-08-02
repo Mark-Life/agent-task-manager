@@ -43,7 +43,6 @@ import type { InlineKeyboard } from "grammy";
 import {
   emptyChatProgress,
   makeChatProgress,
-  observeChat,
   withChatEvent,
 } from "../chat-event";
 import { stuckConfig } from "../stuck/config";
@@ -157,7 +156,6 @@ const make = (options: NotifierOptions) =>
         splitAt: options.splitAt,
         text: delivery.text,
       }).pipe(
-        Effect.tap(() => observeChat({ replyChars: delivery.text.length })),
         // The last message carries the keyboard, so it is the one a tapped
         // button will be answering against.
         Effect.map((sent) => sent.at(-1)?.message_id ?? null),

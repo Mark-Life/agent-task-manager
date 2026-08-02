@@ -9,15 +9,21 @@
  * through `bot.handleUpdate` — the same entry point long polling uses. What is
  * substituted is the two things that would leave the machine: every Telegram API
  * call is answered by a transformer installed on `bot.api`, so `getMe`, a reply
- * and a callback answer are recorded rather than sent; and the manager turn is a
- * layer that answers without a container, because a real turn is a docker
- * daemon, a subscription credential and a model call.
+ * and a callback answer are recorded rather than sent; and the board client is a
+ * layer that records the calls a tapped button makes, because the gateway is a
+ * second process.
+ *
+ * Nothing here runs an agent, and after the cut nothing in `apps/bot` can: a
+ * message becomes a `chat_message` row, the insert trigger wakes the
+ * orchestrator, and the answer comes back as another row. The turns this check
+ * needs are therefore written straight into the store, exactly as the loop
+ * writes them.
  *
  * Everything else is the real thing. A real Postgres, the real allow-list parse,
  * the real access gate, the real router, the real thread repository, and the
  * real `atm.chat` ledger read back off the disk.
  *
- * Five claims:
+ * Seven claims:
  *
  * **The door.** An account nobody allow-listed is refused with one sentence and
  * leaves one row saying `not_allowed` with no user on it. A refusal that vanishes
@@ -25,6 +31,18 @@
  *
  * **The conversation.** A text message from an allow-listed account opens a
  * thread, stores the message, and leaves a row naming the thread.
+ *
+ * **The queue.** A message sent while the thread has a live turn is stored all
+ * the same and answered with one line carrying a *Force send* button; a second
+ * one edits that same line instead of sending another, which is what "several
+ * queued messages coalesce" looks like from the chat.
+ *
+ * **The force send.** Tapping the button files a stop naming the thread — the
+ * same queue a human's Stop on a task goes through, and the only way this
+ * process can end a turn.
+ *
+ * **The answer.** A finished turn's row is delivered into the conversation and
+ * the queued line is taken down with it.
  *
  * **The switch.** `/new` opens a second conversation and takes over as current;
  * a *Switch* button on the first makes it current again — the callback decoded
@@ -63,30 +81,42 @@ const CHECK_ROOT = CONFIGURED_ROOT.endsWith(CHECK_SEGMENT)
 const CHECK_EVENT_DIR = join(CHECK_ROOT, "events");
 process.env.DATA_ROOT = CHECK_ROOT;
 process.env.EVENT_LOG_DIR = CHECK_EVENT_DIR;
-// Nothing here starts a container; the manager is a layer that answers without
-// one. Pinned anyway so the sandbox layer cannot go looking for a daemon.
-process.env.SANDBOX_MODE = "local";
 
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import {
+  AgentSessionRepo,
   ChatMessageRepo,
   ChatThreadRepo,
+  RunRepo,
   storeLayer,
   WorkspaceRepo,
+  withActor,
 } from "@workspace/db";
-import { TaskId, TelegramChatId, type WorkspaceId } from "@workspace/domain";
+import {
+  Actor,
+  type RunId,
+  TaskId,
+  TelegramChatId,
+  type ThreadId,
+  type WorkspaceId,
+} from "@workspace/domain";
 import { ServerEnv } from "@workspace/env/server";
 import { EventLog, telemetryLayer } from "@workspace/telemetry";
 import { makeTokenSigner } from "@workspace/token";
+import type { Context } from "effect";
 import { DateTime, Effect, Layer, Redacted, Schedule } from "effect";
 import type { Transformer } from "grammy";
 import type { Update } from "grammy/types";
 import { registerHandlers } from "../apps/bot/src/index";
 import { appLayer, type BotWiring } from "../apps/bot/src/layers";
-import { ManagerTurn } from "../apps/bot/src/manager/turn";
 import { renderNotice } from "../apps/bot/src/notify";
 import { type RunEventSample, stuckVerdict } from "../apps/bot/src/stuck/rule";
 import { NOT_ALLOWED_REPLY } from "../apps/bot/src/telegram/access";
+import {
+  deliverAnswer,
+  FORCE_SEND_LABEL,
+} from "../apps/bot/src/telegram/answer";
+import { Board } from "../apps/bot/src/telegram/board";
 import { encodeCallbackData } from "../apps/bot/src/telegram/callback-data";
 import { CheckFailed, chatRowsFor, check } from "./bot-check-claims";
 import { ensureWorkspace } from "./store/workspace";
@@ -182,29 +212,108 @@ const recordingTransformer = (calls: ApiCall[]): Transformer =>
     return Promise.resolve({ ok: true, result: apiResultFor(method, payload) });
   }) as unknown as Transformer;
 
+/** One board call this check intercepted instead of making. */
+interface BoardCall {
+  readonly operation: string;
+  readonly target: string;
+}
+
 /**
- * A manager that answers without a container.
+ * A board that records instead of calling.
  *
- * The real one is a docker daemon, a credential and a model call. What the
- * router needs back from it is the shape of an ending, and that is what this
- * gives: the happy one, with the economics a finished turn reports.
+ * The gateway is a second process with its own check. What is being claimed
+ * here is what the bot *asks* for when a button is tapped — which thread it
+ * names, and that it goes through the run-command queue at all rather than
+ * reaching a container.
  */
-const stubManagerLayer = Layer.succeed(ManagerTurn, {
-  run: () =>
-    Effect.succeed({
-      containerExitCode: 0,
-      costUsd: 0.01,
-      errorClass: null,
-      errorMessage: null,
-      outcome: "done" as const,
-      providerSessionId: "check-session",
-      replyChars: 12,
-      toolCalls: 2,
-      toolErrors: 0,
-      totalTokens: 100,
-      turns: 1,
-    }),
-});
+const stubBoardLayer = (calls: BoardCall[]) => {
+  const record =
+    (operation: string) =>
+    <A>(input: { readonly taskId?: string; readonly threadId?: string }) =>
+      Effect.sync(() => {
+        calls.push({
+          operation,
+          target: input.threadId ?? input.taskId ?? "",
+        });
+        return { rejectedReason: null } as A;
+      });
+  const board = {
+    addComment: record("addComment"),
+    columns: record("columns"),
+    listTasks: record("listTasks"),
+    moveTask: record("moveTask"),
+    placeTask: record("placeTask"),
+    rerunTask: record("rerunTask"),
+    stopRun: record("stopRun"),
+    stopThread: record("stopThread"),
+    taskDetail: record("taskDetail"),
+  } as unknown as Context.Service.Shape<typeof Board>;
+  return Layer.succeed(Board, board);
+};
+
+/**
+ * A turn on a thread, written the way the orchestrator writes one.
+ *
+ * `apps/bot` cannot open a run and must not be able to: the session and the run
+ * row are the loop's, and the bot's own store hands it no actor to write them
+ * with. So this check opens its own connection under the orchestrator actor —
+ * which is exactly what it is standing in for.
+ */
+const openTurn = (input: {
+  readonly threadId: ThreadId;
+  readonly workspaceId: WorkspaceId;
+}) =>
+  Effect.gen(function* () {
+    const runs = yield* RunRepo;
+    const sessions = yield* AgentSessionRepo;
+    const asLoop = withActor(
+      Actor.cases.orchestrator.make({ loopInstance: SERVICE })
+    );
+    const subject = { id: input.threadId, kind: "thread" } as const;
+    const session = yield* asLoop(
+      sessions.open({
+        provider: "claude",
+        subject,
+        workspaceId: input.workspaceId,
+      })
+    );
+    const run = yield* asLoop(
+      runs.create({
+        agentSessionId: session.id,
+        provider: "claude",
+        subject,
+        trigger: "manual",
+        workspaceId: input.workspaceId,
+      })
+    );
+    yield* asLoop(runs.start({ id: run.id, workspaceId: input.workspaceId }));
+    return run;
+  });
+
+/** The same turn, ended — what a terminal run event means. */
+const closeTurn = (input: {
+  readonly runId: RunId;
+  readonly workspaceId: WorkspaceId;
+}) =>
+  Effect.gen(function* () {
+    const runs = yield* RunRepo;
+    yield* withActor(Actor.cases.orchestrator.make({ loopInstance: SERVICE }))(
+      runs.close({
+        durationMs: 1200,
+        id: input.runId,
+        outcome: "done",
+        totalTokens: 4096,
+        turns: 1,
+        workspaceId: input.workspaceId,
+      })
+    );
+  });
+
+/** The store this check writes a turn with, separate from the bot's own. */
+const turnStoreLayer = Layer.mergeAll(
+  AgentSessionRepo.layer,
+  RunRepo.layer
+).pipe(Layer.provideMerge(storeLayer({ applicationName: SERVICE })));
 
 /**
  * The `bot_command` entity Telegram puts on a message that starts with a slash.
@@ -377,20 +486,21 @@ const pureClaims = Effect.gen(function* () {
   });
 });
 
-/** The three claims that need the whole bot standing up. */
+/** The claims that need the whole bot standing up. */
 const wiredClaims = (options: {
+  readonly boardCalls: BoardCall[];
   readonly chatId: number;
   readonly wiring: BotWiring;
   readonly workspaceId: WorkspaceId;
 }) =>
   Effect.gen(function* () {
-    const { chatId, workspaceId } = options;
+    const { boardCalls, chatId, workspaceId } = options;
     const ledger = yield* EventLog;
     const messages = yield* ChatMessageRepo;
     const threads = yield* ChatThreadRepo;
 
     const calls: ApiCall[] = [];
-    const { telegram } = yield* registerHandlers(options.wiring);
+    const { notices, telegram } = yield* registerHandlers(options.wiring);
     telegram.bot.api.config.use(recordingTransformer(calls));
     yield* Effect.promise(() => telegram.bot.init());
 
@@ -464,7 +574,7 @@ const wiredClaims = (options: {
         workspaceId,
       }),
       holds: (rows) => rows.some((row) => row.body === said),
-      step: "the message is stored before the turn runs",
+      step: "the message is stored, which is what wakes the orchestrator",
     });
     const userRow = stored.find((row) => row.body === said);
     yield* check({
@@ -479,13 +589,163 @@ const wiredClaims = (options: {
         rows.some(
           (row) => row.threadId === opened.id && row.updateKind === "text"
         ),
-      step: "the answered message leaves a row naming its conversation",
+      step: "the accepted message leaves a row naming its conversation",
     });
     const turnRow = answered.find((row) => row.threadId === opened.id);
     yield* check({
       detail: `outcome ${String(turnRow?.outcome)}, promptChars ${String(turnRow?.promptChars)}`,
       ok: turnRow?.outcome === "done" && (turnRow?.promptChars ?? 0) > 0,
       step: "the row carries the ending and the size of what was asked",
+    });
+    yield* check({
+      detail: `costUsd ${String(turnRow?.costUsd)}, totalTokens ${String(turnRow?.totalTokens)}`,
+      ok: turnRow?.costUsd === null && turnRow?.totalTokens === null,
+      step: "the row spends nothing: what a turn costs is the turn's own row",
+    });
+
+    // The queue. A turn is opened the way the loop opens one, because after the
+    // cut this process cannot.
+    const turn = yield* openTurn({
+      threadId: opened.id,
+      workspaceId,
+    }).pipe(Effect.provide(turnStoreLayer));
+
+    const before = calls.length;
+    yield* Effect.promise(() =>
+      telegram.bot.handleUpdate(
+        messageUpdate({
+          chatId,
+          fromId: ALLOWED_TELEGRAM_USER,
+          messageId: 20,
+          text: "and one more thing",
+        })
+      )
+    );
+    const forceSendData = encodeCallbackData({
+      kind: "thread",
+      threadId: opened.id,
+      verb: "thfs",
+    });
+    const hasForceSend = (call: ApiCall) =>
+      JSON.stringify(call.payload.reply_markup ?? {}).includes(forceSendData);
+
+    yield* eventually({
+      effect: Effect.sync(() => calls.slice(before)),
+      holds: (since) =>
+        since.some(
+          (call) => call.method === "sendMessage" && hasForceSend(call)
+        ),
+      step: "a message sent mid-turn is answered with the Force send button",
+    });
+    const queuedLine = calls
+      .slice(before)
+      .find((call) => call.method === "sendMessage" && hasForceSend(call));
+    yield* check({
+      detail: `the bot said ${JSON.stringify(queuedLine?.payload.text)}`,
+      ok:
+        String(queuedLine?.payload.text ?? "").includes("queued") &&
+        JSON.stringify(queuedLine?.payload.reply_markup).includes(
+          FORCE_SEND_LABEL
+        ),
+      step: "the queued line names the button that would stop the turn",
+    });
+
+    const stored2 = yield* messages.recent({
+      limit: 10,
+      threadId: opened.id,
+      workspaceId,
+    });
+    yield* check({
+      detail: `${stored2.filter((row) => row.role === "user").length} user rows in the thread`,
+      ok: stored2.some((row) => row.body === "and one more thing"),
+      step: "the queued message is stored all the same, so the next turn reads it",
+    });
+
+    const beforeSecond = calls.length;
+    yield* Effect.promise(() =>
+      telegram.bot.handleUpdate(
+        messageUpdate({
+          chatId,
+          fromId: ALLOWED_TELEGRAM_USER,
+          messageId: 21,
+          text: "and another",
+        })
+      )
+    );
+    const coalesced = yield* eventually({
+      effect: Effect.sync(() => calls.slice(beforeSecond)),
+      holds: (since) => since.some((call) => call.method === "editMessageText"),
+      step: "a second queued message edits the line rather than sending another",
+    });
+    yield* check({
+      detail: `${coalesced.filter((call) => call.method === "sendMessage" && hasForceSend(call)).length} extra queued lines sent`,
+      ok:
+        coalesced.every(
+          (call) => !(call.method === "sendMessage" && hasForceSend(call))
+        ) &&
+        String(
+          coalesced.find((call) => call.method === "editMessageText")?.payload
+            .text ?? ""
+        ).includes("2 messages"),
+      step: "several queued messages coalesce into one line saying how many wait",
+    });
+
+    // The force send.
+    const beforeTap = boardCalls.length;
+    yield* Effect.promise(() =>
+      telegram.bot.handleUpdate(
+        callbackUpdate({
+          chatId,
+          data: forceSendData,
+          fromId: ALLOWED_TELEGRAM_USER,
+          messageId: 22,
+        })
+      )
+    );
+    const stopped = yield* eventually({
+      effect: Effect.sync(() => boardCalls.slice(beforeTap)),
+      holds: (since) => since.some((call) => call.operation === "stopThread"),
+      step: "Force send asks the board to stop the turn",
+    });
+    yield* check({
+      detail: `it named ${String(stopped.find((call) => call.operation === "stopThread")?.target)}`,
+      ok: stopped.some(
+        (call) => call.operation === "stopThread" && call.target === opened.id
+      ),
+      step: "the stop names the conversation, not a task and not a container",
+    });
+
+    // The answer.
+    yield* closeTurn({ runId: turn.id, workspaceId }).pipe(
+      Effect.provide(turnStoreLayer)
+    );
+    const spoken = "here is what I did";
+    yield* messages.append({
+      body: spoken,
+      role: "manager",
+      runId: turn.id,
+      threadId: opened.id,
+      workspaceId,
+    });
+    const beforeAnswer = calls.length;
+    yield* deliverAnswer({
+      notices,
+      run: { id: turn.id, workspaceId },
+    });
+    const delivered = calls.slice(beforeAnswer);
+    yield* check({
+      detail: `the bot said ${JSON.stringify(delivered.find((call) => call.method === "sendMessage")?.payload.text)}`,
+      ok: delivered.some(
+        (call) =>
+          call.method === "sendMessage" &&
+          String(call.payload.text ?? "").includes(spoken)
+      ),
+      step: "the finished turn's own row is what the conversation is answered with",
+    });
+    yield* check({
+      detail: `${delivered.filter((call) => call.method === "deleteMessage").length} queued lines taken down`,
+      ok: delivered.some((call) => call.method === "deleteMessage"),
+      step: "the queued line comes down with the answer that overtook it",
     });
 
     // The switch.
@@ -590,7 +850,7 @@ const bootstrap = Effect.gen(function* () {
 
 const botCheck = Effect.gen(function* () {
   yield* Effect.logInfo(
-    `${SERVICE}: no telegram token, no telegram call, no container — data root ${CHECK_ROOT}`
+    `${SERVICE}: no telegram token, no telegram call, no gateway, no container — data root ${CHECK_ROOT}`
   );
   yield* pureClaims;
 
@@ -599,12 +859,14 @@ const botCheck = Effect.gen(function* () {
   // other's conversation, and there is no delete on a thread to clean up with.
   const chatId = -1 * (Date.now() % CHAT_ID_RANGE);
 
+  const boardCalls: BoardCall[] = [];
   yield* wiredClaims({
+    boardCalls,
     chatId,
     wiring: booted.wiring,
     workspaceId: booted.workspaceId,
   }).pipe(
-    Effect.provide(appLayer(booted.wiring, stubManagerLayer)),
+    Effect.provide(appLayer(booted.wiring, stubBoardLayer(boardCalls))),
     Effect.scoped
   );
 

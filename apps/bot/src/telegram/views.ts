@@ -16,7 +16,7 @@
  */
 
 import { ChatMessageRepo } from "@workspace/db";
-import type { SessionProvider, ThreadId } from "@workspace/domain";
+import type { ThreadId } from "@workspace/domain";
 import { DateTime, Effect } from "effect";
 import { InlineKeyboard } from "grammy";
 import { actorFor, Board } from "./board";
@@ -90,12 +90,10 @@ export const historyPage = Effect.fnUntraced(function* (options: {
   readonly chatId: number;
   readonly ctx: BotContext;
   readonly page: number;
-  readonly provider: SessionProvider;
 }) {
   const messages = yield* ChatMessageRepo;
   const thread = yield* ensureThread({
     chatId: telegramChatIdOf(options.chatId),
-    provider: options.provider,
     userId: options.ctx.identity.userId,
     workspaceId: options.ctx.identity.workspaceId,
   });
@@ -188,7 +186,6 @@ export interface PageRequest {
   readonly ctx: BotContext;
   readonly key: PageKey;
   readonly page: number;
-  readonly provider: SessionProvider;
   readonly threadId: ThreadId | null;
 }
 

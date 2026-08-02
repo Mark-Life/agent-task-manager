@@ -3,8 +3,8 @@
  *
  * Every knob that changes what the bot does is on it, because the failure this
  * prevents is the expensive kind of confusion: a bot answering an allow-list of
- * one when three people were meant to be on it, a manager pointed at a gateway
- * URL the container cannot resolve, or a second process quietly polling the same
+ * one when three people were meant to be on it, a button pointed at a gateway
+ * URL this process cannot resolve, or a second process quietly polling the same
  * token. Config that is only in the environment is config nobody checks.
  *
  * Nothing on the banner is a credential. The bot token, `DATABASE_URL`, the Groq
@@ -17,6 +17,7 @@ import { EventLog } from "@workspace/telemetry";
 import { Config, Effect, Option } from "effect";
 import { BOT_INSTANCE, SERVICE_NAME } from "./identity";
 import type { BotEnv } from "./layers";
+import { CHAT_PROVIDER } from "./telegram/threads";
 
 /**
  * Whether the additive OTLP sink has an endpoint to ship to.
@@ -40,7 +41,6 @@ export interface BannerInput {
   /** Path of the JSONL ledger `bun run logs` reads. */
   readonly ledgerPath: string;
   readonly otlp: boolean;
-  readonly sandboxKind: string;
 }
 
 /**
@@ -52,33 +52,28 @@ export interface BannerInput {
  */
 export const bannerFields = (input: BannerInput) => ({
   accounts: input.allowedAccounts,
+  chatProvider: CHAT_PROVIDER,
   dataRoot: input.env.dataRoot,
-  draftIntervalMs: input.env.botDraftIntervalMs,
-  historyMessages: input.env.managerHistoryMessages,
+  gatewayUrl: input.env.botGatewayUrl,
   instance: BOT_INSTANCE,
   ledger: input.ledgerPath,
-  managerGatewayUrl: input.env.managerGatewayUrl,
-  model: Option.getOrElse(input.env.managerModel, () => "provider default"),
+  notifyRepairIntervalMs: input.env.notifyRepairIntervalMs,
   notifyRetryGraceMs: input.env.notifyRetryGraceMs,
   otlp: input.otlp ? "on" : "off",
-  provider: input.env.managerProvider,
-  sandbox: input.sandboxKind,
   service: SERVICE_NAME,
   shutdownGraceMs: input.env.botShutdownGraceMs,
   splitAt: input.env.botSplitAt,
   stuckScanIntervalMs: input.env.stuckScanIntervalMs,
   stuckWindowMinutes: input.env.stuckWindowMinutes,
-  tokenTtlMs: input.env.managerTokenTtlMs,
   // On or off, never the key: a banner is the one line that gets pasted into a
   // ticket.
   transcription: Option.isSome(input.env.groqApiKey) ? "on" : "off",
-  turnTimeoutMs: input.env.managerTurnTimeoutMs,
   workspaces: input.allowedWorkspaces,
 });
 
 /** What the banner's message says, before the fields are annotated onto it. */
 const headline = (input: BannerInput) =>
-  `bot starting — manager on ${input.env.managerProvider} in a ${input.sandboxKind} sandbox, ${input.allowedAccounts} allow-listed account(s)`;
+  `bot starting — ${input.allowedAccounts} allow-listed account(s), conversations answered on ${CHAT_PROVIDER} by the orchestrator`;
 
 /**
  * Emits the banner, and — only where transcription is off — the note that goes
@@ -92,7 +87,6 @@ export const logBanner = (input: {
   readonly allowedAccounts: number;
   readonly allowedWorkspaces: number;
   readonly env: BotEnv;
-  readonly sandboxKind: string;
 }) =>
   Effect.gen(function* () {
     const ledger = yield* EventLog;

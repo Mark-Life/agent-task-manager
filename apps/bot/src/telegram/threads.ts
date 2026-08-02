@@ -1,20 +1,19 @@
 /**
- * A chat's conversations, and the four things a person can do to them.
+ * A chat's conversations, and the three things a person can do to them.
  *
- * A thread is the identity of one conversation with the manager: the prompt is
- * built from its messages, the provider's session is remembered against it, and
- * every board write a chat causes carries its id into `actor_thread_id`. So the
- * lifecycle here is deliberately narrow — open, switch, clear, list — and there
- * is no delete. A conversation is retired by being spoken to no longer.
+ * A thread is the identity of one conversation with the manager: its messages
+ * are what a turn is prompted with, the session that answers it hangs off it,
+ * and every board write a chat causes carries its id into `actor_thread_id`. So
+ * the lifecycle here is deliberately narrow — open, switch, list — and there is
+ * no delete. A conversation is retired by being spoken to no longer.
  *
  * The rules that could be spelled differently in two handlers are spelled once
  * here instead. **A chat always has exactly one current thread**: the first
  * message opens one rather than failing, which is why {@link ensureThread}
  * exists and why no handler below ever sees a null thread. **Opening is what
  * `/new` means** — the previous thread keeps its history and its `active`
- * status and merely stops being current, so `/switch` brings it back whole.
- * **Clearing is not closing**: `/clear` forgets the provider's transcript and
- * keeps the row, because the audit trail already points at it.
+ * status and merely stops being current, so `/switch` brings it back whole, and
+ * the fresh one has no session, so its first turn is prompted from nothing.
  *
  * Nothing here touches grammy. A handler decides what to say; this module
  * decides what is true.
@@ -35,6 +34,15 @@ import {
 import { DateTime, Effect } from "effect";
 import { formatRelativeTime } from "./helpers";
 
+/**
+ * Which harness answers a conversation.
+ *
+ * One value rather than a setting: Codex refreshes its credential inside the
+ * shared login directory and the refresh is not yet safe there, so chat runs on
+ * Claude. A worker run picks its own provider; this decides nothing but chat.
+ */
+export const CHAT_PROVIDER: SessionProvider = "claude";
+
 /** What a thread label falls back to when nothing has been said in it yet. */
 const UNTITLED_THREAD = "(untitled)";
 
@@ -43,7 +51,6 @@ const BUTTON_TITLE_MAX_CHARS = 32;
 
 /** Everything opening a conversation for a chat needs, minus the title. */
 export interface ThreadContext extends ChatRef {
-  readonly provider: SessionProvider;
   readonly userId: UserId;
 }
 
@@ -64,7 +71,7 @@ export const ensureThread = Effect.fn("bot.threads.ensure")(function* (
     chatId: context.chatId,
     workspaceId: context.workspaceId,
   });
-  return current ?? (yield* repo.open(context));
+  return current ?? (yield* repo.open({ ...context, provider: CHAT_PROVIDER }));
 });
 
 /**
@@ -75,7 +82,7 @@ export const startThread = Effect.fn("bot.threads.start")(function* (
   context: ThreadContext
 ) {
   const repo = yield* ChatThreadRepo;
-  return yield* repo.open(context);
+  return yield* repo.open({ ...context, provider: CHAT_PROVIDER });
 });
 
 /** Make one existing thread the chat's current one — what a *Switch* button does. */
@@ -84,24 +91,6 @@ export const switchThread = Effect.fn("bot.threads.switch")(function* (
 ) {
   const repo = yield* ChatThreadRepo;
   return yield* repo.setCurrent(ref);
-});
-
-/**
- * Forget the provider's transcript for the current thread and keep the
- * conversation — what `/clear` does. Null when the chat has no thread yet,
- * which is a chat that has nothing to clear rather than an error.
- */
-export const clearThread = Effect.fn("bot.threads.clear")(function* (
-  chat: ChatRef
-) {
-  const repo = yield* ChatThreadRepo;
-  const current = yield* repo.current(chat);
-  return current === null
-    ? null
-    : yield* repo.clearProviderSession({
-        id: current.id,
-        workspaceId: current.workspaceId,
-      });
 });
 
 /** A chat's conversations, most recently spoken in first. */

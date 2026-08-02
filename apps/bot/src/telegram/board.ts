@@ -234,6 +234,29 @@ const make = (options: BoardOptions) =>
           }),
       });
 
+    /**
+     * Ask the orchestrator to stop the turn running in a conversation, which
+     * is what the *Force send* button means.
+     *
+     * The same `run_command` row a human's Stop on a task writes, naming the
+     * thread instead. The interrupted turn's unread messages stay unread, so the
+     * next dispatch resumes the session with them appended; there is no path
+     * here that hands a message to a container directly.
+     */
+    const stopThread = (input: {
+      readonly actor: ManagerActorRef;
+      readonly threadId: ThreadId;
+    }) =>
+      call({
+        actor: input.actor,
+        operation: "bot.board.stopThread",
+        run: (client) =>
+          client.threads.stop({
+            params: { threadId: input.threadId },
+            payload: {},
+          }),
+      });
+
     /** Ask the orchestrator to run a task again. */
     const rerunTask = (input: {
       readonly actor: ManagerActorRef;
@@ -273,6 +296,7 @@ const make = (options: BoardOptions) =>
       placeTask,
       rerunTask,
       stopRun,
+      stopThread,
       taskDetail,
     } as const;
   });

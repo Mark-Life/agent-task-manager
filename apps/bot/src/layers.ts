@@ -7,9 +7,9 @@
  *   platform (Bun's filesystem, path, crypto, child processes)
  *     └─ telemetry — logger, the JSONL ledger, the config-gated OTLP forwarder
  *          └─ the chat store, the allow-list, the grammy bot, the board client,
- *             transcription, the sandbox
+ *             transcription
  *               └─ the notifier
- *                    └─ the manager turn, the stuck watch
+ *                    └─ the stuck watch
  *
  * Two things about this file are load-bearing rather than stylistic.
  *
@@ -30,13 +30,14 @@ import { BunServices } from "@effect/platform-bun";
 import { chatStoreLayer } from "@workspace/db";
 import type { TaskId } from "@workspace/domain";
 import { ServerEnv } from "@workspace/env/server";
-import { sandboxLayer } from "@workspace/sandbox";
 import { EventLog, telemetryLayer } from "@workspace/telemetry";
-import { makeTokenSigner, type TokenSigner } from "@workspace/token";
+import {
+  makeTokenSigner,
+  mintAgentToken,
+  type TokenSigner,
+} from "@workspace/token";
 import { type Context, Effect, Layer, Option, Schema } from "effect";
 import { SERVICE_NAME } from "./identity";
-import { mintManagerToken } from "./manager/token";
-import { ManagerTurn } from "./manager/turn";
 import { Notifier, stuckAnnouncerLayer } from "./notify";
 import { StuckScan } from "./stuck/scan";
 import { Allowlist } from "./telegram/allowlist";
@@ -85,10 +86,9 @@ export const botWiring = Effect.gen(function* () {
     env.telegramAllowlist,
     "TELEGRAM_ALLOWLIST"
   );
-  // Read once, here. Two things mint against it at different times — the board
-  // client per tapped button, the manager turn per turn — and two reads of
-  // `BETTER_AUTH_SECRET` would be two chances to disagree about the key this
-  // deployment signs with.
+  // Read once, here. A tapped button mints against it, and a second read of
+  // `BETTER_AUTH_SECRET` would be a second chance to disagree about the key
+  // this deployment signs with.
   const signer = yield* makeTokenSigner;
   return { allowlist, botToken, env, signer } as const;
 }).pipe(Effect.provide(ServerEnv.layer));
@@ -103,15 +103,20 @@ export interface BotWiring extends Effect.Success<typeof botWiring> {}
  * hold, which is a bug rather than a thing a person did — but it reaches them as
  * a failed button either way, so it arrives sanitized like every other board
  * failure.
+ *
+ * The same mint the loop uses for an agent turn, with a manager binding: one
+ * spelling of how a credential is made for an actor, and the button's reach is
+ * the conversation's.
  */
 const mintFor =
-  (options: { readonly signer: TokenSigner; readonly ttlMs: number }) =>
-  (actor: Parameters<MintManagerToken>[0]) =>
-    mintManagerToken({
-      signer: options.signer,
-      threadId: actor.threadId,
-      ttlMs: options.ttlMs,
-      userId: actor.userId,
+  (signer: TokenSigner) => (actor: Parameters<MintManagerToken>[0]) =>
+    mintAgentToken({
+      binding: {
+        kind: "manager",
+        threadId: actor.threadId,
+        userId: actor.userId,
+      },
+      signer,
       workspaceId: actor.workspaceId,
     }).pipe(
       Effect.mapError(
@@ -135,29 +140,27 @@ const observabilityLayer = Layer.mergeAll(
 
 /**
  * What everything above runs on: the store, who is allowed to talk to it, the
- * transport, the board, transcription and a sandbox to run a turn in.
+ * transport, the board and transcription.
  *
- * `sandboxLayer` reads `SANDBOX_MODE` itself and hands back docker or local. The
- * choice is not made here and must not be — the moment this file can ask which
- * implementation it got, the manager turn grows a branch and the escape hatch
- * stops being the same code path.
+ * There is no sandbox here and there must not be. This process starts no
+ * container: a message becomes a row, the orchestrator claims the thread, and
+ * the only way from here to the board is HTTP.
  */
-const infrastructureLayer = (wiring: BotWiring) =>
+const infrastructureLayer = (
+  wiring: BotWiring,
+  board: Layer.Layer<Board> = Board.layer({
+    // The gateway as *this process* reaches it, which is not the address a
+    // container resolves; the loop reads its own.
+    baseUrl: wiring.env.botGatewayUrl,
+    mint: mintFor(wiring.signer),
+  })
+) =>
   Layer.mergeAll(
     Allowlist.layer(wiring.allowlist),
-    Board.layer({
-      // The gateway as *this process* reaches it, which is not what the
-      // container calls it — see `MANAGER_GATEWAY_URL` beside this one.
-      baseUrl: wiring.env.botGatewayUrl,
-      mint: mintFor({
-        signer: wiring.signer,
-        ttlMs: wiring.env.managerTokenTtlMs,
-      }),
-    }),
+    board,
     BotService.layer(wiring.botToken),
     TranscribeService.layer,
-    chatStoreLayer({ applicationName: SERVICE_NAME }),
-    sandboxLayer
+    chatStoreLayer({ applicationName: SERVICE_NAME })
   ).pipe(Layer.provideMerge(observabilityLayer));
 
 /** A configured origin may or may not end in a slash; the link may not have two. */
@@ -179,21 +182,13 @@ const taskUrlFor = (origin: Option.Option<string>) => (taskId: TaskId) =>
  * the entrypoint legitimately reaches most of it — it registers the handlers on
  * the bot, forks the listener on the pool's own `PgClient`, and starts the scan.
  *
- * `managerTurn` is the one substitution this file allows, and it exists for
- * `bun run bot:check`: everything else in the process can be exercised without a
- * network, but a real manager turn is a container and a model call. Production
- * passes nothing and gets the real one.
+ * `board` is the one substitution this file allows, and it exists for
+ * `bun run bot:check`: every other part of the process can be exercised without
+ * a network, and the gateway cannot. Production passes nothing and gets the real
+ * client.
  */
-export const appLayer = (
-  wiring: BotWiring,
-  managerTurn: ReturnType<typeof ManagerTurn.layer> = ManagerTurn.layer(
-    wiring.env
-  )
-) =>
-  Layer.mergeAll(
-    managerTurn,
-    StuckScan.layer.pipe(Layer.provide(stuckAnnouncerLayer))
-  ).pipe(
+export const appLayer = (wiring: BotWiring, board?: Layer.Layer<Board>) =>
+  StuckScan.layer.pipe(Layer.provide(stuckAnnouncerLayer)).pipe(
     Layer.provideMerge(
       Notifier.layer({
         retryGraceMs: wiring.env.notifyRetryGraceMs,
@@ -201,5 +196,5 @@ export const appLayer = (
         taskUrl: taskUrlFor(wiring.env.gatewayPublicUrl),
       })
     ),
-    Layer.provideMerge(infrastructureLayer(wiring))
+    Layer.provideMerge(infrastructureLayer(wiring, board))
   );

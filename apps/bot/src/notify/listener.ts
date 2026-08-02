@@ -20,6 +20,12 @@
  * against the ledger. So a duplicate notice costs two reads and no second
  * message, and a notice for a workspace this deployment does not serve is
  * dropped before it costs even that.
+ *
+ * **One channel, two things to say.** A terminal event on a run with a task is
+ * a notice about that task. A terminal event on a run with none is a
+ * conversation's turn ending, and what a person gets is the answer it wrote —
+ * the end-of-turn sync, over the listener that already exists rather than a
+ * second connection holding a stream open.
  */
 
 import { PgClient } from "@effect/sql-pg";
@@ -32,6 +38,7 @@ import {
 } from "@workspace/domain";
 import { Effect, Predicate, Schedule, Schema, Stream } from "effect";
 import { Allowlist } from "../telegram/allowlist";
+import { deliverAnswer, type QueueNotices } from "../telegram/answer";
 import { Notifier } from "./send";
 import { TERMINAL_EVENT_KINDS } from "./summary";
 
@@ -69,7 +76,8 @@ export const RunEventNotice = Schema.Struct({
   kind: RunEventKind,
   runId: RunId,
   seq: Schema.Natural,
-  taskId: TaskId,
+  /** Null on a conversation's turn, which is a run attached to a thread. */
+  taskId: Schema.NullOr(TaskId),
   workspaceId: WorkspaceId,
 });
 
@@ -112,24 +120,40 @@ const isTerminal = (notice: RunEventNotice) =>
  * is logged and swallowed — one unreadable task is not a reason to stop
  * hearing about the rest of them.
  */
-export const runNotifyListener = Effect.fnUntraced(function* (options?: {
+export const runNotifyListener = Effect.fnUntraced(function* (options: {
+  /** Where the "still working" line for each thread is remembered. */
+  readonly notices: QueueNotices;
   readonly repairIntervalMs?: number;
 }) {
   const repairIntervalMs =
-    options?.repairIntervalMs ?? DEFAULT_NOTIFY_REPAIR_INTERVAL_MS;
+    options.repairIntervalMs ?? DEFAULT_NOTIFY_REPAIR_INTERVAL_MS;
   const sql = yield* PgClient.PgClient;
   const notifier = yield* Notifier;
   const allowlist = yield* Allowlist;
 
-  const onNotice = (notice: RunEventNotice) =>
-    notifier
-      .deliver({
-        eventKind: notice.kind,
-        runId: notice.runId,
-        taskId: notice.taskId,
-        workspaceId: notice.workspaceId,
-      })
-      .pipe(
+  /** A worker run ended: a notice about its task, claimed on the ledger. */
+  const onTaskEvent = (notice: RunEventNotice & { readonly taskId: TaskId }) =>
+    notifier.deliver({
+      eventKind: notice.kind,
+      runId: notice.runId,
+      taskId: notice.taskId,
+      workspaceId: notice.workspaceId,
+    });
+
+  const onNotice = Effect.fnUntraced(
+    function* (notice: RunEventNotice) {
+      const { taskId } = notice;
+      if (taskId === null) {
+        yield* deliverAnswer({
+          notices: options.notices,
+          run: { id: notice.runId, workspaceId: notice.workspaceId },
+        });
+        return;
+      }
+      yield* onTaskEvent({ ...notice, taskId });
+    },
+    (effect, notice) =>
+      effect.pipe(
         Effect.asVoid,
         Effect.catchCause((cause) =>
           Effect.logWarning("notification failed", cause).pipe(
@@ -139,7 +163,8 @@ export const runNotifyListener = Effect.fnUntraced(function* (options?: {
             })
           )
         )
-      );
+      )
+  );
 
   const notices = sql.listen(RUN_EVENT_CHANNEL).pipe(
     Stream.mapEffect(noticeOf),
