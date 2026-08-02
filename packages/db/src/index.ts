@@ -28,6 +28,11 @@ export { CurrentActor, withActor } from "./actor";
 // `options` is the name the Better Auth schema generator looks for on the
 // module it reads; out here it needs one that says which options it holds.
 export { options as authOptions } from "./auth/options";
+// `Database` is exported as a type and never as a value: a composition root
+// that merges the store out has the handle in its layer's type and cannot name
+// it otherwise, while a caller still has no way to obtain one and reach a row
+// around the repository that audits it.
+export type { Database } from "./client";
 export { Auth, type DatabaseOptions, databaseLayer } from "./client";
 export { type DatabaseConfig, databaseConfig } from "./config";
 export {
@@ -44,6 +49,23 @@ export {
   PersistenceError,
 } from "./repositories/audit";
 export { AuditLogRepo } from "./repositories/audit-log";
+export {
+  type ChatMessageAppend,
+  ChatMessageRepo,
+  type ThreadMessages,
+} from "./repositories/chat-message";
+export {
+  type ChatNotificationClaim,
+  ChatNotificationRepo,
+  type NotificationRef,
+} from "./repositories/chat-notification";
+export {
+  type ChatRef,
+  type ChatThreadOpen,
+  type ChatThreadRef,
+  ChatThreadRepo,
+  THREAD_TITLE_MAX_CHARS,
+} from "./repositories/chat-thread";
 export {
   type AgentAuthor,
   type CommentAppend,
@@ -79,4 +101,4 @@ export {
 export type { TaskBoardView } from "./repositories/task-board";
 export type { TaskPatch, TaskRef } from "./repositories/task-edit";
 export { WorkspaceRepo } from "./repositories/workspace";
-export { repositoriesLayer, storeLayer } from "./store";
+export { chatStoreLayer, repositoriesLayer, storeLayer } from "./store";

@@ -46,6 +46,19 @@ export {
 } from "./artifact";
 export { AuditEntryInsert, AuditEntryRow, decodeAuditEntry } from "./audit";
 export {
+  ChatMessageInsert,
+  ChatMessageRow,
+  ChatNotificationInsert,
+  ChatNotificationRow,
+  ChatNotificationUpdate,
+  ChatThreadInsert,
+  ChatThreadRow,
+  ChatThreadUpdate,
+  decodeChatMessage,
+  decodeChatNotification,
+  decodeChatThread,
+} from "./chat";
+export {
   CommentInsert,
   CommentRow,
   CommentUpdate,

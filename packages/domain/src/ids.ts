@@ -100,6 +100,32 @@ export type ArtifactId = typeof ArtifactId.Type;
 /** Mints a fresh {@link ArtifactId}. */
 export const newArtifactId = mint(ArtifactId);
 
+/**
+ * One conversation between a person and the manager agent, in one Telegram
+ * chat. Named `Thread` because that is what the audit log's `actor_thread_id`
+ * has always meant; a task's comments are a thread of a different kind and are
+ * addressed by their task.
+ */
+export const ThreadId = ownId("ThreadId");
+export type ThreadId = typeof ThreadId.Type;
+
+/** Mints a fresh {@link ThreadId}. */
+export const newThreadId = mint(ThreadId);
+
+/** One message in a chat thread, in either direction. */
+export const ChatMessageId = ownId("ChatMessageId");
+export type ChatMessageId = typeof ChatMessageId.Type;
+
+/** Mints a fresh {@link ChatMessageId}. */
+export const newChatMessageId = mint(ChatMessageId);
+
+/** One claim to deliver one notice into one chat. */
+export const ChatNotificationId = ownId("ChatNotificationId");
+export type ChatNotificationId = typeof ChatNotificationId.Type;
+
+/** Mints a fresh {@link ChatNotificationId}. */
+export const newChatNotificationId = mint(ChatNotificationId);
+
 /** One recorded mutation, naming who made it. */
 export const AuditEntryId = ownId("AuditEntryId");
 export type AuditEntryId = typeof AuditEntryId.Type;

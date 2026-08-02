@@ -12,6 +12,7 @@ import {
   user,
   verification,
 } from "./auth";
+import { chatMessage, chatNotification, chatThread } from "./chat";
 import { comment } from "./comment";
 import { project } from "./project";
 import { run, runCommand, runEvent } from "./run";
@@ -38,6 +39,9 @@ const tables = {
   agentSession,
   artifact,
   auditEntry,
+  chatMessage,
+  chatNotification,
+  chatThread,
   comment,
   project,
   run,
@@ -98,6 +102,48 @@ const appRelations = defineRelationsPart(tables, (r) => ({
     task: r.one.task({ from: r.auditEntry.taskId, to: r.task.id }),
     workspace: r.one.organization({
       from: r.auditEntry.workspaceId,
+      optional: false,
+      to: r.organization.id,
+    }),
+  },
+  chatMessage: {
+    thread: r.one.chatThread({
+      from: r.chatMessage.threadId,
+      optional: false,
+      to: r.chatThread.id,
+    }),
+    workspace: r.one.organization({
+      from: r.chatMessage.workspaceId,
+      optional: false,
+      to: r.organization.id,
+    }),
+  },
+  chatNotification: {
+    // Joined on denormalized columns with no foreign key behind them: the send
+    // ledger outlives the run it announced, so both sides can find nothing.
+    run: r.one.run({ from: r.chatNotification.runId, to: r.run.id }),
+    task: r.one.task({ from: r.chatNotification.taskId, to: r.task.id }),
+    thread: r.one.chatThread({
+      from: r.chatNotification.threadId,
+      to: r.chatThread.id,
+    }),
+    workspace: r.one.organization({
+      from: r.chatNotification.workspaceId,
+      optional: false,
+      to: r.organization.id,
+    }),
+  },
+  chatThread: {
+    messages: r.many.chatMessage({
+      from: r.chatThread.id,
+      to: r.chatMessage.threadId,
+    }),
+    notifications: r.many.chatNotification({
+      from: r.chatThread.id,
+      to: r.chatNotification.threadId,
+    }),
+    workspace: r.one.organization({
+      from: r.chatThread.workspaceId,
       optional: false,
       to: r.organization.id,
     }),

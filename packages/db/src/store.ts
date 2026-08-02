@@ -2,6 +2,9 @@ import { Layer } from "effect";
 import { type DatabaseOptions, databaseLayer } from "./client";
 import { ArtifactRepo } from "./repositories/artifact";
 import { AuditLogRepo } from "./repositories/audit-log";
+import { ChatMessageRepo } from "./repositories/chat-message";
+import { ChatNotificationRepo } from "./repositories/chat-notification";
+import { ChatThreadRepo } from "./repositories/chat-thread";
 import { CommentRepo } from "./repositories/comment";
 import { ProjectRepo } from "./repositories/project";
 import { RunRepo } from "./repositories/run";
@@ -24,6 +27,9 @@ export const repositoriesLayer = Layer.mergeAll(
   AgentSessionRepo.layer,
   ArtifactRepo.layer,
   AuditLogRepo.layer,
+  ChatMessageRepo.layer,
+  ChatNotificationRepo.layer,
+  ChatThreadRepo.layer,
   CommentRepo.layer,
   ProjectRepo.layer,
   RunCommandRepo.layer,
@@ -47,3 +53,26 @@ export const repositoriesLayer = Layer.mergeAll(
  */
 export const storeLayer = (options: DatabaseOptions) =>
   repositoriesLayer.pipe(Layer.provideMerge(databaseLayer(options)));
+
+/**
+ * The store for the bot: the three chat tables it owns, and read access to what
+ * it has to render — a run's ending, its task, its events, the audit row naming
+ * the conversation that asked for it.
+ *
+ * What is missing is the point. The chat repositories need no actor, because a
+ * conversation is not audited; the last four do, because their mutations are,
+ * and a process that never provides `CurrentActor` cannot call one. So the rule
+ * that the bot owns the conversation and the gateway owns the board is a
+ * compile error rather than a convention: a board write from the bot names the
+ * missing service instead of quietly landing without an author.
+ */
+export const chatStoreLayer = (options: DatabaseOptions) =>
+  Layer.mergeAll(
+    AuditLogRepo.layer,
+    ChatMessageRepo.layer,
+    ChatNotificationRepo.layer,
+    ChatThreadRepo.layer,
+    RunEventRepo.layer,
+    RunRepo.layer,
+    TaskRepo.layer
+  ).pipe(Layer.provideMerge(databaseLayer(options)));

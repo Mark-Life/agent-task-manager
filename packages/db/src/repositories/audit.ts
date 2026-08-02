@@ -12,13 +12,11 @@
  * Because the whole body runs inside `db.transaction`, a mutation whose audit
  * row cannot be inserted is a mutation that never happened.
  *
- * Three tables are exempt, and the exemption is spelled out in a type rather
+ * A few tables are exempt, and the exemption is spelled out in a type rather
  * than left to a comment: {@link unauditedTransaction} takes the name of the
- * table it is writing, and the only names it accepts are the three whose rows
- * are already the record of what happened — `run_event` and `run_command`,
- * which are append-only logs of their own, and `artifact`, which is a cache of
- * a directory. A fourth table joining them is then a deliberate edit to that
- * union, not a forgotten import.
+ * table it is writing, and the only names it accepts are the ones whose rows
+ * are already the record of what happened. A further table joining them is then
+ * a deliberate edit to {@link UnauditedTable}, not a forgotten import.
  *
  * The errors below are the vocabulary every repository fails with. They are
  * separated by what a caller can do about them: retry the request
@@ -464,8 +462,21 @@ const transaction =
  * are append-only records in their own right — the command carries the actor
  * who asked in columns of its own — and `artifact` is a cache of a directory,
  * where a rescan is a refresh rather than a decision anyone made.
+ *
+ * The three chat tables are here for a different reason: a conversation is not
+ * board state. The audit log records what happened to a project, a task, a
+ * comment, a session, a run or an artifact, and a chat only ever causes those
+ * through the gateway — where the manager's actor carries the thread id, so the
+ * conversation is already named on the row it caused. Auditing the conversation
+ * as well would double every message with a row saying a message was written.
  */
-export type UnauditedTable = "artifact" | "run_command" | "run_event";
+export type UnauditedTable =
+  | "artifact"
+  | "chat_message"
+  | "chat_notification"
+  | "chat_thread"
+  | "run_command"
+  | "run_event";
 
 /**
  * {@link transaction} for those three tables and nothing else. Every other

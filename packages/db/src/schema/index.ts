@@ -12,8 +12,8 @@
  * by hand: the `BEFORE UPDATE` trigger that maintains `updated_at` even for a
  * statement that bypassed the repositories, the `AFTER INSERT` triggers that
  * `pg_notify` a run event, a run command and a task entering dispatch, and the
- * `REVOKE UPDATE, DELETE` on `run_event` and `audit_entry` that makes
- * append-only a permission rather than a habit.
+ * `REVOKE UPDATE, DELETE` on `run_event`, `audit_entry` and `chat_message`
+ * that makes append-only a permission rather than a habit.
  */
 
 export { agentSession } from "./agent-session";
@@ -28,6 +28,7 @@ export {
   user,
   verification,
 } from "./auth";
+export { chatMessage, chatNotification, chatThread } from "./chat";
 export { comment } from "./comment";
 export { project } from "./project";
 export { relations } from "./relations";

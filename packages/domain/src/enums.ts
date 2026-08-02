@@ -159,6 +159,49 @@ export const COMMENT_KINDS = ["message", "fallback", "run_error"] as const;
 export const CommentKind = Schema.Literals(COMMENT_KINDS);
 export type CommentKind = typeof CommentKind.Type;
 
+/** A thread is never deleted: the audit log points at it, and an erased conversation orphans every row that named it. */
+export const THREAD_STATUSES = ["active", "archived"] as const;
+
+/** Whether a chat thread still takes messages. */
+export const ThreadStatus = Schema.Literals(THREAD_STATUSES);
+export type ThreadStatus = typeof ThreadStatus.Type;
+
+/** Two voices only: the person, and the manager answering as itself. */
+export const CHAT_MESSAGE_ROLES = ["user", "manager"] as const;
+
+/** Who spoke in a chat thread. */
+export const ChatMessageRole = Schema.Literals(CHAT_MESSAGE_ROLES);
+export type ChatMessageRole = typeof ChatMessageRole.Type;
+
+/**
+ * How an inbound message arrived. Kept apart from the role because it describes
+ * the transport — a voice note and a typed sentence are the same words to the
+ * manager and different work to the bot.
+ */
+export const CHAT_INTAKE_KINDS = [
+  "text",
+  "voice",
+  "forward",
+  "command",
+  "callback",
+] as const;
+
+/** What kind of update a user message came from. */
+export const ChatIntakeKind = Schema.Literals(CHAT_INTAKE_KINDS);
+export type ChatIntakeKind = typeof ChatIntakeKind.Type;
+
+/** What the bot volunteers without being asked. Every one of them is about a run. */
+export const NOTIFY_KINDS = [
+  "run_finished",
+  "run_failed",
+  "needs_review",
+  "stuck",
+] as const;
+
+/** Why a notification was sent. */
+export const NotifyKind = Schema.Literals(NOTIFY_KINDS);
+export type NotifyKind = typeof NotifyKind.Type;
+
 /** Two of the three are read-only mounts, which is what makes promotion an audit trail. */
 export const ARTIFACT_SCOPES = ["task", "project", "global"] as const;
 

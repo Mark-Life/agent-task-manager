@@ -2,6 +2,7 @@ export * from "./actor";
 export * from "./agent-session";
 export * from "./artifact";
 export * from "./audit";
+export * from "./chat";
 export * from "./comment";
 export * from "./enums";
 export * from "./ids";

@@ -15,6 +15,9 @@ import type {
   AgentSession,
   Artifact,
   AuditEntry,
+  ChatMessage,
+  ChatNotification,
+  ChatThread,
   Comment,
   Project,
   Run,
@@ -26,6 +29,11 @@ import type {
 import type { decodeAgentSession } from "./agent-session";
 import type { decodeArtifact } from "./artifact";
 import type { decodeAuditEntry } from "./audit";
+import type {
+  decodeChatMessage,
+  decodeChatNotification,
+  decodeChatThread,
+} from "./chat";
 import type { decodeComment } from "./comment";
 import { conforms, type Decoded } from "./conformance";
 import type { decodeProject } from "./project";
@@ -75,6 +83,24 @@ test("a decoded audit entry is an AuditEntry", () => {
   expect(conforms<Decoded<typeof decodeAuditEntry>, AuditEntry>(true)).toBe(
     true
   );
+});
+
+test("a decoded chat thread is a ChatThread", () => {
+  expect(conforms<Decoded<typeof decodeChatThread>, ChatThread>(true)).toBe(
+    true
+  );
+});
+
+test("a decoded chat message is a ChatMessage", () => {
+  expect(conforms<Decoded<typeof decodeChatMessage>, ChatMessage>(true)).toBe(
+    true
+  );
+});
+
+test("a decoded chat notification is a ChatNotification", () => {
+  expect(
+    conforms<Decoded<typeof decodeChatNotification>, ChatNotification>(true)
+  ).toBe(true);
 });
 
 test("a decoded organization row is a Workspace", () => {
