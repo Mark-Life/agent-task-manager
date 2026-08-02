@@ -144,10 +144,14 @@
       "name": "@workspace/sandbox",
       "version": "0.0.1",
       "dependencies": {
+        "@effect/platform-bun": "catalog:",
         "@workspace/domain": "workspace:*",
+        "@workspace/harness": "workspace:*",
+        "@workspace/telemetry": "workspace:*",
         "effect": "catalog:",
       },
       "devDependencies": {
+        "@types/bun": "^1.3.14",
         "@workspace/typescript-config": "workspace:*",
       },
     },
@@ -211,6 +215,8 @@
         "@effect/platform-bun": "catalog:",
         "@workspace/db": "workspace:*",
         "@workspace/domain": "workspace:*",
+        "@workspace/harness": "workspace:*",
+        "@workspace/telemetry": "workspace:*",
         "effect": "catalog:",
       },
       "devDependencies": {

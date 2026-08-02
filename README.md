@@ -13,7 +13,7 @@ imports nothing of ours.
 | `packages/domain` | Entities, schemas, status machine, actor and scope types. No I/O. | — |
 | `packages/db` | Drizzle schema, migrations, connection layer, repositories, audit write. | `domain` |
 | `packages/harness` | Agent providers, normalized events, session identity, transcripts. | `domain` |
-| `packages/sandbox` | Container lifecycle, mounts, images, credential seeding. | `domain` |
+| `packages/sandbox` | Container lifecycle, mounts, images, repo and artifact materialization. | `domain` |
 | `packages/api` | HttpApi contract + OpenAPI. Types only, no handlers. | `domain` |
 | `packages/orchestrator` | Dispatch, leases, pool, run lifecycle, ingest, artifact index. | `domain` `db` `harness` `sandbox` |
 | `packages/telemetry` | Logger and OTLP layers, wide-event schema, sanitizers, JSONL sink, metrics. | — |
@@ -83,6 +83,8 @@ The `upgrade` command updates Next.js, refreshes all shadcn/ui components, updat
 | `bun run db:up` / `db:down` | Start / stop the local Postgres container |
 | `bun run logs` | Read the wide-event ledger (`runs \| errors \| stats \| follow`) |
 | `bun run harness:check` | Check the agent harness end to end (add `--live` for real model calls) |
+| `bun run sandbox:check` | Check the sandbox end to end against a real container (add `--agent` for the built image) |
+| `bun run images:build` | Build the two arm64 sandbox images (`--base`, `--browser`, `--check`) |
 | `bun run upgrade` | Upgrade Next.js, shadcn/ui, and all deps |
 
 The libraries are consumed as source through tsconfig paths and have no build step, so
@@ -119,6 +121,7 @@ Read from `.env` / `.env.local` at the repo root (see `packages/env`). Telemetry
 | `OTEL_EXPORTER_OTLP_HEADERS` | unset | `k=v,k=v`, split on the first `=` per entry |
 | `SERVICE_VERSION` / `GIT_SHA` | — | stamped on every event's environment fields |
 | `DATABASE_URL` | required; `.env.example` ships `postgres://user:password@localhost:5432/agent_task_manager` | Postgres connection string |
+| `SANDBOX_MODE` | `docker` | `docker` or `local`; `local` runs a host process with no isolation at all |
 
 ## Agent harness (`bun run harness:check`)
 
@@ -144,6 +147,52 @@ bun run harness:check                        # no model call: layout, seeding, r
 bun run harness:check --live                 # one real turn per provider, transcript, rows
 bun run harness:check --live --provider codex  # just the one harness
 ```
+
+## Sandbox (`bun run sandbox:check`)
+
+Every run gets its own Docker container, torn down after it. `packages/sandbox` owns that
+lifetime end to end: one `run` call creates the container, streams its output, waits, inspects
+it, and removes it — on every exit path including the interrupt a stop command produces.
+Interrupting the fiber *is* how a run is stopped, which is why there is no `kill` method. The
+package never imports `packages/db`.
+
+**Five mounts, and nothing else.** The run directory (rw, mounted at `/run`, holding the
+agent home and the event ledger), the workspace checkout (rw, `/workspace`), the task's
+artifacts folder (rw, `/artifacts/task`), and the project's and global promoted folders
+(**ro**, `/artifacts/project` and `/artifacts/global`). Read-only on the shared folders is
+load-bearing: promotion is a deliberate act performed on the host, and that separation is the
+audit trail. Never the docker socket — that one mount turns a sandbox into host root.
+
+**Hardening**: `--cap-drop=ALL`, `no-new-privileges`, non-root, 2048 MB with swap pinned
+equal, 1.5 CPUs, 512 pids, `/tmp` as a capped tmpfs, `--init`. Network is fully open, and that
+is a decision: search, `bun install`, `gh` and the model APIs are the work.
+
+**Two implementations behind one service.** `SANDBOX_MODE=docker` (the default) or `local`,
+which runs the same spec as a plain host process for debugging a harness change without an
+image build. Local isolates nothing and says so — it logs every confinement it dropped, and
+writes `kind: "local"` on its row, so an unisolated run can never be mistaken for a sandboxed
+one afterwards. The orchestrator asks for a `Sandbox` and never learns which it got.
+
+**Repos are cloned from a host-side bare mirror** under `${DATA_ROOT}/mirrors`, refreshed on a
+schedule the orchestrator owns, never on the path of a dispatch. A task with no repo gets an
+empty scratch directory and the same machinery. Artifacts live under
+`${DATA_ROOT}/artifacts/{global,projects/<id>,tasks/<id>}`; Postgres holds an index of them,
+never the bytes.
+
+Every container leaves exactly one `atm.sandbox` row: image, mounts counted, exit code, OOM
+flag, peak memory, wall clock, pull-vs-cached, teardown outcome. The `atm.turn` rows the
+harness writes inside the container land on the host through the run mount, carrying the
+`runId` the host minted, so one query joins the two.
+
+```bash
+bun run sandbox:check          # alpine, seconds: mounts, isolation, correlation, the rows
+bun run sandbox:check --agent  # the same, against atm.local/base:latest and its tools
+bun run sandbox:check --image X  # against any image by name
+```
+
+The check runs the container as the operator's own uid rather than the image's `1000:1000`,
+because a bind mount carries host ownership straight through; everything else in the default
+confinement is untouched. See `docker/README.md` for the two images and the rebuild cadence.
 
 ## Event ledger (`bun run logs`)
 

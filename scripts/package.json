@@ -12,6 +12,7 @@
     "@workspace/db": "workspace:*",
     "@workspace/domain": "workspace:*",
     "@workspace/harness": "workspace:*",
+    "@workspace/sandbox": "workspace:*",
     "@workspace/telemetry": "workspace:*",
     "effect": "catalog:"
   },
