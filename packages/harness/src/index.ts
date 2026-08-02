@@ -44,6 +44,13 @@
  * process by whichever provider was told where to find it. It is not an export:
  * the path belongs to the image, and {@link STOP_HOOK_COMMAND_ENV_VAR} is how
  * the two sides agree on it.
+ *
+ * The container's entrypoint. `src/entrypoint.ts` and its executable at
+ * `scripts/turn.ts` are a process, not a library: they are bundled to one file
+ * and mounted into a container, and a host that imported them would be running
+ * a turn outside the sandbox the whole design rests on. What crosses the
+ * boundary instead is `./turn-spec` — the spec, the result, their paths, and
+ * the exit codes — which both sides read and neither owns.
  */
 
 export {
@@ -181,3 +188,27 @@ export {
   type TurnEventInput,
   type TurnIdentity,
 } from "./turn-event";
+export {
+  CONTAINER_ENTRYPOINT_COMMAND,
+  CONTAINER_ENTRYPOINT_PATH,
+  containerEntrypointArgs,
+  containerStopHookCommand,
+  ENTRYPOINT_BUNDLE_FILE,
+  ENTRYPOINT_SEGMENT,
+  entrypointBundlePathOf,
+  exitCodeOf,
+  STOP_HOOK_FLAG,
+  TURN_EXIT_CODE,
+  TURN_EXIT_REASONS,
+  TURN_LEDGER_SERVICE,
+  TURN_RESULT_FILE,
+  TURN_SPEC_ENV_VAR,
+  TURN_SPEC_FILE,
+  TURN_SPEC_FLAG,
+  TurnExitReason,
+  TurnResult,
+  TurnSpec,
+  TurnSpecIdentity,
+  turnResultPathOf,
+  turnSpecPathOf,
+} from "./turn-spec";

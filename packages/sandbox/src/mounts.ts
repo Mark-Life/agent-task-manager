@@ -9,7 +9,8 @@
  * closed by construction, and is unit-testable without a daemon: a mount added
  * by hand at a call site is a hole nobody reviews.
  *
- * Exactly five mounts, and the reasons are each their own.
+ * Five mounts a run always gets and one it gets when it runs our own entrypoint,
+ * and the reasons are each their own.
  *
  * The run directory carries the run's private agent home, its comment marker and
  * its event ledger, and it is mounted whole at {@link CONTAINER_RUN_DIR} rather
@@ -29,6 +30,14 @@
  * act performed by the gateway, on the host, against a database row; that
  * separation *is* the audit trail, and a writable mount erases it.
  *
+ * The sixth is the bundled turn entrypoint, read-only, and it is a file rather
+ * than a directory. It is not in the image on purpose: the image carries bun,
+ * node, git and the agent CLIs, which move on a weekly rebuild, while the
+ * entrypoint is this repository's own code and changes every commit — so an
+ * image build per commit is the tax it avoids. Read-only because the container
+ * runs it and has no business rewriting the host's copy of it, and conditional
+ * because a container told to run a shell has no entrypoint to mount.
+ *
  * Never the docker socket. Not read-only, not "just for `docker ps`", not ever:
  * a process that can talk to the daemon can start a container with the host root
  * bind-mounted into it, so that one mount turns a sandbox into host root and
@@ -42,6 +51,7 @@
 import { join } from "node:path";
 import {
   AGENT_HOME_SEGMENT,
+  CONTAINER_ENTRYPOINT_PATH,
   CONTAINER_RUN_DIR,
   containerRunLayout,
 } from "@workspace/harness";
@@ -109,6 +119,7 @@ export const MOUNT_PURPOSES = [
   "task_artifacts",
   "project_artifacts",
   "global_artifacts",
+  "entrypoint",
 ] as const;
 
 /** What one mount is for. */
@@ -146,14 +157,38 @@ export interface MountSources {
 }
 
 /**
+ * What is mounted on top of the directories the run's own materialization
+ * produced. Separate from {@link MountSources} because nothing here comes from
+ * a run: the entrypoint is one file under the data root, written by the build
+ * script and shared by every container on the host.
+ */
+export interface MountExtras {
+  /**
+   * The bundled turn entrypoint on the host, mounted read-only at
+   * {@link CONTAINER_ENTRYPOINT_PATH}. Null for a container that runs something
+   * the image already has — a shell, in the checks that prove the plumbing.
+   */
+  readonly entrypointPath: string | null;
+}
+
+/** What a container that brings its own command gets: the five run mounts. */
+export const NO_MOUNT_EXTRAS: MountExtras = { entrypointPath: null };
+
+/**
  * The exact mount set for one run. Pure, total, and the only place the set is
  * decided.
  *
- * The project folder is the one conditional entry: a task with no project has
- * nothing to mount there, and mounting the global folder twice or an empty
- * placeholder would both be lies the agent could read.
+ * Two conditional entries, and neither is a default that hides a decision. A
+ * task with no project has nothing to mount at the project folder, and mounting
+ * the global folder twice or an empty placeholder would both be lies the agent
+ * could read. A container running a command out of the image needs no
+ * entrypoint bundle, and mounting a path that may not exist would refuse to
+ * start it.
  */
-export const mountsFor = (sources: MountSources): readonly Mount[] => {
+export const mountsFor = (
+  sources: MountSources,
+  extras: MountExtras = NO_MOUNT_EXTRAS
+): readonly Mount[] => {
   const mounts: Mount[] = [
     {
       containerPath: CONTAINER_RUN_DIR,
@@ -188,6 +223,14 @@ export const mountsFor = (sources: MountSources): readonly Mount[] => {
     purpose: "global_artifacts",
     readOnly: true,
   });
+  if (extras.entrypointPath !== null) {
+    mounts.push({
+      containerPath: CONTAINER_ENTRYPOINT_PATH,
+      hostPath: extras.entrypointPath,
+      purpose: "entrypoint",
+      readOnly: true,
+    });
+  }
   return mounts;
 };
 

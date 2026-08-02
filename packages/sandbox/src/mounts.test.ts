@@ -6,7 +6,10 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { containerRunLayout } from "@workspace/harness";
+import {
+  CONTAINER_ENTRYPOINT_PATH,
+  containerRunLayout,
+} from "@workspace/harness";
 import {
   CONTAINER_AGENT_HOME_DIR,
   CONTAINER_ARTIFACT_DIR,
@@ -61,6 +64,18 @@ describe("mountsFor", () => {
     expect(byPurpose(mounts, "global_artifacts")?.hostPath).toBe(
       sources.globalArtifactsDir
     );
+  });
+
+  test("the entrypoint bundle is mounted read-only, and only when there is one", () => {
+    expect(byPurpose(mountsFor(sources), "entrypoint")).toBeUndefined();
+
+    const mounts = mountsFor(sources, { entrypointPath: "/data/bin/turn.js" });
+    const entrypoint = byPurpose(mounts, "entrypoint");
+    expect(entrypoint?.hostPath).toBe("/data/bin/turn.js");
+    expect(entrypoint?.containerPath).toBe(CONTAINER_ENTRYPOINT_PATH);
+    // A container that could rewrite the file it is running would be rewriting
+    // it for every other run on the host: one bundle serves them all.
+    expect(entrypoint?.readOnly).toBe(true);
   });
 
   test("nothing resembling the docker socket is ever mounted", () => {

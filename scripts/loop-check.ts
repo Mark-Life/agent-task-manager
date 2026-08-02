@@ -12,28 +12,39 @@
  * backoff ladder, the prompt, the event mapping, the wide event's shape on each
  * exit path — are unit tests in `packages/orchestrator/src`.
  *
- * Two modes, and the difference is what runs the turn.
+ * Three modes, and the difference is where the turn happens and who answers it.
  *
- *   bun run loop:check          A stub provider and the local sandbox. Free,
- *                               and seconds. Proves everything about the loop:
- *                               the trigger, the plan, the pool, the lease, the
- *                               run rows, the timeline in `run_events`, the
- *                               fallback comment, the artifact index, the two
- *                               `atm.run` rows, the kill and the recovery.
+ * `bun run loop:check` runs a stub provider as a host process
+ * (`SANDBOX_MODE=local`), free and in seconds. It proves the loop, claim by
+ * claim: a task moved into *in progress* is claimed, run and landed in review;
+ * the run row closes as `done`; the normalized events reach `run_events`; a run
+ * that posted no comment has its last message appended as one; the file the run
+ * wrote is in the artifact index; the run leaves exactly one `atm.run` start
+ * row and one terminus row; and a loop killed with the run in flight is
+ * recovered on restart with the killed run recorded as `lost`.
  *
- *   bun run loop:check --live   The real provider, which spends real
- *                               subscription allowance on a real turn. This is
- *                               the one that costs money. It proves the one
- *                               thing a stub cannot: that a dispatched task
- *                               reaches an actual model and comes back.
+ * `bun run loop:check --docker` makes every claim on that list except the kill
+ * and the recovery, with the turn served by a real container on
+ * `atm.local/base:latest` — plus the three in `./loop-check-container` that
+ * only a container can answer. Still free: the model call is the one thing
+ * stubbed, by the entrypoint in `./loop-check-turn`, which this bundles to the
+ * path the orchestrator mounts from.
  *
- * **What the default mode does not prove.** It does not prove that a run is
- * isolated — nothing in this system does yet, because the turn is served as a
- * host process whichever mode `SANDBOX_MODE` names; `bun run sandbox:check` is
- * the check that containers work, and the loop does not use them. It does not
- * prove that a model can be reached, that a PR is opened, or that the
- * transcript ingest reads a real provider's file — the stub writes none. And it
- * does not prove the quota gate defers, which needs a drained subscription.
+ * `bun run loop:check --live` is the real provider, spending real subscription
+ * allowance on a real turn. It proves the one thing a stub cannot: that a
+ * dispatched task reaches an actual model and comes back.
+ *
+ * **What no mode here proves.** That a PR is opened, or that the transcript
+ * ingest reads a real provider's file — the stub writes none. That the quota
+ * gate defers, which needs a drained subscription. And, in `--docker`, that a
+ * vendor CLI boots inside the image: that is the one substitution the contained
+ * mode makes, and `bun run harness:check --live` is where it is asked.
+ *
+ * **The kill half always runs on a host process.** Where the turn was running
+ * changes nothing about the lease, the orphaned run row or the terminus the
+ * restart writes — and a killed parent leaves its container behind to run out
+ * its own cap, which is debris a check should not create. So `--docker` skips
+ * it and the default mode proves it.
  *
  * Everything this writes is scoped to its own data root
  * (`${DATA_ROOT}/loop-check`) so a real loop's leases and run directories are
@@ -42,9 +53,24 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
+
+/** The flag that makes this script the process meant to be killed. */
+const CRASH_CHILD = "--crash-child";
+
+/** The flag that runs the turn in a real container. */
+const DOCKER = "--docker";
+
+/** The flag that spends money. */
+const LIVE = "--live";
+
+/**
+ * Whether this invocation serves its turn from a container. Read here rather
+ * than below because it decides `SANDBOX_MODE`, which the loop reads through
+ * `Config` while its layer is being built.
+ */
+const CONTAINED = process.argv.includes(DOCKER);
 
 /**
  * Every setting the loop reads, pinned before a layer is built.
@@ -65,7 +91,9 @@ const CHECK_ROOT = CONFIGURED_ROOT.endsWith(CHECK_SEGMENT)
   : join(CONFIGURED_ROOT, CHECK_SEGMENT);
 process.env.DATA_ROOT = CHECK_ROOT;
 process.env.EVENT_LOG_DIR = join(CHECK_ROOT, "events");
-process.env.SANDBOX_MODE = "local";
+// The crash child never sets this flag, so it always takes the host path — see
+// the note above about the debris a killed parent's container would leave.
+process.env.SANDBOX_MODE = CONTAINED ? "docker" : "local";
 process.env.ORCHESTRATOR_MAX_CONCURRENCY = "1";
 process.env.ORCHESTRATOR_POLL_INTERVAL_MS = "1000";
 process.env.ORCHESTRATOR_LEASE_HEARTBEAT_MS = "1000";
@@ -91,25 +119,29 @@ import {
   type WorkspaceId,
 } from "@workspace/domain";
 import {
-  type AgentEvent,
-  type AgentProvider,
   makeProviderRegistry,
   ProviderRegistry,
   providerTable,
   type RunOptions,
 } from "@workspace/harness";
+import { Orchestrator } from "@workspace/orchestrator";
 import {
-  Orchestrator,
-  RUN_EVENT_MARKER,
-  RunEvent,
-} from "@workspace/orchestrator";
-import {
+  DEFAULT_SANDBOX_IMAGE,
   sandboxLayer,
   taskArtifactsDirOf,
   workspaceLayer,
 } from "@workspace/sandbox";
 import { EventLog, telemetryLayer } from "@workspace/telemetry";
-import { type Duration, Effect, Layer, Schedule, Schema, Stream } from "effect";
+import { type Duration, Effect, Layer, Schedule, Schema } from "effect";
+import { CheckFailed, check, runRows } from "./loop-check-claims";
+import { containedClaims, prepareContainer } from "./loop-check-container";
+import {
+  ARTIFACT_FILE,
+  forbiddenProvider,
+  hangingProvider,
+  STUB_FINAL_TEXT,
+  stubProvider,
+} from "./loop-check-stub";
 import { ensureWorkspace } from "./store/workspace";
 
 /** Names the ledger file and the `application_name` Postgres reports. */
@@ -127,33 +159,14 @@ const LIVE_TIMEOUT = "60 seconds";
 /** How often the database is asked whether the loop has got there yet. */
 const POLL = "250 millis";
 
-/** The flag that makes this script the process meant to be killed. */
-const CRASH_CHILD = "--crash-child";
-
-/** The flag that spends money. */
-const LIVE = "--live";
-
 /**
  * The rows a stubbed run must leave in `run_events`: the session init, the
  * assistant message and the terminus. Fewer means the stream was not ingested.
  */
 const MIN_TIMELINE_ROWS = 3;
 
-/** What the stub writes into the task's artifacts directory. */
-const ARTIFACT_FILE = "stub-run-output.md";
-
-/** The stub's answer, which becomes the run's fallback comment. */
-const STUB_FINAL_TEXT =
-  "Stubbed turn: nothing was asked of a model, and this text is what the fallback comment carries.";
-
 /** The account this check files its tasks as. Nothing logs in as it. */
 const CHECK_USER = UserId.make(`${SERVICE}-human`);
-
-/** One thing the loop was supposed to do and did not. */
-class CheckFailed extends Schema.TaggedErrorClass<CheckFailed>()(
-  "LoopCheck.Failed",
-  { detail: Schema.String, step: Schema.String }
-) {}
 
 /** The child was killed and the parent never saw its run go live. */
 class ChildNeverStarted extends Schema.TaggedErrorClass<ChildNeverStarted>()(
@@ -161,117 +174,39 @@ class ChildNeverStarted extends Schema.TaggedErrorClass<ChildNeverStarted>()(
   { detail: Schema.String }
 ) {}
 
-/**
- * Asserts one claim, naming what was expected when it does not hold. Failing as
- * a value rather than throwing is what makes the whole check one effect that
- * stops at the first broken claim and exits non-zero.
- */
-const check = (options: {
-  readonly detail: string;
-  readonly ok: boolean;
-  readonly step: string;
-}) =>
-  options.ok
-    ? Effect.logInfo(`ok    ${options.step}`)
-    : Effect.fail(
-        new CheckFailed({ detail: options.detail, step: options.step })
-      );
+/** Which of the four harnesses this invocation runs on. */
+type RegistryMode = "contained" | "hang" | "live" | "stub";
 
 /**
- * A provider that answers without a model.
+ * The task's artifacts folder as the host sees it, which is where the host's
+ * own stub writes. The contained stub writes into the same folder through the
+ * mount, and says so with the container's spelling of the path.
+ */
+const hostArtifactsDir = (options: RunOptions) =>
+  options.taskId === null
+    ? null
+    : taskArtifactsDirOf({ dataRoot: CHECK_ROOT, taskId: options.taskId });
+
+/**
+ * Which harness table this invocation runs on.
  *
- * It is a whole `AgentProvider` rather than a patched real one because the
- * registry hands the loop a provider and nothing else: everything downstream —
- * the event file, `run_events`, the terminus, the fallback comment — is driven
- * by the stream, so a scripted stream exercises the entire lifecycle at no cost.
- *
- * The one thing it does beyond talking is write a file into the task's
- * artifacts directory, which is what makes the rescan's claim checkable: an
- * index built from a directory a run really wrote to.
+ * `contained` is the important one: the turn happens inside the container, so
+ * the host's registry must be unable to serve it. A provider that dies is how
+ * a run quietly served on the host shows up as a defect rather than as a check
+ * that passed for the wrong reason.
  */
-const stubProvider = (id: SessionProvider): AgentProvider => ({
-  capabilities: {
-    cost: false,
-    hooks: false,
-    rateLimitSignal: false,
-    reasoning: false,
-    resume: true,
-    subagents: false,
-  },
-  defaultEffort: null,
-  displayName: `${id} (stub)`,
-  efforts: [],
-  id,
-  models: [],
-  run: (options: RunOptions) =>
-    Stream.unwrap(
-      Effect.sync(() => {
-        const providerSessionId = `stub-${options.runId ?? "run"}`;
-        if (options.taskId !== null) {
-          const directory = taskArtifactsDirOf({
-            dataRoot: CHECK_ROOT,
-            taskId: options.taskId,
-          });
-          mkdirSync(directory, { recursive: true });
-          writeFileSync(
-            join(directory, ARTIFACT_FILE),
-            `# Stub run\n\nWritten by the ${id} stub for run ${options.runId}.\n`
-          );
-        }
-        const events: readonly AgentEvent[] = [
-          {
-            kind: "session_init",
-            model: "stub-1",
-            provider: id,
-            providerSessionId,
-          },
-          { kind: "assistant_text", text: STUB_FINAL_TEXT },
-          {
-            costUsd: null,
-            durationMs: 1,
-            errorClass: null,
-            errorMessage: null,
-            kind: "result",
-            outcome: "done",
-            providerSessionId,
-            text: STUB_FINAL_TEXT,
-            totalTokens: 128,
-            turns: 1,
-          },
-        ];
-        return Stream.fromIterable(events);
-      })
-    ),
-});
-
-/**
- * A provider that starts a turn and then says nothing forever, so the process
- * running it can be killed with a run genuinely in flight. Without the
- * `session_init` the run row would never reach `running`, and the crash would
- * be indistinguishable from a loop that never picked the task up.
- */
-const hangingProvider = (id: SessionProvider): AgentProvider => ({
-  ...stubProvider(id),
-  run: (options: RunOptions) =>
-    Stream.concat(
-      Stream.fromIterable<AgentEvent>([
-        {
-          kind: "session_init",
-          model: "stub-1",
-          provider: id,
-          providerSessionId: `stub-${options.runId ?? "run"}`,
-        },
-      ]),
-      Stream.never
-    ),
-});
-
-/** Which harness table this invocation runs on. */
-const registryLayer = (mode: "live" | "hang" | "stub") => {
+const registryLayer = (mode: RegistryMode) => {
   if (mode === "live") {
     return Layer.succeed(ProviderRegistry, makeProviderRegistry(providerTable));
   }
-  const make = mode === "hang" ? hangingProvider : stubProvider;
+  const make = (id: SessionProvider) => {
+    if (mode === "contained") {
+      return forbiddenProvider(id);
+    }
+    return mode === "hang"
+      ? hangingProvider(id)
+      : stubProvider({ artifactsDir: hostArtifactsDir, id });
+  };
   return Layer.succeed(
     ProviderRegistry,
     makeProviderRegistry({ claude: make("claude"), codex: make("codex") })
@@ -283,14 +218,14 @@ const registryLayer = (mode: "live" | "hang" | "stub") => {
  * the harness swapped and everything merged out, because the check reads the
  * rows the loop wrote.
  */
-const appLayer = (mode: "live" | "hang" | "stub") =>
+const appLayer = (registry: RegistryMode) =>
   Orchestrator.layer.pipe(
     Layer.provideMerge(
       Layer.mergeAll(
         CurrentActor.layer(
           Actor.cases.orchestrator.make({ loopInstance: LOOP_INSTANCE })
         ),
-        registryLayer(mode),
+        registryLayer(registry),
         sandboxLayer,
         storeLayer({ applicationName: SERVICE }),
         workspaceLayer
@@ -363,40 +298,6 @@ const awaitLiveRun = (input: {
     );
   });
 
-/** One decoded row of the ledger this check wrote to. */
-type LedgerRow = typeof RunEvent.rowSchema.Type;
-
-const decodeRow = Schema.decodeUnknownOption(RunEvent.rowSchema);
-
-/**
- * The `atm.run` rows for one run, read off the JSONL the way `bun run logs`
- * reads it. Reading the file rather than an in-memory sink is the point: the
- * ledger is what survives the process, and the killed run's start row was
- * written by a process that no longer exists.
- */
-const ledgerRows = (input: { path: string; runId: string }): LedgerRow[] => {
-  if (!existsSync(input.path)) {
-    return [];
-  }
-  const rows: LedgerRow[] = [];
-  for (const line of readFileSync(input.path, "utf8").split("\n")) {
-    if (line.trim().length === 0 || !line.includes(RUN_EVENT_MARKER)) {
-      continue;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const decoded = decodeRow(parsed);
-    if (decoded._tag === "Some" && decoded.value.runId === input.runId) {
-      rows.push(decoded.value);
-    }
-  }
-  return rows;
-};
-
 /** The task this check dispatches: no project, no repo, so no clone and no network. */
 const fileTask = (input: { title: string; workspaceId: WorkspaceId }) =>
   Effect.gen(function* () {
@@ -441,7 +342,7 @@ const happyPath = (workspaceId: WorkspaceId) =>
     const runEvents = yield* RunEventRepo;
 
     const task = yield* fileTask({
-      title: "loop:check — dispatched and finished",
+      title: `loop:check — dispatched and finished${CONTAINED ? " in a container" : ""}`,
       workspaceId,
     });
     yield* Effect.logInfo(`filed task ${task.id} in in_progress`);
@@ -493,7 +394,10 @@ const happyPath = (workspaceId: WorkspaceId) =>
       detail: `the thread holds ${thread.length} comments, kinds ${thread
         .map((comment) => comment.kind)
         .join(", ")}`,
-      ok: thread.some((comment) => comment.kind === "fallback"),
+      ok: thread.some(
+        (comment) =>
+          comment.kind === "fallback" && comment.body.includes(STUB_FINAL_TEXT)
+      ),
       step: "a run that posted no comment had its last message appended as one",
     });
 
@@ -507,7 +411,7 @@ const happyPath = (workspaceId: WorkspaceId) =>
       step: "the file the run wrote is in the artifact index",
     });
 
-    const rows = ledgerRows({ path: ledger.path, runId: run.id });
+    const rows = runRows({ path: ledger.path, runId: run.id });
     const start = rows.filter((row) => row.phase === "start");
     const end = rows.filter((row) => row.phase === "end");
     yield* check({
@@ -520,6 +424,15 @@ const happyPath = (workspaceId: WorkspaceId) =>
       ok: end[0]?.outcome === "done",
       step: "the terminus row reports the run as done",
     });
+
+    if (CONTAINED) {
+      yield* containedClaims({
+        dataRoot: CHECK_ROOT,
+        ledgerPath: ledger.path,
+        rows,
+        runId: run.id,
+      });
+    }
 
     return task.id;
   });
@@ -565,7 +478,7 @@ const crashPath = (workspaceId: WorkspaceId) =>
       step: "the killed run is left open in the database, as a crash leaves it",
     });
 
-    const started = ledgerRows({ path: ledger.path, runId: live.id });
+    const started = runRows({ path: ledger.path, runId: live.id });
     yield* check({
       detail: `found ${started.length} rows for the killed run`,
       ok:
@@ -591,7 +504,7 @@ const crashPath = (workspaceId: WorkspaceId) =>
       step: "the killed run is lost in the ledger, never green and never absent",
     });
 
-    const after = ledgerRows({ path: ledger.path, runId: live.id });
+    const after = runRows({ path: ledger.path, runId: live.id });
     const terminus = after.find((row) => row.phase === "end");
     yield* check({
       detail: `the terminus row says ${terminus?.outcome ?? "nothing at all"}`,
@@ -625,11 +538,31 @@ const cleanUp = (input: {
 
 const loopCheck = Effect.gen(function* () {
   const live = process.argv.includes(LIVE);
+  // Refused rather than resolved. The contained mode's provider is inside the
+  // bundle it mounts, so `--live` beside it would name a harness on the host
+  // that nothing ever calls — an invocation that says it spent allowance and
+  // did not.
+  if (live && CONTAINED) {
+    return yield* Effect.fail(
+      new CheckFailed({
+        detail: `${LIVE} and ${DOCKER} name two different providers; run them one at a time`,
+        step: "the flags name one mode",
+      })
+    );
+  }
   const ledger = yield* EventLog;
   yield* Effect.logInfo(
-    `${SERVICE}: ${live ? "LIVE — this spends real subscription allowance" : "stubbed provider, local sandbox, no money spent"}`
+    `${SERVICE}: ${live ? "LIVE — this spends real subscription allowance" : "stubbed provider, no money spent"}, ${
+      CONTAINED
+        ? `turns run in containers on ${DEFAULT_SANDBOX_IMAGE}`
+        : "turns run as host processes"
+    }`
   );
   yield* Effect.logInfo(`data root ${CHECK_ROOT}, ledger ${ledger.path}`);
+
+  if (CONTAINED) {
+    yield* prepareContainer(CHECK_ROOT);
+  }
 
   const { workspace } = yield* ensureWorkspace();
   const filed: TaskId[] = [];
@@ -637,26 +570,36 @@ const loopCheck = Effect.gen(function* () {
   const happy = yield* happyPath(workspace.id).pipe(Effect.scoped);
   filed.push(happy);
 
-  // The crash half always runs on the stub: killing a live turn mid-flight
-  // would spend allowance on a conversation nobody reads.
-  const crashed = yield* crashPath(workspace.id);
-  filed.push(crashed);
+  // Skipped in the contained mode, for the reason the module note gives: a
+  // parent killed mid-run leaves its container behind to run out its own cap.
+  // The crash half always runs on the stub otherwise — killing a live turn
+  // mid-flight would spend allowance on a conversation nobody reads.
+  if (!CONTAINED) {
+    const crashed = yield* crashPath(workspace.id);
+    filed.push(crashed);
+  }
 
   yield* cleanUp({ taskIds: filed, workspaceId: workspace.id });
   // The ledger sits under this check's own data root, so the viewer has to be
   // pointed at it — printing the exact command is what makes the two rows this
   // check just wrote readable by the operator rather than only by the check.
   yield* Effect.logInfo(
-    `every claim held; read both runs back with EVENT_LOG_DIR=${join(CHECK_ROOT, "events")} bun run logs`
+    `every claim held; read the runs back with EVENT_LOG_DIR=${join(CHECK_ROOT, "events")} bun run logs`
   );
 });
 
 const childTaskId = process.argv[process.argv.indexOf(CRASH_CHILD) + 1];
 
+/** Which harness this invocation hands the loop. The flags do not combine. */
+const registryMode = (): RegistryMode => {
+  if (process.argv.includes(LIVE)) {
+    return "live";
+  }
+  return CONTAINED ? "contained" : "stub";
+};
+
 BunRuntime.runMain(
   process.argv.includes(CRASH_CHILD) && childTaskId !== undefined
     ? crashChild(childTaskId).pipe(Effect.provide(appLayer("hang")))
-    : loopCheck.pipe(
-        Effect.provide(appLayer(process.argv.includes(LIVE) ? "live" : "stub"))
-      )
+    : loopCheck.pipe(Effect.provide(appLayer(registryMode())))
 );

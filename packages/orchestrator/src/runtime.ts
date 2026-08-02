@@ -60,7 +60,7 @@ import {
   type TaskId,
   type WorkspaceId,
 } from "@workspace/domain";
-import { hostRunLayout } from "@workspace/harness";
+import { entrypointBundlePathOf, hostRunLayout } from "@workspace/harness";
 import { sandboxImageFor } from "@workspace/sandbox";
 import {
   Cause,
@@ -71,6 +71,7 @@ import {
   Schedule,
   Stream,
 } from "effect";
+import { FileSystem } from "effect/FileSystem";
 import { rescanRunArtifacts } from "./artifacts";
 import {
   makeRunCommands,
@@ -91,7 +92,7 @@ import { openRun, type RunClaim } from "./open-run";
 import { freeSlots, type PoolStats, WorkerPool } from "./pool";
 import { QuotaGate, quotaGateLayer } from "./quota";
 import { stampRetry } from "./retry";
-import { type RunClosed, runOpened, SERVED_BY } from "./run";
+import { type RunClosed, runOpened } from "./run";
 import {
   emitLostRun,
   makeRunProgress,
@@ -163,15 +164,13 @@ const make = Effect.gen(function* () {
   const tasks = yield* TaskRepo;
   const workspaces = yield* WorkspaceRepo;
 
-  // The row reports the sandbox that ran the turn, never the one that was
-  // configured. `./run` serves every turn as a host process today, and a row
-  // claiming `docker` for one of those is exactly the confusion the field was
-  // added to prevent — so the banner's mode and this can differ, and the
-  // warning below is what makes the difference visible rather than silent.
+  // The row reports the sandbox that ran the turn. One read of `SANDBOX_MODE`,
+  // handed to `./run` and written onto the row, so the implementation that
+  // served a turn and the one its row claims cannot be two different answers.
   const settings: RunEventSettings = {
     maxAttempts: config.maxAttempts,
     maxConcurrency: config.maxConcurrency,
-    sandboxKind: SERVED_BY,
+    sandboxKind: config.sandboxKind,
   };
 
   /**
@@ -247,6 +246,7 @@ const make = Effect.gen(function* () {
         context,
         dataRoot: planned.claim.dataRoot,
         onClose: collect,
+        sandboxKind: config.sandboxKind,
         timeoutMs: config.runTimeoutMs,
       }).pipe(
         withRunEvent({
@@ -709,12 +709,37 @@ const make = Effect.gen(function* () {
     Effect.asVoid
   );
 
-  const run = Effect.gen(function* () {
-    if (config.sandboxKind !== SERVED_BY) {
+  /**
+   * What this process is about to run turns on, said once at boot.
+   *
+   * The container path has one prerequisite the loop cannot supply for itself:
+   * the entrypoint is bundled onto the host rather than baked into the image,
+   * so a checkout that has never run `bun run entrypoint:build` starts every
+   * container against a mount source that is not there. That failure is
+   * `Sandbox.MountSourceMissing` per run and perfectly clear once read — this
+   * says it once, at boot, before any task has been spent on it.
+   */
+  const announceSandbox = Effect.gen(function* () {
+    if (config.sandboxKind === "local") {
       yield* Effect.logWarning(
-        `SANDBOX_MODE is ${config.sandboxKind}, but every turn is served as a host process — runs are not isolated and their rows say ${SERVED_BY}`
+        "SANDBOX_MODE is local: every turn runs as a host process with no isolation, and its row says so"
       );
+      return;
     }
+    const fs = yield* FileSystem;
+    const bundle = entrypointBundlePathOf(config.dataRoot);
+    const present = yield* fs
+      .exists(bundle)
+      .pipe(Effect.orElseSucceed(() => false));
+    yield* present
+      ? Effect.logInfo(`turns run in containers, entrypoint ${bundle}`)
+      : Effect.logWarning(
+          `the turn entrypoint is not bundled at ${bundle}: every container will refuse to start until \`bun run entrypoint:build\` has run`
+        );
+  });
+
+  const run = Effect.gen(function* () {
+    yield* announceSandbox;
     yield* Effect.logInfo(
       `loop listening on ${config.maxConcurrency} slots, polling every ${config.pollIntervalMs}ms`
     );

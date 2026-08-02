@@ -31,7 +31,8 @@
     "harness:check": "bun run scripts/harness-check.ts",
     "sandbox:check": "bun run scripts/sandbox-check.ts",
     "loop:check": "bun run scripts/loop-check.ts",
-    "images:build": "bun run scripts/build-images.ts"
+    "images:build": "bun run scripts/build-images.ts",
+    "entrypoint:build": "bun run scripts/build-entrypoint.ts"
   },
   "version": "0.0.1",
   "workspaces": {

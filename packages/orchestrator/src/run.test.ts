@@ -58,7 +58,7 @@ import {
   ProviderRegistry,
   type ProviderTable,
 } from "@workspace/harness";
-import { localWorkspaceLayer } from "@workspace/sandbox";
+import { localSandboxLayer, localWorkspaceLayer } from "@workspace/sandbox";
 import { Telemetry } from "@workspace/telemetry";
 import { Effect, Layer, Stream } from "effect";
 import type { RunClaim } from "./open-run";
@@ -172,11 +172,16 @@ const ensureWorkspace = Effect.gen(function* () {
   return { owner: ownerId, workspace: created as NonNullable<typeof created> };
 });
 
+const telemetry = Telemetry.layer({ serviceName: APPLICATION_NAME });
+
 /** The store and the disk. The provider is layered on per test. */
 const baseLayer = Layer.mergeAll(
   storeLayer({ applicationName: APPLICATION_NAME }),
-  Telemetry.layer({ serviceName: APPLICATION_NAME }),
-  localWorkspaceLayer({ clone: () => Effect.void })
+  telemetry,
+  localWorkspaceLayer({ clone: () => Effect.void }),
+  // Required by the lifecycle rather than used by these cases: every run here
+  // is `sandboxKind: "local"`, which never asks the sandbox for a container.
+  localSandboxLayer.pipe(Layer.provide(telemetry))
 ).pipe(Layer.provideMerge(BunFileSystem.layer));
 
 /** Tasks this file created, deleted at the end whatever happened in between. */
@@ -229,6 +234,9 @@ const runOnce = (input: {
     const task = yield* seedTask({ owner, title: input.title });
     const outcome = yield* performRun({
       claim: claimOf(task),
+      // The host path, which is what a scripted provider is: the container path
+      // has a container test of its own, in `./container-turn.test`.
+      sandboxKind: "local",
       timeoutMs: input.timeoutMs ?? TURN_TIMEOUT_MS,
     });
 

@@ -85,8 +85,9 @@ The `upgrade` command updates Next.js, refreshes all shadcn/ui components, updat
 | `bun run harness:check` | Check the agent harness end to end (add `--live` for real model calls) |
 | `bun run sandbox:check` | Check the sandbox end to end against a real container (add `--agent` for the built image) |
 | `bun run images:build` | Build the two arm64 sandbox images (`--base`, `--browser`, `--check`) |
+| `bun run entrypoint:build` | Bundle the container's turn entrypoint to `${DATA_ROOT}/bin/turn.js` (`--check` reports without building) |
 | `bun run loop:start` / `loop:dev` | Run the orchestrator loop (watch mode for `dev`) |
-| `bun run loop:check` | Check the loop end to end on a stub provider (add `--live` for real model calls) |
+| `bun run loop:check` | Check the loop end to end on a stub provider (add `--docker` for a real container, `--live` for real model calls) |
 | `bun run upgrade` | Upgrade Next.js, shadcn/ui, and all deps |
 
 The libraries are consumed as source through tsconfig paths and have no build step, so
@@ -163,7 +164,9 @@ agent home and the event ledger), the workspace checkout (rw, `/workspace`), the
 artifacts folder (rw, `/artifacts/task`), and the project's and global promoted folders
 (**ro**, `/artifacts/project` and `/artifacts/global`). Read-only on the shared folders is
 load-bearing: promotion is a deliberate act performed on the host, and that separation is the
-audit trail. Never the docker socket — that one mount turns a sandbox into host root.
+audit trail. Never the docker socket — that one mount turns a sandbox into host root. A
+container that runs our own turn entrypoint gets one more, read-only: the bundled entrypoint
+at `/opt/atm/turn.js` (see below).
 
 **Hardening**: `--cap-drop=ALL`, `no-new-privileges`, non-root, 2048 MB with swap pinned
 equal, 1.5 CPUs, 512 pids, `/tmp` as a capped tmpfs, `--init`. Network is fully open, and that
@@ -192,9 +195,10 @@ bun run sandbox:check --agent  # the same, against atm.local/base:latest and its
 bun run sandbox:check --image X  # against any image by name
 ```
 
-The check runs the container as the operator's own uid rather than the image's `1000:1000`,
-because a bind mount carries host ownership straight through; everything else in the default
-confinement is untouched. See `docker/README.md` for the two images and the rebuild cadence.
+Every container this repo starts — the check and every dispatched run — runs as the operator's
+own uid rather than the image's `1000:1000`, because a bind mount carries host ownership
+straight through; everything else in the default confinement is untouched. See
+`docker/README.md` for the two images and the rebuild cadence.
 
 ## Orchestrator loop (`bun run loop:start`, `bun run loop:check`)
 
@@ -223,6 +227,22 @@ next sweep would otherwise try again forever: a dispatch that never became a run
 that ended but whose move to *review* was refused. The second one is stamped from inside the
 run's own close, so the `atm.run` row reports the rung it earned.
 
+**Every dispatched turn runs in its own container.** The loop writes a turn spec into the run's
+directory, starts `atm.local/base:latest` over the mounts above, and reads back what the
+container left in that same directory: the normalized event file — tailed *while* the container
+runs, so the timeline fills live and `seq` is the file's line ordinal on both passes — the
+`atm.turn` row, and a result file that is the container's last word on a run whose stream said
+nothing at all. The entrypoint is not baked into the image. The image carries bun, node, git,
+`gh` and the agent CLIs, which move on a weekly rebuild, while the entrypoint is this repo's own
+code and changes every commit, so `bun run entrypoint:build` bundles it to
+`${DATA_ROOT}/bin/turn.js` and it is bind-mounted read-only at `/opt/atm/turn.js`. Run that once
+before the first dispatch; the loop says so at boot when the bundle is missing. Three caps nest,
+each below the one outside it — the loop's `ORCHESTRATOR_RUN_TIMEOUT_MS`, the container's, and
+the turn's — because the container's cap is a `SIGKILL` that leaves no result file, so the
+informative ending is always the one that fires first. `SANDBOX_MODE=local` still serves the
+turn as a plain host process for debugging a harness change without an image, and writes
+`kind: "local"` on the row so an unisolated run can never be mistaken for a contained one.
+
 **A run that goes quiet is closed, not waited on.** A stream that ends with no result is
 `lost`; one that never ends at all is torn down at `ORCHESTRATOR_RUN_TIMEOUT_MS` (an hour by
 default) and closed as `timeout`, so a wedged provider costs one slot for one hour rather than
@@ -247,23 +267,27 @@ moving the task, and writing the terminus row the killed process could not. A ru
 path, so a start with no end is a countable `lost` run rather than silence.
 
 ```bash
-bun run loop:start   # the loop, against DATABASE_URL; Ctrl-C for a graceful stop
-bun run loop:check   # stub provider, own data root, seconds, free
-bun run loop:check --live   # the same, on the real provider — this one costs money
+bun run loop:start           # the loop, against DATABASE_URL; Ctrl-C for a graceful stop
+bun run loop:check           # stub provider, turn as a host process, own data root, seconds, free
+bun run loop:check --docker  # the same claims with the turn in a real container — still free
+bun run loop:check --live    # the same, on the real provider — this one costs money
 ```
 
 `loop:check` files a task, watches the loop run it into *review*, then kills a second loop
-mid-run with `SIGKILL` and proves the restart closes the killed run as `lost`. Knobs:
-`ORCHESTRATOR_MAX_CONCURRENCY` (default 2, sized for a 4-core box),
+mid-run with `SIGKILL` and proves the restart closes the killed run as `lost`.
+
+`--docker` runs that first half with the turn inside `atm.local/base:latest` and adds the three
+claims a host process cannot make: the `atm.run` rows say `kind: docker` on that image, the
+daemon left an `atm.sandbox` row for a container that really ran, and the `atm.turn` row written
+*inside* the container came back out through the mount carrying the run id the host minted. It
+stays free because it bundles its own entrypoint — the real one from `packages/harness` with the
+provider stubbed, so the model call is the only thing faked — into its own data root, never over
+the operator's `${DATA_ROOT}/bin/turn.js`. It skips the kill half, which is a claim about the
+loop and needs no container.
+
+Knobs: `ORCHESTRATOR_MAX_CONCURRENCY` (default 2, sized for a 4-core box),
 `ORCHESTRATOR_POLL_INTERVAL_MS`, `ORCHESTRATOR_LEASE_STALE_MS`, `ORCHESTRATOR_MAX_ATTEMPTS`,
 `ORCHESTRATOR_RUN_TIMEOUT_MS`, `ORCHESTRATOR_DEFAULT_PROVIDER`, `LOOP_SHUTDOWN_GRACE_MS`.
-
-**Not wired yet:** the turn is served as a host process whichever mode `SANDBOX_MODE` names.
-`packages/sandbox` works and is checked by `bun run sandbox:check`, but running the harness
-inside a container needs an entrypoint in the image that speaks the harness's event contract,
-and that does not exist — so the loop warns at startup when the configured mode is `docker` and
-writes `kind: "local"` on the row, because a row claiming isolation it did not have is the one
-lie that field exists to prevent.
 
 ## Event ledger (`bun run logs`)
 

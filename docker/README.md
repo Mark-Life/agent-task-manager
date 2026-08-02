@@ -90,6 +90,15 @@ host. The value is stated in three places that must agree: `AGENT_UID` here,
 `DEFAULT_USER` in `packages/sandbox/src/hardening.ts`, and whoever owns the data
 root. A mismatch is a run that boots fine and cannot write its own agent home.
 
+A dispatched run does not take `DEFAULT_USER`: `container-turn.ts` runs the
+container as the uid of the loop process, which is by construction the owner of
+the run directory it just created. On a host whose operator is uid 1000 that is
+the image's own user and nothing differs; on a mac it is not, and the override is
+what makes a container able to write its own mounts there. Both other values
+still have to agree — the image's `/home/agent` and everything under it belongs
+to 1000, so a run under another uid has no writable `HOME` and the tools that
+want one fall back to `/tmp`.
+
 **`git config --system safe.directory '*'`.** The workspace is a bind mount, and
 a uid that disagrees with the checkout's owner turns every git command into
 `detected dubious ownership` — a failure that reads like a broken image. The

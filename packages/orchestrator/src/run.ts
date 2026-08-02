@@ -10,6 +10,16 @@
  * store, which is what keeps the two views of one run in step — and it is why
  * `./ingest` can re-read the same file afterwards without duplicating anything.
  *
+ * **One turn, two places it can happen.** A dispatched run is a container: the
+ * spec goes into the run directory, the container writes its events into the
+ * same directory, and `./container-turn` reads them back. The local mode runs
+ * the provider in this process against host paths instead, and it is a
+ * debugging escape hatch rather than a second way to dispatch. Which one served
+ * a run is the resolved sandbox kind, it is what the prompt's paths are built
+ * from, and it is what the run's row reports — the three follow from one fact,
+ * and a row claiming `docker` for a host process is the confusion the field
+ * exists to prevent.
+ *
  * **Silence is an ending.** A provider that goes away mid-stream emits nothing
  * at all — no terminus, no error — so a stream that finishes without a `result`
  * is closed as `lost` rather than waited on. A provider that goes quiet without
@@ -34,9 +44,15 @@ import {
   scopedAgentHome,
   TimedOut,
 } from "@workspace/harness";
-import { identityEnv, repoSourceFor, Workspace } from "@workspace/sandbox";
+import {
+  identityEnv,
+  repoSourceFor,
+  type SandboxKind,
+  Workspace,
+} from "@workspace/sandbox";
 import { Cause, DateTime, Effect, Ref, Schema, Stream } from "effect";
 import { FileSystem } from "effect/FileSystem";
+import { type ContainerRecord, containerTurn } from "./container-turn";
 import {
   type DispatchContext,
   eventLogPathOf,
@@ -67,23 +83,6 @@ import {
 /** Encoder for one line of the run's event file, built once rather than per event. */
 const encodeRecord = Schema.encodeEffect(AgentEventRecord);
 
-/**
- * Which sandbox actually serves a run, and it is a constant because there is
- * currently only one implementation of the turn.
- *
- * The provider is started here, in this process, against host paths — so the
- * prompt names host paths and the run's row says `local`. Both follow from the
- * same fact and neither may be read off `SANDBOX_MODE`: a prompt naming
- * `/artifacts/task` to a process that can only see the data root sends the
- * agent to write into a directory that does not exist, and a row claiming
- * `docker` for a host process is the one lie the field exists to prevent.
- *
- * Running the turn inside a container needs an entrypoint in the image that
- * speaks the harness's event contract; until that exists, `SANDBOX_MODE=docker`
- * is a setting the loop reports and warns about rather than one it honours.
- */
-export const SERVED_BY = "local" as const;
-
 /** What running one turn needs beyond the context it runs under. */
 export interface ExecuteRunInput {
   readonly context: DispatchContext;
@@ -100,6 +99,13 @@ export interface ExecuteRunInput {
    */
   readonly env: Readonly<Record<string, string>>;
   readonly progress: Ref.Ref<TurnProgress>;
+  /**
+   * Which implementation serves this turn, already resolved by the caller from
+   * `SANDBOX_MODE`. Passed in rather than read here, because the same answer
+   * has to reach the row the loop writes and the prompt this run is given, and
+   * a second read is where the three come to disagree.
+   */
+  readonly sandboxKind: SandboxKind;
   /**
    * How long the whole turn — checkout, prompt and stream — may take before it
    * is torn down as {@link TimedOut}.
@@ -133,6 +139,7 @@ export const executeRun = (input: ExecuteRunInput) =>
   Effect.scoped(
     Effect.gen(function* () {
       const { context, progress } = input;
+      const contained = input.sandboxKind === "docker";
       const fs = yield* FileSystem;
       const registry = yield* ProviderRegistry;
       const runEvents = yield* RunEventRepo;
@@ -173,7 +180,7 @@ export const executeRun = (input: ExecuteRunInput) =>
       // went into it are not delivered twice.
       const prompt = yield* buildRunPrompt({
         context,
-        placement: placementOf({ kind: SERVED_BY, workspace: made }),
+        placement: placementOf({ kind: input.sandboxKind, workspace: made }),
       });
       yield* Ref.update(progress, (current) => ({
         ...current,
@@ -205,31 +212,38 @@ export const executeRun = (input: ExecuteRunInput) =>
           Effect.ignore
         );
 
-      const onEvent = (event: AgentEvent) =>
+      /**
+       * One event of the run's timeline, stored and folded into what the run
+       * knows. The `seq` is handed in rather than counted here: it is the
+       * ordinal of the line in the event file, which is the only numbering a
+       * re-ingest can collide with — the local path appends the line itself and
+       * so knows the ordinal, and the container path reads it off the file.
+       */
+      const onRecord = (input_: {
+        readonly event: AgentEvent;
+        readonly occurredAt: DateTime.Utc;
+        readonly seq: number;
+      }) =>
         Effect.gen(function* () {
+          const { event, occurredAt, seq } = input_;
           const before = yield* Ref.get(progress);
-          const occurredAt = yield* DateTime.now;
-          yield* appendLine({ event, occurredAt });
 
           // A row the database refuses is one line of the timeline lost, and
-          // the file above still has it. The ordinal is spent either way, so a
-          // later re-ingest lands the missing row in its own place rather than
+          // the file still has it. The ordinal is spent either way, so a later
+          // re-ingest lands the missing row in its own place rather than
           // shifting everything after it.
           yield* runEvents
             .append({
               occurredAt,
               payload: toRunEventPayload(event, mapping),
               runId: context.runId,
-              seq: before.eventsSeen,
+              seq,
               taskId,
               workspaceId,
             })
             .pipe(
               Effect.tapError((cause) =>
-                Effect.logWarning("run event not stored", {
-                  cause,
-                  seq: before.eventsSeen,
-                })
+                Effect.logWarning("run event not stored", { cause, seq })
               ),
               Effect.ignore
             );
@@ -266,50 +280,84 @@ export const executeRun = (input: ExecuteRunInput) =>
           }
         });
 
-      const events = registry.get(context.provider).run({
-        agentHomeDir: home.agentHomeDir,
-        effort: null,
-        env: {
-          ...identityEnv(identity),
-          ...input.env,
-          // The hook runs outside a container here, so it is told where the
-          // marker really is rather than assuming the container's own path.
-          [COMMENT_MARKER_ENV_VAR]: commentMarkerPathOf(context.layout),
-          ...home.env,
-        },
-        model: null,
-        prompt: prompt.text,
-        resumeSessionId: resumeSessionIdOf(context),
-        runId: context.runId,
-        signal: null,
-        taskId,
-        workspaceDir: made.workspaceDir,
+      /** The container path: the file is the container's, and it is only read. */
+      const fromContainer = ({ record, seq }: ContainerRecord) =>
+        onRecord({ event: record.event, occurredAt: record.occurredAt, seq });
+
+      /**
+       * The local path: this process is the writer, so the line goes into the
+       * event file first and its ordinal is the count of events already seen.
+       */
+      const fromProvider = (event: AgentEvent) =>
+        Effect.gen(function* () {
+          const before = yield* Ref.get(progress);
+          const occurredAt = yield* DateTime.now;
+          yield* appendLine({ event, occurredAt });
+          yield* onRecord({ event, occurredAt, seq: before.eventsSeen });
+        });
+
+      /** The turn in this process, against host paths. The escape hatch. */
+      const hostTurn = Effect.gen(function* () {
+        const events = registry.get(context.provider).run({
+          agentHomeDir: home.agentHomeDir,
+          effort: null,
+          env: {
+            ...identityEnv(identity),
+            ...input.env,
+            // The hook runs outside a container here, so it is told where the
+            // marker really is rather than assuming the container's own path.
+            [COMMENT_MARKER_ENV_VAR]: commentMarkerPathOf(context.layout),
+            ...home.env,
+          },
+          model: null,
+          prompt: prompt.text,
+          resumeSessionId: resumeSessionIdOf(context),
+          runId: context.runId,
+          signal: null,
+          taskId,
+          workspaceDir: made.workspaceDir,
+        });
+        yield* Stream.runForEach(events, fromProvider);
+        const state = yield* Ref.get(progress);
+        return (
+          state.terminus ??
+          // No terminus and no failure: the process went away mid-stream. Its
+          // own ending, because the count of how far it got is the only thing
+          // there is to say about it.
+          lostTerminus({
+            eventsSeen: state.eventsSeen,
+            exitCode: null,
+            finalText: state.finalText,
+            providerSessionId: state.providerSessionId,
+          })
+        );
       });
 
-      // Only the typed failure is caught. An interrupt is a stop command and
-      // belongs to the caller's `onExit`, and a defect is a bug that should not
-      // be filed as a run that merely errored.
-      const failure: unknown = yield* Stream.runForEach(events, onEvent).pipe(
-        Effect.as(null),
-        Effect.catch((error) => Effect.succeed<unknown>(error))
-      );
+      /**
+       * The typed failure of either path, as the ending it is. A provider that
+       * crashed and a daemon that refused are the same kind of answer, so both
+       * turns are recovered here rather than each naming its own vocabulary. An
+       * interrupt is a stop command and belongs to the caller's `onExit`, and a
+       * defect is a bug that should not be filed as a run that merely errored.
+       */
+      const asEnding = (error: unknown) =>
+        Effect.map(Ref.get(progress), (state) =>
+          terminusOfFailure(error, state)
+        );
 
-      const state = yield* Ref.get(progress);
-      if (failure !== null) {
-        return terminusOfFailure(failure, state);
+      if (contained) {
+        return yield* containerTurn({
+          context,
+          dataRoot: input.dataRoot,
+          env: input.env,
+          onRecord: fromContainer,
+          progress,
+          prompt: prompt.text,
+          timeoutMs: input.timeoutMs,
+          workspace: made,
+        }).pipe(Effect.catch(asEnding));
       }
-      return (
-        state.terminus ??
-        // No terminus and no failure: the process went away mid-stream. Its own
-        // ending, because the count of how far it got is the only thing there
-        // is to say about it.
-        lostTerminus({
-          eventsSeen: state.eventsSeen,
-          exitCode: null,
-          finalText: state.finalText,
-          providerSessionId: state.providerSessionId,
-        })
-      );
+      return yield* hostTurn.pipe(Effect.catch(asEnding));
     }).pipe(
       // The cap over everything above, and an ending rather than an error: a
       // turn that outlived its deadline is one more way a run finishes, so it
@@ -340,6 +388,8 @@ export const executeRun = (input: ExecuteRunInput) =>
 export interface PerformRunInput {
   readonly claim: RunClaim;
   readonly env?: Readonly<Record<string, string>>;
+  /** Which implementation serves the turn. See {@link ExecuteRunInput.sandboxKind}. */
+  readonly sandboxKind: SandboxKind;
   readonly timeoutMs: number;
 }
 
@@ -383,6 +433,8 @@ export interface RunOpenedInput<R = never> {
    * then failed to close.
    */
   readonly onClose?: (closed: RunClosed) => Effect.Effect<void, never, R>;
+  /** Which implementation serves the turn. See {@link ExecuteRunInput.sandboxKind}. */
+  readonly sandboxKind: SandboxKind;
   /** The turn's deadline. Required, because a run with no cap holds its slot forever. */
   readonly timeoutMs: number;
 }
@@ -437,6 +489,7 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
       dataRoot: input.dataRoot,
       env: input.env ?? {},
       progress,
+      sandboxKind: input.sandboxKind,
       timeoutMs: input.timeoutMs,
     }).pipe(
       Effect.onExit((exit) =>
@@ -473,6 +526,7 @@ export const performRun = (input: PerformRunInput) =>
       context,
       dataRoot: input.claim.dataRoot,
       env: input.env,
+      sandboxKind: input.sandboxKind,
       timeoutMs: input.timeoutMs,
     });
   }).pipe(Effect.withSpan("Run.perform"));

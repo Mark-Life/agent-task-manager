@@ -146,10 +146,12 @@ export {
   eventLogDirOf,
   MOUNT_PURPOSES,
   type Mount,
+  type MountExtras,
   MountPurpose,
   type MountSources,
   mountSourcePaths,
   mountsFor,
+  NO_MOUNT_EXTRAS,
 } from "./mounts";
 export {
   BRANCH_PREFIX,
