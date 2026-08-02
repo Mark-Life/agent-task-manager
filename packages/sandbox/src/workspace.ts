@@ -20,6 +20,13 @@
  * writes to inside the directory holding its subscription token. So the
  * checkout is a sibling tree, `workspaces/<runId>`, keyed by the same id.
  *
+ * **The agent home is checked, never created.** Every other mount source here
+ * is made to exist; the provider's login directory is the one that must not be,
+ * because an auto-created empty home starts a container that fails
+ * authentication with a message no human can tell from an expired token. A
+ * missing one is a `MountSourceMissing{purpose: "agent_home"}` naming the path
+ * and the one-time login that fixes it.
+ *
  * **The checkout dies with the scope; nothing else does.** A run's durable
  * output is a pushed branch or a file in the artifacts mount — anything left
  * only in the checkout was scratch, and keeping it would mean a data root that
@@ -29,8 +36,8 @@
  */
 
 import { join } from "node:path";
-import type { RunId } from "@workspace/domain";
-import { runDirOf } from "@workspace/harness";
+import type { RunId, SessionProvider } from "@workspace/domain";
+import { agentHomeLoginHint, runDirOf } from "@workspace/harness";
 import { Effect, Layer } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { type ArtifactLocation, ensureArtifactDir } from "./artifacts";
@@ -134,6 +141,37 @@ export const makeLocalWorkspace = Effect.fnUntraced(function* (
       Effect.as(input.path)
     );
 
+  /**
+   * The provider's login directory, checked and not made.
+   *
+   * The warning carries the one-time login line because this is the failure a
+   * fresh host hits first, and the operator reading it has no other way to know
+   * that the directory is theirs to create by hand.
+   */
+  const requireAgentHome = (input: {
+    readonly agentHomeDir: string;
+    readonly provider: SessionProvider;
+  }) =>
+    fs.exists(input.agentHomeDir).pipe(
+      Effect.flatMap((present) =>
+        present ? Effect.void : Effect.fail(new Error("absent"))
+      ),
+      Effect.tapError(() =>
+        Effect.logWarning("agent home missing", {
+          fix: agentHomeLoginHint(input.provider, input.agentHomeDir),
+          path: input.agentHomeDir,
+        })
+      ),
+      Effect.mapError(
+        () =>
+          new MountSourceMissing({
+            hostPath: input.agentHomeDir,
+            purpose: "agent_home",
+          })
+      ),
+      Effect.as(input.agentHomeDir)
+    );
+
   /** One artifact folder, created and reported against the mount it serves. */
   const ensureArtifacts = (input: {
     readonly dataRoot: string;
@@ -174,7 +212,7 @@ export const makeLocalWorkspace = Effect.fnUntraced(function* (
   const materialize = Effect.fn("Workspace.materialize")(function* (
     input: MaterializeInput
   ) {
-    const { dataRoot, identity, projectId, repo, taskId } = input;
+    const { agentHomeDir, dataRoot, identity, projectId, repo, taskId } = input;
     yield* Effect.annotateCurrentSpan({
       hasProject: projectId !== null,
       hasRepo: repo !== null,
@@ -193,6 +231,8 @@ export const makeLocalWorkspace = Effect.fnUntraced(function* (
       path: eventLogDirOf(runDir),
       purpose: "run",
     });
+
+    yield* requireAgentHome({ agentHomeDir, provider: input.provider });
 
     const globalArtifactsDir = yield* ensureArtifacts({
       dataRoot,
@@ -237,6 +277,7 @@ export const makeLocalWorkspace = Effect.fnUntraced(function* (
           .pipe(Effect.as(repo.branch));
 
     return {
+      agentHomeDir,
       branch,
       globalArtifactsDir,
       projectArtifactsDir,

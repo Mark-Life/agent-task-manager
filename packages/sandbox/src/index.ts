@@ -110,6 +110,7 @@ export {
   DEFAULT_USER,
   defaultHardening,
   type HardeningSpec,
+  hostUser,
   type SandboxNetwork,
   type TmpfsMount,
 } from "./hardening";
@@ -136,7 +137,6 @@ export {
   sandboxLayerFor,
 } from "./mode";
 export {
-  agentHomeDirOf,
   CONTAINER_AGENT_HOME_DIR,
   CONTAINER_ARTIFACT_DIR,
   CONTAINER_ARTIFACTS_DIR,

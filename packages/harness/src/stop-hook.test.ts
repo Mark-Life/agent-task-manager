@@ -156,7 +156,6 @@ describe("commentMarkerPath", () => {
   test("sits beside the event log of whichever layout is asked", () => {
     expect(
       commentMarkerPathOf({
-        agentHomeDir: "/data/runs/r1/agent-home",
         eventLogPath: "/data/runs/r1/events.jsonl",
         runDir: "/data/runs/r1",
       })

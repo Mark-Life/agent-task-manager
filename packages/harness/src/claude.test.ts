@@ -29,6 +29,9 @@ import type { RunOptions } from "./provider";
 
 const RUN_DIR = "/run";
 
+/** Where the sandbox binds the system-owned agent home. */
+const AGENT_HOME_DIR = "/agent-home";
+
 /** Sets one variable and answers with what puts the environment back. */
 const setEnv = (name: string, value: string | undefined) => {
   const previous = process.env[name];
@@ -43,9 +46,10 @@ const setEnv = (name: string, value: string | undefined) => {
 };
 
 const runOptions = (overrides: Partial<RunOptions> = {}): RunOptions => ({
-  agentHomeDir: `${RUN_DIR}/agent-home/claude`,
+  agentHomeDir: AGENT_HOME_DIR,
   effort: null,
   env: {},
+  mcpServers: null,
   model: null,
   prompt: "ship it",
   resumeSessionId: null,
@@ -67,10 +71,8 @@ const queryFor = (overrides: Partial<RunOptions> = {}) =>
   });
 
 describe("buildQuery", () => {
-  test("points the config directory at this run's own claude home", () => {
-    expect(queryFor().options.env?.CLAUDE_CONFIG_DIR).toBe(
-      `${RUN_DIR}/agent-home/claude`
-    );
+  test("points the config directory at the mounted agent home", () => {
+    expect(queryFor().options.env?.CLAUDE_CONFIG_DIR).toBe(AGENT_HOME_DIR);
   });
 
   test("runs in the workspace, never in the agent home", () => {
@@ -99,13 +101,21 @@ describe("buildQuery", () => {
       },
     }).options;
     expect(env?.ANTHROPIC_API_KEY).toBe("sk-ant-deliberate");
-    expect(env?.CLAUDE_CONFIG_DIR).toBe(`${RUN_DIR}/agent-home/claude`);
+    expect(env?.CLAUDE_CONFIG_DIR).toBe(AGENT_HOME_DIR);
   });
 
   test("omits model and resume rather than sending a null through", () => {
     const { options } = queryFor();
     expect("model" in options).toBe(false);
     expect("resume" in options).toBe(false);
+  });
+
+  test("carries mcp servers as an option, never into the shared config directory", () => {
+    // A file merge would race every other container reading the same directory
+    // and would leave this turn's bearer token in the operator's login config.
+    expect("mcpServers" in queryFor().options).toBe(false);
+    const servers = { board: { command: "bun", type: "stdio" as const } };
+    expect(queryFor({ mcpServers: servers }).options.mcpServers).toBe(servers);
   });
 
   test("resumes the provider's own session when given one", () => {

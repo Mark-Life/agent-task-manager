@@ -370,7 +370,7 @@ const endingOf = (
  * folded into `errored`.
  */
 export const TurnEvent = defineEvent(TURN_EVENT_MARKER, {
-  /** Whether the run's private agent home was in play, which decides where the transcript landed. */
+  /** Whether the turn was pointed at an agent home at all — a turn with none has no transcript to find. */
   agentHomeSet: Schema.Boolean,
   assistantChars: Schema.Natural,
   assistantMessages: Schema.Natural,

@@ -32,7 +32,7 @@ import { basename, join } from "node:path";
 import { SessionProvider } from "@workspace/domain";
 import { Effect, Option, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
-import { type RunLayout, TRANSCRIPT_GLOB, transcriptDirOf } from "./paths";
+import { TRANSCRIPT_GLOB, transcriptDirOf } from "./paths";
 import { parseClaudeTranscript } from "./transcript-claude";
 import { parseCodexTranscript } from "./transcript-codex";
 
@@ -139,17 +139,17 @@ export const parseTranscript = (
 ) => PARSERS[provider](lines);
 
 /**
- * Nothing under the run's transcript directory matched. Its own error rather
- * than an empty transcript, because "the agent said nothing" and "the provider
- * never wrote a file" are different failures and only the second one means the
- * agent home was wired up wrong.
+ * Nothing under the provider's transcript directory carried this session id.
+ * Its own error rather than an empty transcript, because "the agent said
+ * nothing" and "the provider never wrote a file" are different failures and
+ * only the second one means the agent home was wired up wrong.
  */
 export class TranscriptNotFound extends Schema.TaggedErrorClass<TranscriptNotFound>()(
   "Harness.TranscriptNotFound",
   {
     provider: SessionProvider,
-    /** The id the scan was narrowing to, when it was narrowing to one. */
-    providerSessionId: Schema.NullOr(Schema.String),
+    /** The id the scan narrowed to. */
+    providerSessionId: Schema.String,
     /** Where the scan looked, so the message names a path a human can `ls`. */
     searchDir: Schema.String,
   }
@@ -164,17 +164,24 @@ export class TranscriptUnreadable extends Schema.TaggedErrorClass<TranscriptUnre
 /** Everything reading a transcript can fail with. */
 export type TranscriptError = TranscriptNotFound | TranscriptUnreadable;
 
-/** Which run's transcript to look for, and which of them if there are several. */
+/** Which session's transcript to look for, and where the provider writes them. */
 export interface FindTranscriptInput {
-  readonly layout: RunLayout;
+  /** The provider's config directory, which is shared by every run on the host. */
+  readonly agentHomeDir: string;
   readonly provider: SessionProvider;
   /**
    * Narrows the scan to the file whose name carries this id, which works for
    * both vendors: Claude names the file after the session, Codex embeds the
-   * session in the rollout name. Null takes the most recently modified file,
-   * which is what a run with one session and no recorded id has.
+   * session in the rollout name.
+   *
+   * Required, and that is the whole safety property of this reader. Every run
+   * and every conversation on the host writes into the one shared tree, so a
+   * scan that fell back to the newest file by mtime would hand this run a
+   * neighbour's conversation — silently, and onward into the durable per-run
+   * copy the ingest reads. A run that ended before naming a session has no
+   * transcript, which is the honest answer.
    */
-  readonly providerSessionId: string | null;
+  readonly providerSessionId: string;
 }
 
 /** A candidate file and the clock that ranks it. */
@@ -219,13 +226,10 @@ const stamp = Effect.fnUntraced(function* (path: string) {
 export const findTranscript = Effect.fn("Transcript.find")(function* (
   input: FindTranscriptInput
 ) {
-  const directory = transcriptDirOf(input.layout, input.provider);
+  const directory = transcriptDirOf(input.agentHomeDir, input.provider);
   const relative = yield* scan(directory, input.provider);
   const wanted = input.providerSessionId;
-  const matched =
-    wanted === null
-      ? relative
-      : relative.filter((path) => basename(path).includes(wanted));
+  const matched = relative.filter((path) => basename(path).includes(wanted));
 
   const candidates = yield* Effect.forEach(matched, (path) =>
     stamp(join(directory, path))
@@ -268,8 +272,8 @@ export const readTranscriptAt = Effect.fn("Transcript.readAt")(function* (
 });
 
 /**
- * Finds this run's transcript and parses it. The whole reader in one call, for
- * the ingest — which has a {@link RunLayout} and a session id and wants records.
+ * Finds one session's transcript and parses it. The whole reader in one call,
+ * for the ingest — which has an agent home and a session id and wants records.
  */
 export const readTranscript = Effect.fn("Transcript.read")(function* (
   input: FindTranscriptInput

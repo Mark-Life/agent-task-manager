@@ -9,15 +9,9 @@ const DEFAULT_DATABASE_CONNECT_TIMEOUT_MS = 10_000;
 // Mirrors the defaults `apps/bot` applies to its own Config reads. The bot is
 // the only reader; these are here so one file lists the whole contract.
 const DEFAULT_BOT_SHUTDOWN_GRACE_MS = 15_000;
-const DEFAULT_BOT_DRAFT_INTERVAL_MS = 300;
 const DEFAULT_BOT_SPLIT_AT = 4000;
 const DEFAULT_BOT_GATEWAY_URL = "http://localhost:3100";
-const DEFAULT_MANAGER_GATEWAY_URL = "http://localhost:3100";
 const DEFAULT_NOTIFY_REPAIR_INTERVAL_MS = 60_000;
-const DEFAULT_MANAGER_PROVIDER = "claude" as const;
-const DEFAULT_MANAGER_TURN_TIMEOUT_MS = 300_000;
-const DEFAULT_MANAGER_TOKEN_TTL_MS = 900_000;
-const DEFAULT_MANAGER_HISTORY_MESSAGES = 40;
 const DEFAULT_NOTIFY_RETRY_GRACE_MS = 60_000;
 const DEFAULT_STUCK_SCAN_INTERVAL_MS = 60_000;
 const DEFAULT_STUCK_WINDOW_MINUTES = 10;
@@ -77,9 +71,8 @@ const load = Effect.gen(function* () {
   const groqApiKey = yield* Config.option(Config.redacted("GROQ_API_KEY"));
 
   // The gateway as the *bot process* reaches it, which is where a tapped button
-  // sends its board write. Deliberately a second variable from the manager's:
-  // under `SANDBOX_MODE=docker` the two are different addresses for the same
-  // server, and one variable would be wrong for one of the two callers.
+  // sends its board write. Not the same address a container resolves under
+  // `SANDBOX_MODE=docker`, which is why the loop reads its own.
   const botGatewayUrl = yield* Config.string("BOT_GATEWAY_URL").pipe(
     Config.withDefault(DEFAULT_BOT_GATEWAY_URL)
   );
@@ -91,35 +84,9 @@ const load = Effect.gen(function* () {
     Config.string("GATEWAY_PUBLIC_URL")
   );
 
-  // The manager agent: one container turn per inbound message. The gateway URL
-  // is the one *the container* resolves, which is not the host's when the
-  // sandbox is docker.
-  const managerGatewayUrl = yield* Config.string("MANAGER_GATEWAY_URL").pipe(
-    Config.withDefault(DEFAULT_MANAGER_GATEWAY_URL)
-  );
-  const managerProvider = yield* Config.literals(
-    ["claude", "codex"] as const,
-    "MANAGER_PROVIDER"
-  ).pipe(Config.withDefault(DEFAULT_MANAGER_PROVIDER));
-  const managerModel = yield* Config.option(Config.string("MANAGER_MODEL"));
-  const managerTurnTimeoutMs = yield* Config.int(
-    "MANAGER_TURN_TIMEOUT_MS"
-  ).pipe(Config.withDefault(DEFAULT_MANAGER_TURN_TIMEOUT_MS));
-
-  // Short, because nothing can recall a minted token.
-  const managerTokenTtlMs = yield* Config.int("MANAGER_TOKEN_TTL_MS").pipe(
-    Config.withDefault(DEFAULT_MANAGER_TOKEN_TTL_MS)
-  );
-  const managerHistoryMessages = yield* Config.int(
-    "MANAGER_HISTORY_MESSAGES"
-  ).pipe(Config.withDefault(DEFAULT_MANAGER_HISTORY_MESSAGES));
-
   // Bot process and renderer knobs.
   const botShutdownGraceMs = yield* Config.int("BOT_SHUTDOWN_GRACE_MS").pipe(
     Config.withDefault(DEFAULT_BOT_SHUTDOWN_GRACE_MS)
-  );
-  const botDraftIntervalMs = yield* Config.int("BOT_DRAFT_INTERVAL_MS").pipe(
-    Config.withDefault(DEFAULT_BOT_DRAFT_INTERVAL_MS)
   );
   const botSplitAt = yield* Config.int("BOT_SPLIT_AT").pipe(
     Config.withDefault(DEFAULT_BOT_SPLIT_AT)
@@ -199,7 +166,6 @@ const load = Effect.gen(function* () {
 
   return {
     anthropicApiKey,
-    botDraftIntervalMs,
     botGatewayUrl,
     botShutdownGraceMs,
     botSplitAt,
@@ -216,12 +182,6 @@ const load = Effect.gen(function* () {
     groqApiKey,
     logFormat,
     logLevel,
-    managerGatewayUrl,
-    managerHistoryMessages,
-    managerModel,
-    managerProvider,
-    managerTokenTtlMs,
-    managerTurnTimeoutMs,
     notifyRepairIntervalMs,
     notifyRetryGraceMs,
     otlpEndpoint,

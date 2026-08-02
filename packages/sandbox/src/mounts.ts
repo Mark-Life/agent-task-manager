@@ -9,15 +9,31 @@
  * closed by construction, and is unit-testable without a daemon: a mount added
  * by hand at a call site is a hole nobody reviews.
  *
- * Five mounts a run always gets and one it gets when it runs our own entrypoint,
+ * Six mounts a run always gets and one it gets when it runs our own entrypoint,
  * and the reasons are each their own.
  *
- * The run directory carries the run's private agent home, its comment marker and
- * its event ledger, and it is mounted whole at {@link CONTAINER_RUN_DIR} rather
- * than as three separate binds. That is what makes the container's view and
+ * The run directory carries the run's comment marker, its turn spec and its
+ * event ledger, and it is mounted whole at {@link CONTAINER_RUN_DIR} rather than
+ * as three separate binds. That is what makes the container's view and
  * `@workspace/harness`'s `containerRunLayout` the same layout applied to two
  * roots — a second bind under `/run` would be a second spelling of a path the
  * harness already computes, and a run whose transcript is never found.
+ *
+ * The agent home is one system-owned host directory per provider, mounted
+ * read-write at {@link CONTAINER_AGENT_HOME_DIR}, and it is the one mount that
+ * is shared between runs. That is deliberate and it is the point: both vendors
+ * refresh their subscription token in place, so a private copy per run means
+ * every refresh is discarded with the container while the original goes stale.
+ * One directory, written by whichever container refreshed last, is the same
+ * arrangement several interactive CLI sessions on one laptop already use.
+ *
+ * It is mounted at the top level rather than under `/run`. It is a different
+ * host directory with a different lifetime, and a bind inside a bind is
+ * ordering-dependent for no gain.
+ *
+ * One home, never both. A run uses one provider, and mounting the other
+ * vendor's login is a credential handed to a container with nothing to do with
+ * it. So the container path is a constant and the host path is chosen per run.
  *
  * The workspace is the repo checkout, read-write, because that is the work.
  *
@@ -56,10 +72,8 @@
 
 import { join } from "node:path";
 import {
-  AGENT_HOME_SEGMENT,
   CONTAINER_ENTRYPOINT_PATH,
   CONTAINER_RUN_DIR,
-  containerRunLayout,
 } from "@workspace/harness";
 import { Schema } from "effect";
 
@@ -103,16 +117,16 @@ export const CONTAINER_EVENT_LOG_DIR = join(
   EVENT_LOG_SEGMENT
 );
 
-/** The run's private agent home inside the container, from the harness layout. */
-export const CONTAINER_AGENT_HOME_DIR = containerRunLayout.agentHomeDir;
+/**
+ * Where the run's provider keeps its config directory inside the container.
+ * Constant, and top level: the host path differs per provider and per operator,
+ * and neither fact belongs anywhere the agent can read it.
+ */
+export const CONTAINER_AGENT_HOME_DIR = "/agent-home";
 
 /** The ledger directory under an already-resolved host run directory. */
 export const eventLogDirOf = (runDir: string) =>
   join(runDir, EVENT_LOG_SEGMENT);
-
-/** The agent home under an already-resolved host run directory. */
-export const agentHomeDirOf = (runDir: string) =>
-  join(runDir, AGENT_HOME_SEGMENT);
 
 /**
  * Why a mount exists. The purpose travels with the mount so a failure names
@@ -121,6 +135,7 @@ export const agentHomeDirOf = (runDir: string) =>
  */
 export const MOUNT_PURPOSES = [
   "run",
+  "agent_home",
   "workspace",
   "task_artifacts",
   "project_artifacts",
@@ -150,6 +165,12 @@ export interface Mount {
  * run write access to the wrong tree.
  */
 export interface MountSources {
+  /**
+   * The host directory holding this run's provider login. System-owned, shared
+   * by every run on the host, and never created by us — see
+   * {@link CONTAINER_AGENT_HOME_DIR}.
+   */
+  readonly agentHomeDir: string;
   /** The global promoted folder. Read-only. */
   readonly globalArtifactsDir: string;
   /** The project's promoted folder, or null for a task with no project. */
@@ -203,6 +224,15 @@ export const mountsFor = (
       readOnly: false,
     },
     {
+      containerPath: CONTAINER_AGENT_HOME_DIR,
+      hostPath: sources.agentHomeDir,
+      // Writable, and that is the whole point of mounting it rather than
+      // copying it: the vendor refreshes its token in place, and a read-only
+      // mount would make every refresh fail.
+      purpose: "agent_home",
+      readOnly: false,
+    },
+    {
       containerPath: CONTAINER_WORKSPACE_DIR,
       hostPath: sources.workspaceDir,
       purpose: "workspace",
@@ -248,13 +278,13 @@ export const mountsFor = (
  */
 export type ManagerMountSources = Pick<
   MountSources,
-  "globalArtifactsDir" | "runDir" | "workspaceDir"
+  "agentHomeDir" | "globalArtifactsDir" | "runDir" | "workspaceDir"
 >;
 
 /**
  * The mount set for a turn that belongs to a conversation rather than to a
- * task: its own run directory, an empty workspace, and the global promoted
- * folder read-only.
+ * task: its own run directory, the provider's agent home, an empty workspace,
+ * and the global promoted folder read-only.
  *
  * A function beside {@link mountsFor} rather than a nullable field on it. The
  * two sets differ in what they are allowed to reach, not in a detail — this one
@@ -277,6 +307,12 @@ export const managerMountsFor = (
       containerPath: CONTAINER_RUN_DIR,
       hostPath: sources.runDir,
       purpose: "run",
+      readOnly: false,
+    },
+    {
+      containerPath: CONTAINER_AGENT_HOME_DIR,
+      hostPath: sources.agentHomeDir,
+      purpose: "agent_home",
       readOnly: false,
     },
     {

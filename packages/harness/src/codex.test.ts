@@ -6,6 +6,7 @@ const options: RunOptions = {
   agentHomeDir: "/run/agent-home/codex",
   effort: null,
   env: { PATH: "/usr/bin" },
+  mcpServers: null,
   model: null,
   prompt: "ship it",
   resumeSessionId: null,

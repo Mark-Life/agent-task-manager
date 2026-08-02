@@ -29,6 +29,8 @@
  * is a security flag that gets dropped during a refactor.
  */
 
+import process from "node:process";
+
 /**
  * Whether the container's root filesystem is writable. Off by default, and this
  * is the honest reason: an agent's ordinary work writes outside its mounts —
@@ -76,6 +78,26 @@ export const DEFAULT_TMPFS_MB = 512;
  * fine and then cannot write its own agent home.
  */
 export const DEFAULT_USER = "1000:1000";
+
+/**
+ * The operator's own `uid:gid`, which is what every container actually runs as.
+ *
+ * This is the answer to the ownership question the mounts raise, and it is one
+ * line because the kernel makes it one line. A bind mount carries host
+ * ownership straight through and does no id translation, so a container writing
+ * the shared agent home writes as whatever numeric uid it was started with. Set
+ * that to the uid that owns the directory on the host — the human who ran
+ * `mkdir` and `/login` — and every write inside lands as them, on a directory
+ * they can still read at `0700`. Nothing needs chowning and nothing needs to be
+ * uid 1000.
+ *
+ * {@link DEFAULT_USER} is only the fallback for a runtime with no `getuid`,
+ * which bun has on both platforms. Zero is a last resort that
+ * `hardeningArgs` will still refuse to make root-shaped silently: a check
+ * script asserts against it.
+ */
+export const hostUser = () =>
+  `${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0}`;
 
 /**
  * The only network mode a sandbox uses. Named rather than inlined so the

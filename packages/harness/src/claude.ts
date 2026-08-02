@@ -263,9 +263,9 @@ const makeStderrTail = () => {
  *
  * Setting this replaces the child's environment outright, so the host's is
  * spread first or the CLI loses `PATH` and `HOME` and never starts. The
- * agent-home variable is merged last and wins over everything: it is what makes
- * the transcript land in this run's directory rather than in a shared one where
- * two containers overwrite each other's refreshed credentials.
+ * agent-home variable is merged last and wins over everything: it is what
+ * points the CLI at the mounted system-owned home, which is where the login is
+ * and where a refreshed token has to land to survive the container.
  */
 const envOf = (options: RunOptions) => {
   const inherited = Object.fromEntries(
@@ -321,6 +321,12 @@ export const buildQuery = ({
     settings: mergeClaudeSettings(settings, stopHookSettings(process.env)),
     stderr: onStderr,
     systemPrompt: { preset: "claude_code", type: "preset" },
+    // Given here rather than written into the config directory: that directory
+    // is shared by every run on the host, and a turn's own servers carry a
+    // bearer token that has no business outliving it.
+    ...(options.mcpServers === null
+      ? {}
+      : { mcpServers: options.mcpServers as Options["mcpServers"] }),
     ...(cliPath === null ? {} : { pathToClaudeCodeExecutable: cliPath }),
     ...(options.model === null ? {} : { model: options.model }),
     ...(options.resumeSessionId === null

@@ -35,6 +35,7 @@ import {
 } from "./workspace";
 
 let root: string;
+let agentHomeDir: string;
 let dataRoot: string;
 let originDir: string;
 
@@ -50,8 +51,12 @@ const identity = {
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "workspace-"));
+  agentHomeDir = join(root, "agent-home");
   dataRoot = join(root, "data");
   originDir = join(root, "origin");
+  // The provider's login is the one mount source materialization never makes,
+  // so the fixture is the operator who logged in by hand.
+  mkdirSync(agentHomeDir, { mode: 0o700, recursive: true });
   mkdirSync(originDir, { recursive: true });
 });
 
@@ -112,7 +117,15 @@ const refusingClone: CloneIntoWorkspace = (input) =>
   );
 
 const materializeInput = (repo: RepoSource | null, projectId = null) =>
-  ({ dataRoot, identity, projectId, repo, taskId }) as MaterializeInput;
+  ({
+    agentHomeDir,
+    dataRoot,
+    identity,
+    projectId,
+    provider: "claude",
+    repo,
+    taskId,
+  }) as MaterializeInput;
 
 /** Runs one materialization and hands the result to the assertions, inside the scope. */
 const withWorkspace = <A>(options: {
@@ -137,6 +150,20 @@ const withWorkspace = <A>(options: {
   );
 
 describe("materialize", () => {
+  test("refuses a run whose provider home does not exist, and does not create it", async () => {
+    const absent = join(root, "never-logged-in");
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: { ...materializeInput(null), agentHomeDir: absent },
+      use: () => null,
+    });
+
+    // An auto-created empty home is a container that boots and reports an auth
+    // error nobody can tell from an expired token, so absence is a refusal.
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(existsSync(absent)).toBe(false);
+  });
+
   test("a task with no repo gets an empty scratch directory", async () => {
     const exit = await withWorkspace({
       clone: refusingClone,

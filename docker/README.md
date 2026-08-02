@@ -88,7 +88,9 @@ outside the file:
 compares numbers, not names — so the container's uid must own `DATA_ROOT` on the
 host. The value is stated in three places that must agree: `AGENT_UID` here,
 `DEFAULT_USER` in `packages/sandbox/src/hardening.ts`, and whoever owns the data
-root. A mismatch is a run that boots fine and cannot write its own agent home.
+root. A mismatch is a run that boots fine and cannot write anything it was
+given, the agent home included — which is where the vendor's refreshed token has
+to land.
 
 A dispatched run does not take `DEFAULT_USER`: `container-turn.ts` runs the
 container as the uid of the loop process, which is by construction the owner of

@@ -1,5 +1,6 @@
 /**
- * Where a run's files live. Pure path algebra — nothing here touches a disk.
+ * Where a run's files live, and where a provider's login lives. Pure path
+ * algebra — nothing here touches a disk.
  *
  * This is the single source of truth for the layout because three parties have
  * to agree on it and none of them can see the others: the sandbox creates the
@@ -8,24 +9,25 @@
  * and the event file back out afterwards. A second spelling of any of these
  * paths is a run whose transcript is never found.
  *
- * The layout is per run rather than per session on purpose. Both providers keep
- * refreshing subscription credentials in their config directory, so two
- * containers sharing one copy invalidate each other; a private copy per run
- * costs a directory and removes the whole class of failure.
+ * The run directory is per run; the agent home is emphatically not. One
+ * system-owned directory per provider lives on the host, is mounted read-write
+ * into every container, and is never copied — because both vendors refresh
+ * their subscription token in place, and a refresh that lands in a throwaway
+ * copy is thrown away with the container while the original goes stale forever.
+ * The two directories therefore have different lifetimes, which is why the home
+ * is not part of {@link RunLayout}.
  *
  * {@link runLayout} is applied twice against different roots — once to the data
  * root on the host, once to the path the run directory is mounted at inside the
  * container — so the two views cannot disagree about anything but the prefix.
  */
 
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { RunId, SessionProvider } from "@workspace/domain";
 
 /** Directory under the data root holding one subdirectory per run. */
 export const RUNS_SEGMENT = "runs";
-
-/** The run's private agent home, mounted read-write into the container. */
-export const AGENT_HOME_SEGMENT = "agent-home";
 
 /** The run's normalized event stream, one JSON line per normalized event. */
 export const EVENT_LOG_FILE = "events.jsonl";
@@ -33,26 +35,63 @@ export const EVENT_LOG_FILE = "events.jsonl";
 /**
  * Where the run directory is mounted inside the sandbox. Only the run's own
  * directory is mounted, never the data root: a container that can see
- * `runs/` can see every other run's credentials.
+ * `runs/` can see every other run's files.
  */
 export const CONTAINER_RUN_DIR = "/run";
-
-/** Each provider's own corner of the agent home. */
-const AGENT_HOME_SUBDIR = {
-  claude: "claude",
-  codex: "codex",
-} as const satisfies Record<SessionProvider, string>;
 
 /**
  * The environment variable that relocates a provider's config directory. This
  * is the whole session-identity mechanism: without it both providers write to
- * `~/.claude` or `~/.codex`, and the transcript lands somewhere shared,
- * unattributable and full of every other project's history.
+ * `~/.claude` or `~/.codex`, which is the operator's own tooling and every
+ * project they have ever opened.
  */
 export const AGENT_HOME_ENV_VAR = {
   claude: "CLAUDE_CONFIG_DIR",
   codex: "CODEX_HOME",
 } as const satisfies Record<SessionProvider, string>;
+
+/**
+ * The variable that names the host directory holding a provider's login.
+ *
+ * Deliberately `ATM_`-prefixed rather than the vendor's own name. A host
+ * process that exported `CLAUDE_CONFIG_DIR` would relocate its own tooling, and
+ * a variable that means "where this process keeps its config" in one file and
+ * "where the containers keep theirs" in another is a variable nobody can read.
+ * The container still receives the vendor name — that is {@link agentHomeEnvAt}
+ * — pointing at the mount.
+ */
+export const AGENT_HOME_DIR_ENV_VAR = {
+  claude: "ATM_AGENT_HOME_DIR_CLAUDE",
+  codex: "ATM_AGENT_HOME_DIR_CODEX",
+} as const satisfies Record<SessionProvider, string>;
+
+/** What each provider's system-owned home is called under the operator's home directory. */
+const AGENT_HOME_DIR_NAME = {
+  claude: ".claude-task-management",
+  codex: ".codex-task-management",
+} as const satisfies Record<SessionProvider, string>;
+
+/**
+ * The host directory holding one provider's login when nothing overrides it.
+ *
+ * Two directories rather than one root with a subdirectory per provider: they
+ * are different shapes with different vendor semantics, and a shared parent
+ * would only be a name for something neither vendor knows about.
+ *
+ * Beside the operator's own `~/.claude` and `~/.codex` rather than inside them,
+ * because this one is logged into separately and every container can write it.
+ */
+export const defaultAgentHomeDirOf = (provider: SessionProvider) =>
+  join(homedir(), AGENT_HOME_DIR_NAME[provider]);
+
+/** The one-time login a missing or empty agent home is fixed by. */
+export const agentHomeLoginHint = (
+  provider: SessionProvider,
+  agentHomeDir: string
+) =>
+  provider === "claude"
+    ? `run \`CLAUDE_CONFIG_DIR=${agentHomeDir} claude\` once and use /login`
+    : `run \`CODEX_HOME=${agentHomeDir} codex login\` once`;
 
 /** Where each provider writes transcripts, relative to its agent home. */
 const TRANSCRIPT_SUBDIR = {
@@ -75,17 +114,14 @@ export const TRANSCRIPT_GLOB = {
 
 /** The directories and files one run owns, under whichever root is looking. */
 export interface RunLayout {
-  /** Private per-provider config directories live under here; mounted read-write. */
-  readonly agentHomeDir: string;
   /** The normalized event stream the orchestrator ingests after the run. */
   readonly eventLogPath: string;
-  /** The run's own directory — the only thing mounted into its container. */
+  /** The run's own directory — one of the two things mounted into its container. */
   readonly runDir: string;
 }
 
 /** The layout under an already-resolved run directory. */
 export const runLayout = (runDir: string): RunLayout => ({
-  agentHomeDir: join(runDir, AGENT_HOME_SEGMENT),
   eventLogPath: join(runDir, EVENT_LOG_FILE),
   runDir,
 });
@@ -111,22 +147,11 @@ export const hostRunLayout = (input: RunDirInput) => runLayout(runDirOf(input));
 export const containerRunLayout = runLayout(CONTAINER_RUN_DIR);
 
 /**
- * What `run.agent_home_path` stores: the agent home relative to the data root,
- * so the column survives the data root moving.
- */
-export const agentHomeRelativePath = (runId: RunId) =>
-  join(RUNS_SEGMENT, runId, AGENT_HOME_SEGMENT);
-
-/** One provider's config directory inside the run's agent home. */
-export const agentHomeOf = (layout: RunLayout, provider: SessionProvider) =>
-  join(layout.agentHomeDir, AGENT_HOME_SUBDIR[provider]);
-
-/**
  * The environment that points a provider at an already-resolved config
  * directory. The directory is passed in rather than derived because the party
- * starting the provider was handed one — by the seeding step, or by a sandbox
- * that mounted it — and re-deriving it from a run layout is where the two
- * spellings of the same path came from.
+ * starting the provider was handed one — by the sandbox that mounted it — and
+ * re-deriving it from a run layout is where the two spellings of the same path
+ * came from.
  *
  * The path is made absolute here, which is the one place it can be. A data root
  * is ordinarily relative — `.data` is the default — so the layout built over it
@@ -146,13 +171,15 @@ export const agentHomeEnvAt = (
 });
 
 /**
- * The environment a provider is started with so it writes into this run's agent
- * home. Merged over the run's other environment by the caller; it is one
- * variable, and it is the only one that must not be overridden.
+ * The directory a provider's transcripts land in, under an already-resolved
+ * agent home. Scan it with {@link TRANSCRIPT_GLOB}.
+ *
+ * The home is passed in rather than derived from a run, and that is the whole
+ * point: every run's conversation now lands in the one shared tree, so a reader
+ * that composed a per-run path would find nothing and a reader that took the
+ * newest file would find a neighbour's.
  */
-export const agentHomeEnv = (layout: RunLayout, provider: SessionProvider) =>
-  agentHomeEnvAt(provider, agentHomeOf(layout, provider));
-
-/** The directory a provider's transcripts land in. Scan it with {@link TRANSCRIPT_GLOB}. */
-export const transcriptDirOf = (layout: RunLayout, provider: SessionProvider) =>
-  join(agentHomeOf(layout, provider), TRANSCRIPT_SUBDIR[provider]);
+export const transcriptDirOf = (
+  agentHomeDir: string,
+  provider: SessionProvider
+) => join(agentHomeDir, TRANSCRIPT_SUBDIR[provider]);

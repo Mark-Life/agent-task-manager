@@ -60,11 +60,11 @@ export interface Choice {
  */
 export interface RunOptions {
   /**
-   * The provider's own config directory for this run, as the process starting
-   * the provider sees it — exactly what `prepareAgentHome` reports back, handed
-   * on without arithmetic. The provider points its agent-home variable straight
-   * at this, so a caller that passes the run's shared `agent-home` parent
-   * instead gets a second, empty, unseeded directory and a run with no login.
+   * The provider's config directory, as the process starting the provider sees
+   * it — the mount point the sandbox bound the system-owned home at, handed on
+   * without arithmetic. The provider points its agent-home variable straight at
+   * this, so a caller that composes a path of its own gets an empty directory
+   * and a run with no login.
    */
   readonly agentHomeDir: string;
   /** Reasoning effort, or null for the provider's own default. */
@@ -75,6 +75,21 @@ export interface RunOptions {
    * over anything here.
    */
   readonly env: Readonly<Record<string, string>>;
+  /**
+   * MCP servers this turn is given, in the shape the Claude SDK reads, or null
+   * for a turn with none.
+   *
+   * Passed as an option rather than merged into a file in the config directory,
+   * and that is load-bearing now that the directory is shared by every run on
+   * the host: a read-modify-write of `<agentHome>/.claude.json` is a lost-update
+   * race between concurrent containers *and* a permanent write of one turn's
+   * bearer token into the operator's own login config.
+   *
+   * Read by Claude alone. Codex's config renderer can express a server's string
+   * fields and nothing else, so an `args` array would be silently dropped and
+   * the server would launch with nothing to run.
+   */
+  readonly mcpServers: Readonly<Record<string, unknown>> | null;
   /** Model id, or null for the provider's own default. */
   readonly model: string | null;
   readonly prompt: string;

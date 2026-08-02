@@ -37,6 +37,7 @@ import type {
   AgentSessionId,
   ProjectId,
   RunId,
+  SessionProvider,
   TaskId,
   WorkspaceId,
 } from "@workspace/domain";
@@ -271,10 +272,23 @@ export interface RepoSource {
 
 /** What to materialize, for whom. */
 export interface MaterializeInput {
+  /**
+   * The host directory holding the run's provider login, already resolved by
+   * whoever read the configuration. Passed in rather than derived because
+   * materialization must not invent it: an auto-created empty home boots a
+   * container that reports an auth error nobody can tell from an expired token.
+   */
+  readonly agentHomeDir: string;
   readonly dataRoot: string;
   readonly identity: RunIdentity;
   /** Null for a task with no project: there is no promoted folder to show it. */
   readonly projectId: ProjectId | null;
+  /**
+   * Which provider's login the run will use. Beside `agentHomeDir` rather than
+   * derived from it, so a home that is absent can be reported with the one-time
+   * login line that fixes it — the two spellings differ per vendor.
+   */
+  readonly provider: SessionProvider;
   /** Null for a task with no repo — a scratch directory, and the same machinery otherwise. */
   readonly repo: RepoSource | null;
   /**

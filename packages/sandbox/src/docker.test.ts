@@ -57,6 +57,7 @@ if (!reachable) {
 
 /** The host directories one run gets, made for the test and removed after it. */
 interface Fixture {
+  readonly agentHomeDir: string;
   readonly artifactsDir: string;
   readonly globalDir: string;
   /** The host's own ledger, which is not a mount and not the container's. */
@@ -70,6 +71,7 @@ let fixture: Fixture;
 
 const makeDirs = async (root: string) => {
   const dirs = {
+    agentHomeDir: join(root, "agent-home"),
     artifactsDir: join(root, "task-artifacts"),
     globalDir: join(root, "global-artifacts"),
     ledgerDir: join(root, "host-events"),
@@ -79,6 +81,7 @@ const makeDirs = async (root: string) => {
   } satisfies Fixture;
   await Promise.all(
     [
+      dirs.agentHomeDir,
       dirs.artifactsDir,
       dirs.globalDir,
       dirs.ledgerDir,
@@ -164,6 +167,7 @@ const specFor = (input: Fixture): SandboxSpec => ({
   identity,
   image: IMAGE,
   mounts: mountsFor({
+    agentHomeDir: input.agentHomeDir,
     globalArtifactsDir: input.globalDir,
     projectArtifactsDir: null,
     runDir: input.runDir,
@@ -199,7 +203,7 @@ describe.skipIf(!reachable)("dockerSandbox", () => {
       expect(result.oomKilled).toBe(false);
       expect(result.teardown).toBe("removed");
       expect(result.containerId).not.toBeNull();
-      expect(result.mountCount).toBe(4);
+      expect(result.mountCount).toBe(5);
       expect(result.wallClockMs).toBeGreaterThan(0);
       expect(result.peakMemoryBytes).not.toBeNull();
 

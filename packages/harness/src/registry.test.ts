@@ -31,6 +31,7 @@ const options: RunOptions = {
   agentHomeDir: "/run/agent-home/claude",
   effort: null,
   env: {},
+  mcpServers: null,
   model: "opus",
   prompt: "ship it",
   resumeSessionId: null,

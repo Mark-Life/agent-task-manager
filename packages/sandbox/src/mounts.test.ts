@@ -25,6 +25,7 @@ import {
 } from "./mounts";
 
 const sources: MountSources = {
+  agentHomeDir: "/home/op/.claude-task-management",
   globalArtifactsDir: "/data/artifacts/global",
   projectArtifactsDir: "/data/artifacts/projects/p1",
   runDir: "/data/runs/r1",
@@ -36,10 +37,11 @@ const byPurpose = (mounts: readonly Mount[], purpose: Mount["purpose"]) =>
   mounts.find((mount) => mount.purpose === purpose);
 
 describe("mountsFor", () => {
-  test("mounts exactly the five directories a run may see", () => {
+  test("mounts exactly the six directories a run may see", () => {
     const purposes = mountsFor(sources).map((mount) => mount.purpose);
     expect(purposes).toEqual([
       "run",
+      "agent_home",
       "workspace",
       "task_artifacts",
       "project_artifacts",
@@ -47,11 +49,16 @@ describe("mountsFor", () => {
     ]);
   });
 
-  test("only the run's own directories are writable", () => {
+  test("only the run's own directories and the agent home are writable", () => {
     const writable = mountsFor(sources)
       .filter((mount) => !mount.readOnly)
       .map((mount) => mount.purpose);
-    expect(writable).toEqual(["run", "workspace", "task_artifacts"]);
+    expect(writable).toEqual([
+      "run",
+      "agent_home",
+      "workspace",
+      "task_artifacts",
+    ]);
   });
 
   test("the shared artifact folders are read-only, so promotion stays the audit trail", () => {
@@ -101,11 +108,37 @@ describe("mountsFor", () => {
   });
 });
 
+describe("the agent home", () => {
+  test("is mounted read-write, because the vendor refreshes its token in place", () => {
+    const home = byPurpose(mountsFor(sources), "agent_home");
+    expect(home?.hostPath).toBe(sources.agentHomeDir);
+    expect(home?.containerPath).toBe(CONTAINER_AGENT_HOME_DIR);
+    expect(home?.readOnly).toBe(false);
+  });
+
+  test("is its own bind, not a directory inside the run mount", () => {
+    // Nesting a second bind under `/run` is ordering-dependent and buys
+    // nothing: the two directories have different owners and different
+    // lifetimes.
+    expect(CONTAINER_AGENT_HOME_DIR.startsWith(containerRunLayout.runDir)).toBe(
+      false
+    );
+  });
+
+  test("names no provider and no host path, so neither leaks into the container", () => {
+    for (const mounts of [mountsFor(sources), managerMountsFor(sources)]) {
+      const home = byPurpose(mounts, "agent_home");
+      expect(home?.containerPath).not.toContain("claude");
+      expect(home?.containerPath).not.toContain("codex");
+      expect(home?.containerPath).not.toContain(sources.agentHomeDir);
+    }
+  });
+});
+
 describe("the container's run directory", () => {
   test("is the layout the harness computes, not a second spelling of it", () => {
     const runMount = byPurpose(mountsFor(sources), "run");
     expect(runMount?.containerPath).toBe(containerRunLayout.runDir);
-    expect(CONTAINER_AGENT_HOME_DIR).toBe(containerRunLayout.agentHomeDir);
   });
 
   test("holds the event ledger, so a container's rows land on the host", () => {
@@ -120,16 +153,22 @@ describe("the container's run directory", () => {
 
 describe("managerMountsFor", () => {
   const managerSources: ManagerMountSources = {
+    agentHomeDir: "/home/op/.claude-task-management",
     globalArtifactsDir: "/data/artifacts/global",
     runDir: "/data/threads/th1/run",
     workspaceDir: "/data/threads/th1/workspace",
   };
 
-  test("mounts exactly the three directories a conversation may see", () => {
+  test("mounts exactly the four directories a conversation may see", () => {
     const purposes = managerMountsFor(managerSources).map(
       (mount) => mount.purpose
     );
-    expect(purposes).toEqual(["run", "workspace", "global_artifacts"]);
+    expect(purposes).toEqual([
+      "run",
+      "agent_home",
+      "workspace",
+      "global_artifacts",
+    ]);
   });
 
   test("reaches no task's artifacts and no project's, whatever it is handed", () => {

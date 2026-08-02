@@ -191,97 +191,48 @@ const objectAt = (source: Record<string, unknown>, key: string) => {
     : {};
 };
 
-/** The provider's own config file, merged rather than replaced where one exists. */
-const mergeJsonFile = (input: {
-  readonly patch: Readonly<Record<string, unknown>>;
-  readonly path: string;
-}) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem;
-    const existing = yield* readJsonObject(input.path);
-    yield* fs.writeFileString(
-      input.path,
-      JSON.stringify({ ...existing, ...input.patch })
-    );
-  });
-
 /**
- * More MCP servers into the same map, one level deeper than
- * {@link mergeJsonFile} reaches.
+ * Executor's MCP server in the shape the provider about to run actually reads.
  *
- * The top-level merge would replace `mcpServers` wholesale, which is how the
- * Executor's entry and the host's extras end up cancelling each other out
- * depending on which was written second. Merging the map itself is what lets
- * both be present, and a name collision resolves in favour of the extras
- * because they were decided per turn while the Executor's entry is the same on
- * every run.
- */
-const mergeMcpServers = (input: {
-  readonly path: string;
-  readonly servers: Readonly<Record<string, unknown>>;
-}) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem;
-    const existing = yield* readJsonObject(input.path);
-    yield* fs.writeFileString(
-      input.path,
-      JSON.stringify({
-        ...existing,
-        mcpServers: { ...objectAt(existing, "mcpServers"), ...input.servers },
-      })
-    );
-  });
-
-/**
- * Executor's MCP server written into the run's own agent home, in whichever
- * shape the provider about to run actually reads.
- *
- * `claudeExecutorMcpServers` and `codexExecutorConfig` already produce the exact
- * structures the two vendors read, and both files land in the run's private,
- * throwaway agent home — nothing reaches the checkout for an agent to commit,
- * and nothing touches the operator's own configuration. The token is handled per
- * vendor for the reason `executor-mcp` gives.
+ * Claude takes its map as a query option, so nothing is written at all. Codex
+ * reads `config.toml` out of its config directory, and that directory is now
+ * shared by every run on the host — see {@link wireCodexExecutor}.
  *
  * Absence is not an error. An install with no Executor configured runs with no
  * Executor tools, which is a smaller agent and not a broken one.
  */
-const wireExecutor = Effect.fn("Turn.wireExecutor")(function* (input: {
-  readonly agentHomeDir: string;
-  readonly executor: ExecutorMcp | null;
-  readonly provider: TurnSpec["provider"];
-}) {
-  if (input.executor === null) {
-    return;
-  }
-  const fs = yield* FileSystem;
-  yield* fs.makeDirectory(input.agentHomeDir, { recursive: true });
-  if (input.provider === "claude") {
-    // Merged, because `prepareAgentHome` seeded this file with the account
-    // identity the CLI needs to skip onboarding; replacing it would turn every
-    // run into a first run that stops to ask a question.
-    yield* mergeJsonFile({
-      patch: { mcpServers: claudeExecutorMcpServers(input.executor) },
-      path: join(input.agentHomeDir, ".claude.json"),
-    });
-    return;
-  }
-  const config = codexExecutorConfig(input.executor);
-  if (config !== null) {
+const wireCodexExecutor = Effect.fn("Turn.wireCodexExecutor")(
+  function* (input: {
+    readonly agentHomeDir: string;
+    readonly executor: ExecutorMcp | null;
+  }) {
+    const config = codexExecutorConfig(input.executor);
+    if (config === null) {
+      return;
+    }
+    // TODO: render this as `codex -c mcp_servers.<name>.<field>=<value>` instead.
+    // The file is a whole-file write into a directory other containers are
+    // reading, and the only thing keeping it safe is that every run writes the
+    // same bytes. It holds no secret — `bearer_token_env_var` names the variable
+    // rather than carrying the token — which is why this is a TODO and not a
+    // blocker, and why Claude's map moved off disk first.
+    const fs = yield* FileSystem;
+    yield* fs.makeDirectory(input.agentHomeDir, { recursive: true });
     yield* fs.writeFileString(
       join(input.agentHomeDir, "config.toml"),
       codexMcpToml(config.config.mcp_servers)
     );
   }
-});
+);
 
 /**
  * The `mcpServers` map the host left on the run mount, or null where it left
  * none.
  *
  * Absence is the ordinary case and is not an error, exactly as a missing
- * Executor configuration is not: a worker turn has no extra servers, and a file
- * this build cannot parse costs the turn those tools rather than the turn
- * itself.
+ * Executor configuration is not: a turn with no extra servers is a smaller
+ * agent, and a file this build cannot parse costs the turn those tools rather
+ * than the turn itself.
  */
 const readExtraMcpServers = Effect.fnUntraced(function* (path: string) {
   const fs = yield* FileSystem;
@@ -297,45 +248,39 @@ const readExtraMcpServers = Effect.fnUntraced(function* (path: string) {
 });
 
 /**
- * MCP servers the host decided on, wired into the provider about to run.
+ * Every MCP server this turn gets, as one map handed to the provider.
  *
- * This is how the manager agent gets its board tools: the bot writes one stdio
- * server entry into the run directory before the container starts and deletes
- * it after, so the bearer token it carries is on a mount the container already
- * has rather than in an environment `docker inspect` prints. The file is read
- * here and the entry is merged into the same map the Executor's own goes in.
+ * Two sources: Executor, which is the same on every run, and whatever the host
+ * left on the run mount — which is how a run gets its board tools, the bearer
+ * token riding a mount the container already has rather than an environment
+ * `docker inspect` prints. A name collision resolves in favour of the host's,
+ * because those were decided for this turn.
  *
- * Only Claude. `codexMcpToml` renders a server's string fields alone, so an
+ * Claude only. `codexMcpToml` renders a server's string fields alone, so an
  * `args` array would be dropped and the server would launch with nothing to
  * run — a silently toolless agent, which is worse than a warning that says so.
  */
-const wireExtraMcpServers = Effect.fn("Turn.wireExtraMcpServers")(
-  function* (input: {
-    readonly agentHomeDir: string;
-    readonly path: string;
-    readonly provider: TurnSpec["provider"];
-  }) {
-    const servers = yield* readExtraMcpServers(input.path);
-    if (servers === null) {
-      return;
-    }
-    if (input.provider !== "claude") {
+const mcpServersFor = Effect.fn("Turn.mcpServers")(function* (input: {
+  readonly executor: ExecutorMcp | null;
+  readonly path: string;
+  readonly provider: TurnSpec["provider"];
+}) {
+  const extras = yield* readExtraMcpServers(input.path);
+  if (input.provider !== "claude") {
+    if (extras !== null) {
       yield* Effect.logWarning(
         "extra mcp servers ignored: this provider's configuration renderer cannot express them",
-        { names: Object.keys(servers), provider: input.provider }
+        { names: Object.keys(extras), provider: input.provider }
       );
-      return;
     }
-    const fs = yield* FileSystem;
-    yield* fs.makeDirectory(input.agentHomeDir, { recursive: true });
-    // Merged, because `prepareAgentHome` seeded this file with the account
-    // identity and `wireExecutor` may already have put a server beside it.
-    yield* mergeMcpServers({
-      path: join(input.agentHomeDir, ".claude.json"),
-      servers,
-    });
+    return null;
   }
-);
+  const merged = {
+    ...claudeExecutorMcpServers(input.executor),
+    ...extras,
+  };
+  return Object.keys(merged).length === 0 ? null : merged;
+});
 
 /**
  * The environment the provider's subprocess is started with, on top of what the
@@ -454,6 +399,7 @@ const writeResult = (input: {
 const streamTurn = (input: {
   readonly counters: Ref.Ref<TurnCounters>;
   readonly executor: ExecutorMcp | null;
+  readonly mcpServers: Readonly<Record<string, unknown>> | null;
   readonly spec: TurnSpec;
 }) =>
   Effect.gen(function* () {
@@ -485,6 +431,7 @@ const streamTurn = (input: {
       agentHomeDir: spec.agentHomeDir,
       effort: spec.effort,
       env: providerEnv({ executor: input.executor, provider: spec.provider }),
+      mcpServers: input.mcpServers,
       model: spec.model,
       prompt: spec.prompt,
       resumeSessionId: spec.resumeSessionId,
@@ -564,30 +511,24 @@ const runSpec = (input: {
     });
     // A config file that could not be written costs the run its Executor tools
     // and nothing else, so it is a warning rather than an ending.
-    yield* wireExecutor({
+    yield* wireCodexExecutor({
       agentHomeDir: spec.agentHomeDir,
       executor,
-      provider: spec.provider,
     }).pipe(
       Effect.tapError((cause) =>
         Effect.logWarning("executor mcp not wired", { cause })
       ),
       Effect.ignore
     );
-    // The host's own servers, if it left any. Same tolerance, same reason: a
-    // turn with fewer tools is a smaller agent and not a broken one.
-    yield* wireExtraMcpServers({
-      agentHomeDir: spec.agentHomeDir,
+    // Same tolerance, same reason: a turn with fewer tools is a smaller agent
+    // and not a broken one.
+    const mcpServers = yield* mcpServersFor({
+      executor,
       path: mcpServersPathOf(containerRunLayout),
       provider: spec.provider,
-    }).pipe(
-      Effect.tapError((cause) =>
-        Effect.logWarning("extra mcp servers not wired", { cause })
-      ),
-      Effect.ignore
-    );
+    }).pipe(Effect.orElseSucceed(() => null));
 
-    const work = streamTurn({ counters, executor, spec });
+    const work = streamTurn({ counters, executor, mcpServers, spec });
     const { timeoutMs } = spec;
     const capped =
       timeoutMs === null

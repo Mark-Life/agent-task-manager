@@ -3,8 +3,8 @@
 /**
  * Proves the harness does the four things the orchestrator is allowed to assume:
  * a prompt handed to a provider comes back as normalized events, the provider
- * writes its transcript inside this run's own agent home, the stop hook refuses
- * a turn that has posted no comment, and the invocation leaves exactly one
+ * writes its transcript where the reader looks for it, the stop hook refuses a
+ * turn that has posted no comment, and the invocation leaves exactly one
  * `atm.turn` row on disk where the host can find it.
  *
  * It is a script rather than a test because three of those four claims are about
@@ -13,51 +13,65 @@
  * without a provider — one row per turn, on every exit path — is a unit test in
  * `packages/harness/src/registry.test.ts`.
  *
+ * **Nothing here creates or seeds an agent home.** There is one system-owned
+ * directory per provider on the host, the human logs into it once by hand, and
+ * every container mounts it read-write so a refreshed token survives. So the
+ * two claims this script makes about it are ownership and content, and both
+ * fail by printing the one-time login line rather than by fixing anything: an
+ * auto-created empty home is a container that boots and reports an auth error
+ * nobody can tell from an expired token.
+ *
  * Two modes, and the difference is a model call:
  *
- *   bun run harness:check          layout, credential seeding, the transcript
+ *   bun run harness:check          the agent homes, the layout, the transcript
  *                                  address, the registry, and the stop hook run
- *                                  as a real process. No API call, no charge,
- *                                  and the operator's own credentials are never
- *                                  read — the agent home is seeded from a
- *                                  throwaway source directory.
+ *                                  as a real process. No API call, no charge.
+ *                                  Credentials are checked for existence and
+ *                                  never read.
  *
  *   bun run harness:check --live   the above, plus one real turn on each
  *                                  provider: events streamed as they arrive, the
- *                                  transcript read back out of the run's agent
- *                                  home, the stop hook forcing a second turn,
- *                                  and the `atm.turn` rows counted in the
- *                                  ledger. Set `HARNESS_CHECK_LIVE=1` instead of
- *                                  the flag where a flag is awkward to pass, and
- *                                  add `--provider codex` to check one harness
- *                                  on a host where only one is logged in.
+ *                                  transcript found by this turn's own session
+ *                                  id in the shared tree, the stop hook forcing
+ *                                  a second turn, and the `atm.turn` rows
+ *                                  counted in the ledger. Set
+ *                                  `HARNESS_CHECK_LIVE=1` instead of the flag
+ *                                  where a flag is awkward to pass, and add
+ *                                  `--provider codex` to check one harness on a
+ *                                  host where only one is logged in.
  *
- * The run directory is left behind so its ledger can be read; the agent home
- * inside it is always removed, because it holds a copy of a live subscription
- * credential.
+ * The run directory is left behind so its ledger can be read. The agent home is
+ * not touched: it is the operator's, it holds the only copy of the login, and
+ * this script has no business writing to it.
  */
 
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 import { BunFileSystem, BunRuntime } from "@effect/platform-bun";
 import { newRunId, type SessionProvider } from "@workspace/domain";
 import {
+  AGENT_HOME_DIR_ENV_VAR,
   type AgentEvent,
-  agentHomeOf,
+  agentHomeLoginHint,
   COMMENT_MARKER_ENV_VAR,
   commentMarkerPathOf,
+  defaultAgentHomeDirOf,
   findTranscript,
   hostRunLayout,
   NO_COMMENT_REFUSAL,
   ProviderRegistry,
-  prepareAgentHome,
   providerRegistryLayer,
   readTranscript,
   STOP_HOOK_COMMAND_ENV_VAR,
   TURN_EVENT_MARKER,
-  teardownAgentHome,
   transcriptDirOf,
 } from "@workspace/harness";
 import { EventLog, telemetryLayer } from "@workspace/telemetry";
@@ -223,29 +237,38 @@ const describeEvent = (event: AgentEvent) => {
   }
 };
 
-/**
- * A throwaway source directory holding credential-shaped files. Check-only mode
- * seeds from this rather than from the operator's own agent home: the claim
- * being checked is that the seeder writes a private directory with the right
- * mode and the right file names, and reading a real subscription token to prove
- * it would be a copy of a live credential made for no reason.
- */
-const FAKE_SOURCE_SEGMENT = "fake-source";
+/** The mode the agent home is created at, and the only one it should ever have. */
+const AGENT_HOME_MODE = 0o700;
 
-const fakeSourceDir = (root: string, provider: SessionProvider) => {
-  const directory = join(root, FAKE_SOURCE_SEGMENT, provider);
-  mkdirSync(directory, { mode: 0o700, recursive: true });
-  writeFileSync(join(directory, "auth.json"), '{"tokens":{"access":"fake"}}');
-  writeFileSync(join(directory, ".credentials.json"), '{"claudeAiOauth":{}}');
-  writeFileSync(
-    join(directory, ".claude.json"),
-    JSON.stringify({
-      hasCompletedOnboarding: true,
-      projects: { "/secret": {} },
-    })
+/**
+ * `statSync().mode` carries the file type in its high bits. Modulo rather than
+ * a mask, because the permission bits are the low three octal digits and the
+ * linter reads a bitwise `&` here as a mistyped `&&`.
+ */
+const MODE_DIVISOR = 0o1000;
+
+/**
+ * Where this provider's login lives on the host, honouring the override the
+ * loop reads. Resolved once per provider and never written to.
+ */
+const agentHomeDirOf = (provider: SessionProvider) =>
+  Config.string(AGENT_HOME_DIR_ENV_VAR[provider]).pipe(
+    Config.withDefault(defaultAgentHomeDirOf(provider))
   );
-  return directory;
-};
+
+/**
+ * What each provider's login looks like on disk, as a name to test for.
+ *
+ * Claude keeps the tokens in `.credentials.json` on any host with no keychain,
+ * which is every container — so that is the file the shared home must hold even
+ * on a Mac, and `scripts/agent-home-login.ts` is what puts it there. Codex keeps
+ * everything in `auth.json`. Existence only: the contents are a live
+ * subscription token and this script has no reason to read one.
+ */
+const CREDENTIAL_FILE = {
+  claude: ".credentials.json",
+  codex: "auth.json",
+} as const satisfies Record<SessionProvider, string>;
 
 /** One provider's turn, streamed to stdout as it arrives. */
 const streamTurn = (input: {
@@ -262,6 +285,7 @@ const streamTurn = (input: {
       agentHomeDir: input.agentHomeDir,
       effort: null,
       env: { [COMMENT_MARKER_ENV_VAR]: input.markerPath },
+      mcpServers: null,
       model: null,
       prompt: PROMPT,
       resumeSessionId: null,
@@ -277,10 +301,9 @@ const streamTurn = (input: {
     );
   });
 
-/** What one live turn is checked against, once the agent home is seeded. */
+/** What one live turn is checked against. */
 interface LiveTurnInput {
   readonly agentHomeDir: string;
-  readonly layout: ReturnType<typeof hostRunLayout>;
   readonly markerPath: string;
   readonly provider: SessionProvider;
   readonly runId: string;
@@ -314,16 +337,29 @@ const checkLiveTurn = Effect.fnUntraced(function* (input: LiveTurnInput) {
     );
   }
 
+  const sessionId =
+    terminus?.kind === "result" ? terminus.providerSessionId : null;
+  yield* check({
+    detail: "the turn ended without naming a provider session",
+    ok: sessionId !== null,
+    step: `${input.provider} named the session its transcript is filed under`,
+  });
+  if (sessionId === null) {
+    return;
+  }
+
+  // The whole tree is shared, so this is the claim that matters: the file found
+  // is the one this turn wrote, picked by id and not by whichever run finished
+  // last.
   const transcript = yield* readTranscript({
-    layout: input.layout,
+    agentHomeDir: input.agentHomeDir,
     provider: input.provider,
-    providerSessionId:
-      terminus?.kind === "result" ? terminus.providerSessionId : null,
+    providerSessionId: sessionId,
   });
   yield* check({
-    detail: `the transcript at ${transcript.path} is outside ${input.layout.runDir}`,
-    ok: transcript.path.startsWith(input.layout.runDir),
-    step: `${input.provider} wrote its transcript inside this run's agent home`,
+    detail: `the transcript at ${transcript.path} does not carry ${sessionId}`,
+    ok: transcript.path.includes(sessionId),
+    step: `${input.provider} found this turn's own transcript in the shared tree`,
   });
   yield* Effect.logInfo(
     `      transcript ${transcript.path} (${transcript.entries.length} entries)`
@@ -346,80 +382,101 @@ const checkLiveTurn = Effect.fnUntraced(function* (input: LiveTurnInput) {
 });
 
 /**
- * Without a provider there is no file to read, so what is checkable is the
- * address: the reader looks inside this run's own agent home and nowhere near
- * the operator's.
+ * Without a provider there is no file of ours to read, so what is checkable is
+ * the address and the refusal.
+ *
+ * The refusal is the one that earns its place. Every run and every conversation
+ * on this host writes into the one shared tree, so a reader that fell back to
+ * the newest file by mtime would hand a run its neighbour's conversation —
+ * silently, and onward into the durable per-run copy the ingest reads. An id
+ * that matches nothing has to come back empty.
  */
 const checkTranscriptAddress = Effect.fnUntraced(function* (input: {
-  readonly layout: ReturnType<typeof hostRunLayout>;
+  readonly agentHomeDir: string;
   readonly provider: SessionProvider;
 }) {
-  const searchDir = transcriptDirOf(input.layout, input.provider);
+  const searchDir = transcriptDirOf(input.agentHomeDir, input.provider);
   const found = yield* Effect.exit(
     findTranscript({
-      layout: input.layout,
+      agentHomeDir: input.agentHomeDir,
       provider: input.provider,
-      providerSessionId: null,
+      providerSessionId: "00000000-0000-0000-0000-000000000000",
     })
   );
   yield* check({
-    detail: `the reader would scan ${searchDir}`,
-    ok:
-      searchDir.startsWith(input.layout.runDir) &&
-      !searchDir.startsWith(homedir()),
-    step: `${input.provider} transcripts are looked for under this run, not under $HOME`,
+    detail: `the reader would scan ${searchDir}, which is not under ${input.agentHomeDir}`,
+    ok: searchDir.startsWith(input.agentHomeDir),
+    step: `${input.provider} transcripts are looked for under the agent home`,
   });
   yield* check({
-    detail: "an empty agent home produced a transcript",
+    detail:
+      "a session id nothing was filed under produced a transcript anyway, which is another run's",
     ok: found._tag === "Failure",
-    step: `${input.provider} reports a missing transcript rather than an empty one`,
+    step: `${input.provider} refuses to hand back a transcript it cannot name`,
   });
 });
 
-/** One provider: its private agent home, and whatever a turn can be held to. */
+/**
+ * The system-owned agent home, checked and never touched.
+ *
+ * Two claims, and both fail by printing the login line. Ownership, because a
+ * bind mount does no id translation: the container runs as the operator's uid
+ * and writes straight through, so a directory owned by anyone else is a run
+ * that cannot refresh its own token. And a credential, because the alternative
+ * is a container that boots and reports an auth failure an operator cannot tell
+ * from an expired subscription.
+ */
+const checkAgentHome = Effect.fnUntraced(function* (input: {
+  readonly agentHomeDir: string;
+  readonly provider: SessionProvider;
+}) {
+  const { agentHomeDir, provider } = input;
+  const fix = `${agentHomeLoginHint(provider, agentHomeDir)}, or run \`bun run scripts/agent-home-login.ts ${provider}\``;
+  const ours = ((): boolean => {
+    try {
+      const stat = statSync(agentHomeDir);
+      return (
+        stat.isDirectory() &&
+        stat.uid === process.getuid?.() &&
+        Number(stat.mode) % MODE_DIVISOR === AGENT_HOME_MODE
+      );
+    } catch {
+      return false;
+    }
+  })();
+
+  yield* check({
+    detail: `${agentHomeDir} is not a directory owned by uid ${process.getuid?.() ?? "?"} at 0700 — ${fix}`,
+    ok: ours,
+    step: `${provider}'s agent home exists and is ours`,
+  });
+  yield* check({
+    detail: `no ${CREDENTIAL_FILE[provider]} under ${agentHomeDir} — ${fix}`,
+    ok: existsSync(join(agentHomeDir, CREDENTIAL_FILE[provider])),
+    step: `${provider}'s agent home holds a credential`,
+  });
+  yield* Effect.logInfo(
+    `      home ${agentHomeDir}, overridable with ${AGENT_HOME_DIR_ENV_VAR[provider]}`
+  );
+});
+
+/** One provider: its system-owned home, and whatever a turn can be held to. */
 const checkProvider = Effect.fnUntraced(function* (input: {
-  readonly layout: ReturnType<typeof hostRunLayout>;
   readonly live: boolean;
   readonly markerPath: string;
   readonly provider: SessionProvider;
   readonly runId: string;
   readonly workspaceDir: string;
 }) {
-  const { layout, live, provider } = input;
-  const report = yield* prepareAgentHome({
-    layout,
-    provider,
-    sourceDir: live ? null : fakeSourceDir(layout.runDir, provider),
-  });
-
-  yield* check({
-    detail: `seeded ${report.agentHomeDir}, expected ${agentHomeOf(layout, provider)}`,
-    ok: report.agentHomeDir === agentHomeOf(layout, provider),
-    step: `${provider} got a private agent home under this run`,
-  });
-  yield* Effect.logInfo(
-    `      seeded ${report.seeded.join(", ") || "nothing"}${
-      report.missing.length === 0
-        ? ""
-        : `; absent: ${report.missing.join(", ")}`
-    }`
-  );
+  const { live, provider } = input;
+  const agentHomeDir = yield* agentHomeDirOf(provider);
+  yield* checkAgentHome({ agentHomeDir, provider });
 
   if (live) {
-    // A private agent home with no credential in it authenticates against
-    // nothing, and the turn comes back `Unauthenticated` with no hint as to
-    // why. Said here instead, where the reason is still in hand.
-    yield* check({
-      detail: `no credential file was copied out of the host's ${provider} config directory, so the run has no login. On macOS the Claude token lives in the login keychain and never in a file — run --live inside the container image, or on a host that keeps one.`,
-      ok: report.seeded.length > 0,
-      step: `${provider} has a credential to run with`,
-    });
-    yield* checkLiveTurn({ ...input, agentHomeDir: report.agentHomeDir });
+    yield* checkLiveTurn({ ...input, agentHomeDir });
   } else {
-    yield* checkTranscriptAddress({ layout, provider });
+    yield* checkTranscriptAddress({ agentHomeDir, provider });
   }
-
-  yield* teardownAgentHome(layout);
 });
 
 /**
@@ -531,7 +588,6 @@ const harnessCheck = Effect.gen(function* () {
 
   for (const harness of checked) {
     yield* checkProvider({
-      layout,
       live,
       markerPath,
       provider: harness.id,
@@ -539,10 +595,6 @@ const harnessCheck = Effect.gen(function* () {
       workspaceDir,
     });
   }
-  rmSync(join(layout.runDir, FAKE_SOURCE_SEGMENT), {
-    force: true,
-    recursive: true,
-  });
 
   yield* checkStopHook({ markerPath, workspaceDir });
 
@@ -566,7 +618,7 @@ const harnessCheck = Effect.gen(function* () {
 
   yield* Effect.logInfo(`atm.turn rows for this run: ${ledger.path}`);
   yield* Effect.logInfo(
-    `run directory kept at ${layout.runDir}; the agent home in it was removed with its credential copy`
+    `run directory kept at ${layout.runDir}; no agent home was created, seeded or removed — the one on this host is the operator's and outlives every run`
   );
 });
 
@@ -580,8 +632,7 @@ BunRuntime.runMain(
         EventLog.layer({ serviceName: SERVICE }),
         providerRegistryLayer
         // The filesystem is provided to the layers above and kept in the
-        // environment, because the check itself seeds directories and reads a
-        // transcript back.
+        // environment, because the check itself scans for a transcript.
       ).pipe(Layer.provideMerge(BunFileSystem.layer))
     )
   )

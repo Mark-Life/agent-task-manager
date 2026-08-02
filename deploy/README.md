@@ -13,7 +13,8 @@ installed and running.
 | Path | Who owns it | What it is |
 | --- | --- | --- |
 | `/opt/agent-task-manager` | `root`, read-only to the services | The checkout. Both units run from here. |
-| `/var/lib/agent-task-manager` | `atm` | `DATA_ROOT`: artifacts, per-run agent homes, the JSONL ledger. Also the service user's home. |
+| `/var/lib/agent-task-manager` | `atm` | `DATA_ROOT`: run directories, checkouts, artifacts, the JSONL ledger. Also the service user's home. |
+| `/var/lib/agent-task-manager-home` | `atm`, `0700` | One agent home per provider, mounted read-write into every container. Outside `DATA_ROOT` because it outlives every run and holds the logins. |
 | `/etc/agent-task-manager` | `root`, `0640` to the service group | The environment files. The only place a secret is written. |
 
 The split is the point. The services get exactly one writable directory, which
@@ -78,15 +79,43 @@ cd /opt/agent-task-manager/packages/db
 sudo -E DATABASE_URL="$(sudo grep ^DATABASE_URL= /etc/agent-task-manager/common.env | cut -d= -f2-)" bunx --bun drizzle-kit migrate
 ```
 
-**7. Sandbox images.** The loop starts containers from images that exist only
-once somebody builds them; a loop without them fails every run it picks up.
-Minutes, and it needs the daemon.
+**7. Agent homes and their logins.** One directory per provider, outside
+`DATA_ROOT`, mounted read-write into every container. Nothing on the run path
+creates or seeds them, because an auto-created empty home boots a container that
+reports an auth error nobody can tell from an expired subscription. `harness:check`
+says so by name when one is missing.
+
+Both CLIs need an interactive login, which a `nologin` service user cannot do
+directly — run each under `sudo -u atm` from your own session:
 
 ```sh
-cd /opt/agent-task-manager && sudo -u atm bun run images:build
+sudo install -d -m 0700 -o atm -g atm /var/lib/agent-task-manager-home/claude
+sudo install -d -m 0700 -o atm -g atm /var/lib/agent-task-manager-home/codex
+sudo -u atm CLAUDE_CONFIG_DIR=/var/lib/agent-task-manager-home/claude claude   # then /login
+sudo -u atm CODEX_HOME=/var/lib/agent-task-manager-home/codex codex login
+cd /opt/agent-task-manager && sudo -u atm bun run harness:check
 ```
 
-**8. The services.**
+The paths must match `ATM_AGENT_HOME_DIR_CLAUDE` / `ATM_AGENT_HOME_DIR_CODEX` in
+`loop.env`, be mode `0700`, and be owned by the uid the loop's containers run as
+— which is the loop's own, because a bind mount does no id translation. From
+then on the containers refresh the tokens in place and nothing re-seeds them.
+
+**8. Sandbox images and the two bundles.** The loop starts containers from
+images that exist only once somebody builds them; a loop without them fails
+every run it picks up. Minutes, and it needs the daemon. The two bundles are
+copied onto each run's mount rather than baked into the image, because they
+change with the code and the image does not — so they are rebuilt on every
+deploy, and a missing one fails the run by name.
+
+```sh
+cd /opt/agent-task-manager
+sudo -u atm bun run images:build
+sudo -u atm bun run entrypoint:build   # ${DATA_ROOT}/bin/turn.js — the container's turn
+sudo -u atm bun run agent-mcp:build    # ${DATA_ROOT}/bin/agent-mcp.js — the board tools
+```
+
+**9. The services.**
 
 ```sh
 sudo install -m 0644 deploy/atm-gateway.service deploy/atm-loop.service /etc/systemd/system/
@@ -94,7 +123,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now atm-gateway atm-loop
 ```
 
-**9. Caddy.** Install from the official apt repository, then point it at the
+**10. Caddy.** Install from the official apt repository, then point it at the
 Caddyfile here and give it its environment through the drop-in — the stock unit
 reads no environment file, and unset `{$ATM_*}` placeholders adapt silently to a
 site with no address.
@@ -131,7 +160,14 @@ Nothing here has a default that is right for a real host.
   there is, and it logs everybody out.
 - **`GIT_SHA`** in `common.env` at each deploy. Nothing sets it automatically,
   and it is the only field that answers "which build wrote this row".
-- **Agent credentials** in `loop.env`, if the model provider needs them.
+- **The provider logins**, once, into the agent homes at step 7. A token in a
+  keychain or a home directory on your laptop reaches nothing here. `loop.env`
+  also takes an `ANTHROPIC_API_KEY` for headless use, where there is no
+  subscription login to inherit.
+- **`ORCHESTRATOR_GATEWAY_URL`** in `loop.env`: the gateway **as a container
+  reaches it**, which on a Linux host with the default bridge is the docker0
+  address and never `localhost`. Unset, every turn runs with no board tools and
+  the loop says so once at boot rather than failing.
 - **A firewall.** 80 and 443 in, nothing else. Postgres is on loopback and the
   gateway binds loopback, so the only thing this protects against is a future
   service that forgets to — which is the usual way it happens.

@@ -1,13 +1,14 @@
 #!/usr/bin/env bun
 
 /**
- * Proves the five things the orchestrator is allowed to assume about a
+ * Proves the six things the orchestrator is allowed to assume about a
  * container: that what a run writes to the artifacts mount is on the host after
  * the container is gone, that the shared artifact folders reject its writes,
- * that the container cannot read the operator's home directory, that a
- * wide-event row written *inside* the container reaches the host carrying the
- * `runId` the host minted, and that the container itself left exactly one
- * `atm.sandbox` row.
+ * that the container cannot read the operator's home directory, that it *can*
+ * read the login out of the agent home and that a token it refreshes there is
+ * on the host afterwards, that a wide-event row written *inside* the container
+ * reaches the host carrying the `runId` the host minted, and that the container
+ * itself left exactly one `atm.sandbox` row.
  *
  * It is a script rather than a test because every one of those claims is about
  * a real daemon, a real bind mount and a real kernel. Checking them against a
@@ -50,8 +51,16 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { BunFileSystem, BunRuntime } from "@effect/platform-bun";
@@ -68,12 +77,14 @@ import {
   TURN_EVENT_MARKER,
 } from "@workspace/harness";
 import {
+  CONTAINER_AGENT_HOME_DIR,
   CONTAINER_ARTIFACT_DIR,
   CONTAINER_WORKSPACE_DIR,
   DEFAULT_SANDBOX_IMAGE,
   defaultHardening,
   dockerSandboxLayer,
   eventLogDirOf,
+  hostUser,
   mountsFor,
   type RunIdentity,
   SANDBOX_EVENT_MARKER,
@@ -114,6 +125,26 @@ const CONTAINER_LEDGER_FILE = "harness.jsonl";
 
 /** What the container writes into the task's artifacts folder. */
 const ARTIFACT_FILE = "written-by-the-run.txt";
+
+/**
+ * The credential-shaped file the throwaway agent home is seeded with, named as
+ * Claude names its own so the path under test is the real one.
+ */
+const CREDENTIAL_FILE = ".credentials.json";
+
+/**
+ * What the container writes back into the agent home, standing in for the token
+ * both vendors refresh in place. Its arrival on the host is the whole claim: a
+ * refresh that lands in a throwaway copy is discarded with the container, and
+ * this is the evidence that it no longer is.
+ */
+const REFRESHED_FILE = "refreshed-inside.json";
+
+/**
+ * Which provider's home the materializer is told about. Only names the login
+ * line a missing home is reported with; nothing else in this check reads it.
+ */
+const CHECK_PROVIDER = "claude" as const;
 
 /**
  * What the container tries, and must fail, to write into each shared artifacts
@@ -184,13 +215,6 @@ const namedImage = () => {
 };
 
 /**
- * The uid:gid the container runs as. See the module note: a bind mount carries
- * host ownership through, so the container has to be the operator to write its
- * own mounts on a host whose uid is not the image's 1000.
- */
-const hostUser = () => `${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0}`;
-
-/**
  * The one thing in the operator's home directory this check knows the contents
  * of. Written so the "cannot read the host home" claim is a real read that
  * failed rather than a path that happened not to exist.
@@ -199,6 +223,21 @@ interface Sentinel {
   readonly path: string;
   readonly secret: string;
 }
+
+/**
+ * A throwaway agent home with a credential-shaped file in it, at the mode a
+ * real one has. Created here rather than pointed at the operator's, for the
+ * reason in the module note.
+ */
+const makeAgentHome = (root: string) => {
+  const dir = join(root, "agent-home");
+  mkdirSync(dir, { mode: 0o700, recursive: true });
+  const secret = randomUUID();
+  writeFileSync(join(dir, CREDENTIAL_FILE), JSON.stringify({ token: secret }), {
+    mode: 0o600,
+  });
+  return { dir, secret };
+};
 
 const makeSentinel = (): Sentinel => {
   const secret = randomUUID();
@@ -231,6 +270,10 @@ const containerScript = (sentinel: Sentinel) =>
     // the host path, and whatever the container thinks HOME is.
     `printf 'sentinel:[%s]\\n' "$(cat '${sentinel.path}' 2>/dev/null || true)"`,
     `printf 'home:[%s]\\n' "$(ls '${homedir()}' 2>/dev/null | head -1 || true)"`,
+    // Claim 4: the agent home is mounted, the login inside it is readable, and
+    // a refresh written there is a write the host keeps.
+    `printf 'credential:[%s]\\n' "$(cat ${CONTAINER_AGENT_HOME_DIR}/${CREDENTIAL_FILE} 2>/dev/null || true)"`,
+    `printf 'refresh:[%s]\\n' "$( (printf '{"refreshed":"%s"}' "$${TURN_ENV_VARS.runId}" > ${CONTAINER_AGENT_HOME_DIR}/${REFRESHED_FILE}) 2>/dev/null && echo yes || echo no )"`,
     // Claim 4: an atm.turn-shaped row, written where EVENT_LOG_DIR points,
     // carrying the ids the sandbox passed in.
     `printf '{"event":"%s","runId":"%s","taskId":"%s","workspaceId":"%s","provider":"claude","phase":"end","outcome":"done","source":"container"}\\n' \\
@@ -350,6 +393,8 @@ const sandboxCheck = Effect.gen(function* () {
   });
 
   const sentinel = makeSentinel();
+  const checkRoot = mkdtempSync(join(tmpdir(), "atm-sandbox-check-"));
+  const agentHome = makeAgentHome(checkRoot);
   const script = agent
     ? `${containerScript(sentinel)
         .split("\n")
@@ -372,11 +417,13 @@ const sandboxCheck = Effect.gen(function* () {
   } = yield* Effect.scoped(
     Effect.gen(function* () {
       const made = yield* workspace.materialize({
+        agentHomeDir: agentHome.dir,
         dataRoot,
         identity,
         // A project, so the conditional fifth mount is present and the
         // read-only claim has both promoted folders to be made against.
         projectId: CHECK_PROJECT_ID,
+        provider: CHECK_PROVIDER,
         repo: null,
         taskId,
       });
@@ -452,6 +499,38 @@ const sandboxCheck = Effect.gen(function* () {
       step: `nothing reached the ${probe.scope} artifacts folder on the host`,
     });
   }
+
+  // Claim 3b — the agent home is the one thing the container is *supposed* to
+  // read a credential out of, and the one place its refresh has to survive.
+  yield* check({
+    detail: `the container read [${readField(output, "credential")}] at ${CONTAINER_AGENT_HOME_DIR}/${CREDENTIAL_FILE}`,
+    ok: readField(output, "credential")?.includes(agentHome.secret) === true,
+    step: "a container reads the login out of the mounted agent home",
+  });
+  const refreshed = ((): string | null => {
+    try {
+      return readFileSync(join(agentHome.dir, REFRESHED_FILE), "utf-8");
+    } catch {
+      return null;
+    }
+  })();
+  yield* check({
+    detail: `the container reported [${readField(output, "refresh")}] writing ${REFRESHED_FILE}, and the host has ${refreshed === null ? "nothing" : refreshed}`,
+    ok:
+      readField(output, "refresh") === "yes" &&
+      refreshed?.includes(identity.runId) === true,
+    step: "a token the container refreshed in the agent home is on the host after teardown",
+  });
+  // The ownership answer, measured rather than asserted: the bind mount does no
+  // id translation, so a file the container created is owned by the uid the
+  // container was started with, which is the operator's.
+  yield* check({
+    detail: `the refreshed file is owned by uid ${statSync(join(agentHome.dir, REFRESHED_FILE)).uid}, the operator is ${process.getuid?.()}`,
+    ok:
+      statSync(join(agentHome.dir, REFRESHED_FILE)).uid === process.getuid?.(),
+    step: "that write landed as the operator, so the home stays theirs to read",
+  });
+  rmSync(checkRoot, { force: true, recursive: true });
 
   // Claim 3 — the operator's home is not reachable from inside.
   yield* check({
@@ -534,7 +613,7 @@ const sandboxCheck = Effect.gen(function* () {
 
   yield* Effect.logInfo(`atm.sandbox rows for this run: ${ledger.path}`);
   yield* Effect.logInfo(
-    `run directory kept at ${runDir}; the checkout inside it was removed with the scope`
+    `run directory kept at ${runDir}; the checkout inside it was removed with the scope, and the throwaway agent home with it`
   );
 });
 

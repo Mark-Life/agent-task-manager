@@ -151,6 +151,7 @@ describeCli("codex exec with the registered stop hook", () => {
         agentHomeDir,
         effort: null,
         env: {},
+        mcpServers: null,
         model: null,
         prompt: "say ping",
         resumeSessionId: null,

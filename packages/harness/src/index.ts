@@ -12,9 +12,9 @@
  *
  * Exported: the provider registry and the vocabulary a caller needs to use it —
  * the normalized event union and its mapping onto the domain's run events, the
- * typed failures and their classification, the run layout, the agent-home
- * seeding, the transcript reader, the stop-hook rule, and the turn event's
- * environment contract.
+ * typed failures and their classification, the run layout, where each provider's
+ * system-owned agent home lives, the transcript reader, the stop-hook rule, and
+ * the turn event's environment contract.
  *
  * Not exported, deliberately, and each for its own reason.
  *
@@ -53,16 +53,6 @@
  * the exit codes — which both sides read and neither owns.
  */
 
-export {
-  AgentHomeFailed,
-  type AgentHomeReport,
-  agentHomeSourceDir,
-  CredentialsMissing,
-  type PrepareAgentHomeInput,
-  prepareAgentHome,
-  scopedAgentHome,
-  teardownAgentHome,
-} from "./agent-home";
 export {
   classify,
   describeError,
@@ -111,14 +101,13 @@ export {
   readExecutorMcp,
 } from "./executor-mcp";
 export {
+  AGENT_HOME_DIR_ENV_VAR,
   AGENT_HOME_ENV_VAR,
-  AGENT_HOME_SEGMENT,
-  agentHomeEnv,
   agentHomeEnvAt,
-  agentHomeOf,
-  agentHomeRelativePath,
+  agentHomeLoginHint,
   CONTAINER_RUN_DIR,
   containerRunLayout,
+  defaultAgentHomeDirOf,
   EVENT_LOG_FILE,
   hostRunLayout,
   RUNS_SEGMENT,

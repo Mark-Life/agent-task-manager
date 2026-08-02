@@ -96,6 +96,7 @@ export const codexHooksPath = (agentHomeDir: string) =>
  * caller can say which of the two it got rather than inferring it.
  */
 export const writeCodexHooks = Effect.fn("Codex.writeHooks")(function* (input: {
+  /** The mounted system-owned `CODEX_HOME`, shared by every run on the host. */
   readonly agentHomeDir: string;
   readonly env: Readonly<Record<string, string | undefined>>;
 }) {

@@ -17,6 +17,21 @@
  * failed turn Codex runs no stop hook at all, so nothing downstream would
  * otherwise notice the turn ended badly. A stream that stops without
  * `turn.completed` fails with a typed error rather than completing quietly.
+ *
+ * TODO: Codex's refresh token is single-use and it rotates `auth.json` in place
+ * on every refresh. Two containers that start against the same `CODEX_HOME`
+ * both present the token they read at startup; the first refresh consumes it
+ * and the second gets a token the server has already retired, so that run dies
+ * `Unauthenticated` and — because the loser writes its own failure back — the
+ * shared login can be left needing an interactive `codex login`. Claude has no
+ * such problem: its credential writes take a cross-process advisory lock at
+ * `<configDir>/.storage-write`, which is what makes one shared home safe there.
+ *
+ * Fixing it means one of: serializing Codex turns behind a host-side lock on
+ * the home; a broker on the host that refreshes once and hands out access
+ * tokens; or a home per concurrent Codex slot with the refresh copied back
+ * under a lock. All three are real work, none is on the path for v1, and Claude
+ * is the provider for chats — so this is written down rather than fixed.
  */
 
 import { resolve } from "node:path";
@@ -145,8 +160,8 @@ export const codexArgs = (options: RunOptions): readonly string[] => [
 
 /**
  * The environment for one invocation. `CODEX_HOME` is merged last because it is
- * what puts this run's transcript and credentials in this run's directory, and
- * a caller that overrode it would silently share a session with another run.
+ * what points the CLI at the mounted system-owned home — where the login is,
+ * and where a refreshed one has to land to survive the container.
  *
  * `CLAUDECODE` is unset rather than passed through: Codex changes its behaviour
  * when it thinks it is nested inside another agent, and a host that happens to
@@ -279,6 +294,11 @@ const runCodex = (options: RunOptions) =>
       // once at startup. A definition that cannot be written costs the run its
       // stop hook and nothing else — the orchestrator's fallback comment covers
       // the same rule from the other side — so it is a warning, not an ending.
+      //
+      // TODO: this writes a whole file into a directory every other container
+      // is reading. Every run writes identical bytes, so it is idempotent
+      // rather than racy, and Codex exposes no flag that takes a hooks path.
+      // The fix is a flag, or a hooks file written once at setup.
       yield* writeCodexHooks({
         agentHomeDir: options.agentHomeDir,
         // The command names an executable inside the image, so the sandbox that
