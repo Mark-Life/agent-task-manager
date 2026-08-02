@@ -4,8 +4,10 @@ Status: draft for review. High level only — no implementation detail, no code.
 
 ## What this is
 
-A personal software factory. A task board + a manager agent you talk to + a pool of
-worker agents that pick tasks up and do them in sandboxes.
+A personal software factory. A task board + one agent runtime that runs in two roles: a
+**worker** picks a task up and does it in a sandbox, a **manager** is the one you talk to.
+Same dispatch, same containers, same ledger — the role is a field on the run, not a second
+system.
 
 Not only coding tasks. "Ship feature X in repo Y" and "plan a 4-day Budapest trip into
 my calendar" are the same shape: brief in, agent runs, artifact out, human reviews.
@@ -35,7 +37,7 @@ event bus — no Redis, no queue broker at this scale.
 
 ## Core model
 
-Postgres is the only shared state. Three writers: human, manager agent, worker agents.
+Postgres is the only shared state. Three writers: human, manager runs, worker runs.
 Workers write status directly, so an **audit log recording the actor on every mutation is
 mandatory**, not optional.
 
@@ -64,10 +66,11 @@ ideas → backlog → in progress → review → done
 Two agent spawn points (*backlog* on demand, *in progress* always) and one review gate
 (*review*). Nothing more.
 
-**The manager agent is not restricted relative to a person.** It is an optional second
+**The manager role is not restricted relative to a person.** It is an optional second
 interface onto the same operations — say it instead of clicking it — so every move on the
-board is available to it, including the ones that spend a worker slot. Worker runs are the
-restricted actor: a run may only move its own task *in progress → review*.
+board is available to it, including the ones that spend a worker slot. The **worker role**
+is the restricted actor: its token is bound to its own task, so a worker run may only move
+that task *in progress → review*. The restriction is on the role, not on being a run.
 
 **No done-condition check.** The agent process exiting *is* the completion signal — every
 SDK reports it. Run ends → task moves *in progress → review*. Inspecting whether a PR was
@@ -86,11 +89,17 @@ Because entering *in progress* auto-starts, "stop, comment, rerun" is the steeri
 **Task** — kind, optional project, status, title, brief, structured inputs, acceptance
 criteria, parent task. Carries comments, artifacts, and sessions.
 
-**Run** — one task attempt. Append-only `run_events` with `pg_notify` on insert: the live
-stream, the audit log, and the dashboard replay source are one table.
+**Run** — one attempt by one agent, carrying its **role**: a worker run attempts a task, a
+manager run answers a thread. Append-only `run_events` with `pg_notify` on insert: the live
+stream, the audit log, and the dashboard replay source are one table, for both roles.
 
-**Session** — an agent conversation. A task has **many** sessions over its life, so the
-link is its own table. Each carries a status of its own — running, finished, failed — so a
+**Thread** — a manager conversation. Its own listed entity, not a board card, reachable
+from Telegram and the dashboard alike. Carries messages; a manager run attaches to it the
+way a worker run attaches to a task.
+
+**Session** — an agent conversation. It hangs off a **task** for a worker run and off a
+**thread** for a manager one, and a task has **many** sessions over its life, so the link
+is its own table. Each carries a status of its own — running, finished, failed — so a
 research session that died without producing anything is visible as failed rather than as
 an absence. The dashboard lists them and lets you switch between them.
 
@@ -104,11 +113,17 @@ from. This is the cross-session channel (see *How agents talk back*).
 
 ### Tools are uniform
 
-Every agent gets the same tools regardless of task kind: git, `gh`, the shell, and the
-Executor MCP server. Gating tools by kind is a hardening concern, not a v1 concern, and the
+Every agent gets the same tools regardless of task kind or role: git, `gh`, the shell, the
+Executor MCP server, and the gateway API. Gating tools by kind is a hardening concern, not a v1 concern, and the
 distinction does not survive contact with real tasks — "read these three library repos and
 write me a report on what to steal" is a personal research task that badly wants `git` and
 `gh`.
+
+**The manager's set is a superset of the worker's, and it is one list, not two.** Same
+server, same tools; what differs is the binding — a worker's token is bound to its own
+task, a manager's is not. So the manager can look at what a stuck worker did, and what
+keeps it out of repo work is its prompt telling it to file a task, never a missing
+capability.
 
 **Executor** is the connector layer — an external service holding authenticated connectors
 (Google Workspace, Gmail, and the rest), exposed to every agent as MCP. Scattered across
@@ -296,36 +311,40 @@ not a hybrid, and the agent sees a plain directory either way.
 ## Architecture
 
 ```
-Telegram (control)  ─┐
-Web SPA on CF Pages ─┼─→ gateway (VPS: HTTP + SSE) ─→ Postgres ←─ orchestrator ─→ sandboxed workers
-                     │                                    ↑
-                     └────────→ manager agent ────────────┘
+Telegram (control)  ─┐                                                  ┌─→ worker run (a task)
+Web SPA on CF Pages ─┴─→ gateway (VPS: HTTP + SSE) ─→ Postgres ←─ orchestrator ─→ sandboxed runs
+                                                                        └─→ manager run (a thread)
 ```
 
-- **orchestrator** — long-running. Poll + NOTIFY → worker pool with per-kind concurrency
-  caps, durable lease (survives restart), retry backoff, quota gate. Sole owner of
-  container lifecycle. Ported in concept (not code) from existing factory examples, where
-  this part is proven.
-- **manager agent** — not a loop. A conversational agent invoked per message. Its memory
-  is the DB; its tools are the same API the web app uses. Turns "read this article and
-  file tickets" into rows. It is a second interface to the same operations, not a lesser
-  one: anything a person can do on the board, it can do by being asked.
-- **gateway** — the API. One contract serves the SPA, the bot, the manager's tools, and
+- **orchestrator** — long-running. Poll + NOTIFY → pool with a lane per role and a
+  concurrency cap each, durable lease (survives restart), retry backoff, quota gate. Sole
+  owner of container lifecycle, for **both roles**. Ported in concept (not code) from
+  existing factory examples, where this part is proven.
+- **the role on a run** — `worker | manager`. It selects exactly four things: the system
+  prompt, what the run attaches to (a task or a thread), the container image, and the tool
+  set. Everything else — dispatch, lease, pool, quota, container, event stream, session,
+  transcript, retry ladder, telemetry — is shared, and a role check anywhere in that
+  machinery is a bug. The manager is a second interface to the same operations, not a
+  lesser one: it turns "read this article and file tickets" into rows, and anything a
+  person can do on the board it can do by being asked.
+- **gateway** — the API. One contract serves the SPA, the bot, both roles' tools, and
   external agents.
-- **telegram bot** — thin client. Voice in, approvals, status, summaries + links. Does
-  **not** stream raw tool calls for background runs.
+- **telegram bot** — an interface and nothing else: intake, rendering, queueing, buttons.
+  No container, no prompt text, no agent runtime. Voice in, approvals, status, summaries +
+  links. Does **not** stream raw tool calls for background runs.
 - **web app** — Vite + React SPA on Cloudflare Pages, data from the VPS gateway over
   Caddy + a domain. Client bundle from CDN, so opening the dashboard costs no VPS
   round-trip for assets.
 
 ## Sandboxing
 
-Every run gets its own Docker container, including personal tasks and the manager agent.
-Ephemeral: torn down after the run.
+Every run gets its own Docker container, whatever its role — personal tasks and manager
+turns included. Ephemeral: torn down after the run.
 
 **Mounted from host:** the run workspace (rw), the task's artifacts directory (rw), the
-project and global artifact folders (ro), and a per-run agent-home dir (rw). Nothing else.
-Never the docker socket — that one mount turns a sandbox into host root.
+project and global artifact folders (ro), and the **provider's agent home (rw)** — one
+directory per provider, shared by every run, never copied (see *Session history*). Nothing
+else. Never the docker socket — that one mount turns a sandbox into host root.
 
 **Hardening:** drop all capabilities, no-new-privileges, non-root user, pid/memory/cpu
 limits. Blast radius of a confused agent = its own container.
@@ -363,28 +382,46 @@ Both harnesses write transcripts to their config dir, and both let you relocate 
 `CLAUDE_CONFIG_DIR` for Claude (verified: transcripts land in `<dir>/projects/**.jsonl`),
 `CODEX_HOME` for Codex (verified present in the shipped binary).
 
-So: give each run a **per-run agent-home directory on the host**, mounted into the
-container, seeded with credentials only — never the personal `~/.claude`, which holds
-every transcript from every project. Sessions then survive container teardown and the
-orchestrator ingests the transcript into Postgres, where the manager agent can query it
-and the dashboard can render it. This is also what makes resuming a specific session on a
-task possible at all.
+So: **one system-owned agent home per provider on the host**, mounted read-write into every
+container, never copied. `~/.claude-task-management` and `~/.codex-task-management` by
+default, overridable by env. The human logs into it once by hand — `CLAUDE_CONFIG_DIR=<dir>
+claude`, then `/login` — which is exactly the arrangement several parallel CLI sessions on
+one laptop already use. Never the personal `~/.claude`, which holds every transcript from
+every project.
+
+Every session's transcript therefore lands in **one tree**, and that tree outlives the
+container. The orchestrator ingests it into Postgres, where the manager can query it and
+the dashboard can render it. Sharing is also what makes resuming a specific session
+possible at all: a per-run home is created empty seconds before a resume, so the provider
+cannot find the session id it was handed, while against the shared tree both of its lookups
+resolve. There is no per-run and no per-thread home lifetime — nothing to seed, scope,
+prune or tear down.
+
+Two costs of the shared tree, accepted and written down rather than fixed. Nothing prunes
+it, so a run can read another run's conversation — a capability for the manager role, a
+leak for the worker one. And nothing may write a whole file into it: a read-modify-write of
+the provider's own config from inside a container is a lost update, and it parks a live
+token in the human's login config. Per-run configuration goes on the invocation instead.
 
 The Claude SDK also has an alpha `sessionStore` hook that dual-writes transcript entries
 to an external store — the cleaner path to live transcripts in Postgres, worth trying once
-the file-ingest path works.
+the file-ingest path works. Not on the critical path: end-of-turn sync is enough for v1.
 
-**Known risk:** subscription credentials refresh and rotate. Parallel containers each
-holding a copy of the credentials file may invalidate each other. Needs a deliberate
-answer — likely one owner of refresh on the host, with containers getting short-lived
-copies.
+**The failure this replaces:** subscription credentials refresh and rotate. Give each
+container its own *copy* and the refresh happens inside the copy, dies with the container,
+and leaves the source permanently stale — observed with Codex. Copying is the bug, not the
+mitigation; short-lived copies are rejected for the same reason. The shared mounted home is
+the answer. Codex's own refresh handling is knowingly **not** fixed in v1 and carries a TODO
+on its provider; Claude is the provider for chats.
 
 ## API surface
 
 Effect all the way, Effect v4 beta, tracking latest.
 
 One typed contract at the gateway, serving four consumers: the SPA, the Telegram bot, the
-manager agent's tools, and external agents via Executor. Executor runs code-as-tools
+tools every run gets in either role, and external agents via Executor. Threads and thread
+messages are part of it, so a conversation opened in Telegram is readable from the
+dashboard and by an agent. Executor runs code-as-tools
 against an OpenAPI surface, so an OpenAPI spec derived from the same contract means
 **everything the backend can do is available to agents** — projects, tasks, runs,
 artifacts — with no second integration to maintain.
@@ -395,10 +432,12 @@ The surface is Effect **HttpApi**, not Effect RPC — a deviation from `.docs/st
 argued in `01-api-surface.md`. Short version: OpenAPI derivation and SSE exist only on
 HttpApi, and RPC over HTTP is a single opaque endpoint that Executor cannot use.
 
-Scoping: consumers get scoped tokens (read, task-write, admin). A worker run's token is
-scoped to its own task — write there, read everywhere else — which costs almost nothing to
-build and stops a confused agent from editing an unrelated ticket. The Executor connector
-and the manager agent do not get destructive scopes.
+Scoping: consumers get scoped tokens (read, task-write, admin). Both roles get `task-write`
+and the difference is the **binding**, not the scope: a worker run's token names its own
+task — write there, read everywhere else, which costs almost nothing to build and stops a
+confused agent from editing an unrelated ticket — while a manager run's token names none
+and writes across the board. That one field is why the manager's reach is a superset with
+no second tool list. Neither role, nor the Executor connector, gets a destructive scope.
 
 ## Auth & workspaces
 
@@ -408,9 +447,15 @@ invites others later. Telegram user links to an account via a one-time code.
 
 ## Manager agent
 
-Threaded like ChatGPT — many threads, new/clear/switch, history listing. Available in
-Telegram first, in the dashboard later. Thread and provider session id stored separately,
-so the provider can change mid-thread.
+The same runtime as a worker, with `role: "manager"` on the run. It differs by prompt,
+attachment, image and tool set; nothing else about it is separate.
+
+Threaded like ChatGPT — many threads, new/switch, history listing. There is no `/clear`: a
+thread's session is a row, so starting from nothing is a new thread. **A thread is a
+first-class listed entity, not a board card**, and the same thread is reachable from
+Telegram and from the dashboard through the same API — not Telegram-first-dashboard-later.
+The provider session id lives on the session, exactly as it does for a worker, so the
+provider can change mid-thread and there is one place it is written.
 
 **Controls running work, through the orchestrator, never directly.** It writes intents —
 the same stop, rerun and reorder a human has — and the orchestrator acts. Keeps one owner
@@ -421,8 +466,17 @@ the top of the column are the same write, and refusing the sentence while allowi
 would only move the same decision to a different button. The audit log is what makes this
 safe: every mutation records that the manager made it, and on whose instruction.
 
-Mid-run steering is out of scope for v1 — Codex has no clean input path. Stop, comment,
-rerun, the same way a human interrupts.
+Parity holds against a **worker** too, not just against a person: the manager can do
+everything a worker can, including reading a stuck worker's transcript. It declines repo
+work because its prompt says to file a task, not because a tool is missing.
+
+**One live turn per thread.** A message arriving mid-turn is queued and the person told so;
+several queued messages coalesce into one prompt on the next turn; an inline button
+force-sends by stopping the current turn and appending the message to the session. This
+exists in `telegram-claude` — port it, do not design it.
+
+Mid-run steering of a **worker** stays out of scope for v1 — Codex has no clean input path.
+Stop, comment, rerun, the same way a human interrupts.
 
 Stuck-run detection starts as a cheap heuristic: no file edits plus repeating tool
 signatures over N minutes → flag, let the manager decide.
@@ -455,29 +509,14 @@ Starting from the Next.js monorepo template, unchanged on first commit. Then:
 
 ## Phases
 
-1. **Store** — Postgres, schema, migrations, audit log, artifact storage. Seed tasks by
-   hand.
-2. **Sandbox + orchestrator** — dispatch *in progress* coding tasks into containers → PR.
-   Transcript ingest, session-per-task linking. This alone beats the current setup.
-3. **Manager agent in Telegram** — threads, task CRUD, run control. Talking replaces SQL.
-4. **Gateway + web dashboard** — the second full interface: boards with drag between
-   statuses, task creation and editing, comments, run timelines, session switching.
-5. **Research + non-repo tasks** — on-demand research from *backlog*, scratch-dir
-   workspaces, artifacts as first-class output.
-6. **Hardening** — scoped GitHub tokens, credential-refresh ownership, egress policy,
-   per-kind tool restriction if it turns out to be wanted.
+In `02-build-plan.md`, with an exit test each. One phase list, one place to change it — not
+restated here.
 
 ## Unresolved questions
 
-1. Credential refresh across parallel containers — who owns refresh, and how do containers
-   get short-lived copies without racing?
-2. Repo mirrors: maintain a bare mirror per repo on the host, or just clone from GitHub
+1. Repo mirrors: maintain a bare mirror per repo on the host, or just clone from GitHub
    each run and accept the network cost?
-3. Manager agent in a container too — it needs DB access and no repo. Same image, different
-   profile, or a separate lighter one?
-4. Does the dashboard need live streaming in v1, or is polling the run-events table enough
-   to start?
-5. Concurrency caps on a 4-core / 8 GB box: what's the real ceiling for parallel coding
-   containers, and does that force an earlier move to a bigger host?
-6. Does promotion need its own review, or is it a one-click act? A promoted artifact is
+2. Concurrency caps on a 4-core / 8 GB box: 2 worker slots + 1 manager slot is the current
+   answer. What is the real ceiling, and does it force an earlier move to a bigger host?
+3. Does promotion need its own review, or is it a one-click act? A promoted artifact is
    read by every future task in the project, so a bad one propagates quietly.
