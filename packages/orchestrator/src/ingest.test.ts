@@ -37,7 +37,13 @@ import {
   WorkspaceRepo,
   withActor,
 } from "@workspace/db";
-import type { AgentSession, Run, Task, WorkspaceId } from "@workspace/domain";
+import type {
+  AgentSession,
+  Run,
+  RunSubject,
+  Task,
+  WorkspaceId,
+} from "@workspace/domain";
 import { Actor, CostUsd } from "@workspace/domain";
 import type { AgentEvent } from "@workspace/harness";
 import {
@@ -52,6 +58,7 @@ import { rescanTaskArtifacts } from "./artifacts";
 import type { DispatchContext } from "./dispatch-context";
 import { lostTerminus } from "./dispatch-context";
 import { ingestRunEvents, ingestTurnLedger } from "./ingest";
+import { workerAttachment } from "./subject";
 import {
   durableTranscriptPathOf,
   ingestTranscript,
@@ -205,6 +212,7 @@ const contextOf = (input: {
   readonly task: Task;
 }): DispatchContext => ({
   actor: loop,
+  attached: workerAttachment(input.task),
   attempt: 1,
   image: SANDBOX_IMAGE,
   layout: hostRunLayout({ dataRoot: input.dataRoot, runId: input.run.id }),
@@ -215,7 +223,6 @@ const contextOf = (input: {
   runId: input.run.id,
   session: { mode: "fresh", selected: "new", session: input.session },
   spanId: null,
-  task: input.task,
   traceId: null,
   traceparent: null,
   trigger: "status_change",
@@ -233,15 +240,16 @@ const fixture = Effect.fnUntraced(function* (input: {
   const task = yield* withActor(seeder)(
     tasks.create({ title: input.title, workspaceId: input.workspaceId })
   );
+  const subject: RunSubject = { id: task.id, kind: "task" };
   const session = yield* sessions.open({
     provider: "claude",
-    taskId: task.id,
+    subject,
     workspaceId: input.workspaceId,
   });
   const run = yield* runs.create({
     agentSessionId: session.id,
     provider: "claude",
-    taskId: task.id,
+    subject,
     trigger: "status_change",
     workspaceId: input.workspaceId,
   });
@@ -249,12 +257,30 @@ const fixture = Effect.fnUntraced(function* (input: {
 });
 
 let dataRoot: string;
+let agentHomeDir: string;
 let workspaceId: WorkspaceId;
 let streamed: DispatchContext;
 let restored: DispatchContext;
 
+/**
+ * The task a fixture context is attached to. The union makes the narrowing
+ * explicit, which is the point of it — every reader has to say which role it
+ * means.
+ */
+const taskOf = (context: DispatchContext): Task => {
+  if (context.attached.role !== "worker") {
+    throw new Error("this fixture is a worker run");
+  }
+  return context.attached.task;
+};
+
 beforeAll(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), "ingest-"));
+  // The host's shared login for the provider, standing in for
+  // `~/.claude-task-management`: every run on the box writes its transcript
+  // into this one tree, and the ingest is narrowed to a session id for exactly
+  // that reason.
+  agentHomeDir = join(dataRoot, "agent-home", "claude");
 
   const built = await runtime.runPromise(
     Effect.gen(function* () {
@@ -348,12 +374,11 @@ beforeAll(async () => {
     ].join("\n")}\n`
   );
 
-  const transcriptDir = join(
-    restored.layout.agentHomeDir,
-    "claude",
-    "projects",
-    "-workspace"
-  );
+  // The run that never streamed still has a run directory: the loop creates it
+  // before the container starts, and the durable transcript copy lands in it.
+  mkdirSync(restored.layout.runDir, { recursive: true });
+
+  const transcriptDir = join(agentHomeDir, "projects", "-workspace");
   writeAt(
     join(transcriptDir, `${PROVIDER_SESSION}.jsonl`),
     `${TRANSCRIPT_LINES.join("\n")}\n`
@@ -361,7 +386,7 @@ beforeAll(async () => {
 
   const artifacts = taskArtifactsDirOf({
     dataRoot,
-    taskId: streamed.task.id,
+    taskId: taskOf(streamed).id,
   });
   writeAt(join(artifacts, "notes.md"), "# notes\n");
   writeAt(join(artifacts, "out", "report.txt"), "report\n");
@@ -371,8 +396,8 @@ afterAll(async () => {
   await runtime.runPromise(
     Effect.gen(function* () {
       const tasks = yield* TaskRepo;
-      yield* tasks.delete({ id: streamed.task.id, workspaceId });
-      yield* tasks.delete({ id: restored.task.id, workspaceId });
+      yield* tasks.delete({ id: taskOf(streamed).id, workspaceId });
+      yield* tasks.delete({ id: taskOf(restored).id, workspaceId });
     })
   );
   await runtime.dispose();
@@ -451,7 +476,7 @@ test("a rescan indexes what is in the task's folder", async () => {
     rescanTaskArtifacts({
       dataRoot,
       runId: streamed.runId,
-      taskId: streamed.task.id,
+      taskId: taskOf(streamed).id,
       workspaceId,
     })
   );
@@ -462,7 +487,7 @@ test("a rescan indexes what is in the task's folder", async () => {
 test("a rescan after a file is deleted removes its index row", async () => {
   rmSync(
     join(
-      taskArtifactsDirOf({ dataRoot, taskId: streamed.task.id }),
+      taskArtifactsDirOf({ dataRoot, taskId: taskOf(streamed).id }),
       "out",
       "report.txt"
     )
@@ -473,12 +498,12 @@ test("a rescan after a file is deleted removes its index row", async () => {
       yield* rescanTaskArtifacts({
         dataRoot,
         runId: streamed.runId,
-        taskId: streamed.task.id,
+        taskId: taskOf(streamed).id,
         workspaceId,
       });
       const artifacts = yield* ArtifactRepo;
       const rows = yield* artifacts.listByTask({
-        taskId: streamed.task.id,
+        taskId: taskOf(streamed).id,
         workspaceId,
       });
       return rows.map((row) => row.path);
@@ -492,8 +517,9 @@ test("a run with no event stream gets its timeline back from the transcript", as
   const { report, rows, session } = await runtime.runPromise(
     Effect.gen(function* () {
       const ingested = yield* ingestTranscript({
+        agentHomeDir,
         context: restored,
-        providerSessionId: null,
+        providerSessionId: PROVIDER_SESSION,
       });
       const events = yield* RunEventRepo;
       const stored = yield* events.listByRun({
@@ -524,6 +550,7 @@ test("the restored timeline is not written twice", async () => {
   const { report, rows } = await runtime.runPromise(
     Effect.gen(function* () {
       const again = yield* ingestTranscript({
+        agentHomeDir,
         context: restored,
         providerSessionId: PROVIDER_SESSION,
       });
@@ -559,9 +586,29 @@ test("a tool call's arguments are redacted before they reach a row", async () =>
   expect(summaries.every((summary) => summary.length <= 240)).toBe(true);
 });
 
-test("the transcript survives the agent home, and is what a later ingest reads", async () => {
+test("a run that never named a session gets no transcript rather than a neighbour's", async () => {
   const preserved = await runtime.runPromise(
-    preserveTranscript({ context: restored, providerSessionId: null })
+    preserveTranscript({
+      agentHomeDir,
+      context: restored,
+      providerSessionId: null,
+    })
+  );
+
+  // The shared home holds every run's conversation, so the newest file in it
+  // belongs to whoever wrote last. Copying that into this run's directory and
+  // ingesting it as this run's timeline is the failure the id filter prevents.
+  expect(preserved.copied).toBe(false);
+  expect(preserved.path).toBeNull();
+});
+
+test("the durable copy is the record, and is what a later ingest reads", async () => {
+  const preserved = await runtime.runPromise(
+    preserveTranscript({
+      agentHomeDir,
+      context: restored,
+      providerSessionId: PROVIDER_SESSION,
+    })
   );
   const durable = durableTranscriptPathOf(restored.layout);
 
@@ -573,12 +620,15 @@ test("the transcript survives the agent home, and is what a later ingest reads",
     readFileSync(preserved.source ?? "", "utf8")
   );
 
-  // What the run's scope does to the agent home, and the credential copy in it.
-  rmSync(restored.layout.agentHomeDir, { force: true, recursive: true });
+  // The shared home is the operator's and is never torn down, but the file in
+  // it is the vendor's to prune. The copy is what makes a re-ingest weeks later
+  // read the same bytes the first one did.
+  rmSync(preserved.source ?? "", { force: true });
 
   const again = await runtime.runPromise(
     Effect.gen(function* () {
       const report = yield* ingestTranscript({
+        agentHomeDir,
         context: restored,
         providerSessionId: PROVIDER_SESSION,
       });

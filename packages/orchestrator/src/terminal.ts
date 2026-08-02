@@ -1,6 +1,7 @@
 /**
  * How a run ends. One function, six writes, and a rule that surprises people:
- * **every ending moves the task to review, including the failures.**
+ * **every ending of a worker run moves its task to review, including the
+ * failures.**
  *
  * There is no failed column on the board. A crashed run posts its error text
  * into the thread, its session is marked failed, and a human decides what to do
@@ -13,6 +14,13 @@
  * one move it has. The writes here are performed as the `orchestrator` actor
  * rather than as `worker_run`, and that is deliberate for the failure path —
  * the process that died cannot write its own epitaph, so the loop authors it.
+ *
+ * **A manager run ends here too, and takes the same path.** The run row, the
+ * session ending, the economics and the wide event are shared; what a role
+ * changes is only what the ending is written back to — a comment and a board
+ * move for a task, a message for a conversation, which is `./chat-turn`. A run
+ * with no task makes no board move because there is no card to move, and that
+ * is the one branch below.
  *
  * **Everything here is best-effort and loud.** The terminal path runs from an
  * `onExit`, which is also the interruption path, so a step that fails must not
@@ -39,6 +47,7 @@ import type { CommentKind, RunOutcome } from "@workspace/domain";
 import { commentMarkerPathOf } from "@workspace/harness";
 import { Effect } from "effect";
 import { FileSystem } from "effect/FileSystem";
+import { closeChatTurn } from "./chat-turn";
 import {
   type DispatchContext,
   economicsOf,
@@ -47,10 +56,10 @@ import {
   outcomeOfTerminus,
   type RunTerminus,
   sessionIdOf,
-  taskIdOf,
   workspaceIdOf,
 } from "./dispatch-context";
 import { clipToBytes } from "./mapping";
+import type { WorkerAttachment } from "./subject";
 
 /**
  * How much of a final assistant message survives into a fallback comment.
@@ -191,6 +200,8 @@ export interface RunClosure {
  * different problem from one that did neither.
  */
 export interface TerminalReport {
+  /** Whether the manager's answer reached its conversation. False on every worker run. */
+  readonly answerStored: boolean;
   /** Whether the run had commented by the time it ended, marker included. */
   readonly commentPosted: boolean;
   readonly errorCommented: boolean;
@@ -198,7 +209,11 @@ export interface TerminalReport {
   readonly outcome: RunOutcome;
   readonly runClosed: boolean;
   readonly sessionEnded: boolean;
-  /** Whether the task actually reached *review*. */
+  /**
+   * Whether the task actually reached *review*. True on a manager run, which
+   * has no card to move and therefore nothing left undone — the flag is read as
+   * "is anything still stuck in the column", and a run with no column is not.
+   */
   readonly transitioned: boolean;
 }
 
@@ -206,16 +221,99 @@ export interface TerminalReport {
 const ERROR_COMMENT: CommentKind = "run_error";
 const FALLBACK_COMMENT: CommentKind = "fallback";
 
+/** What a worker run's ending wrote onto its task. */
+interface BoardWrites {
+  readonly errorCommented: boolean;
+  readonly fallbackCommented: boolean;
+  readonly transitioned: boolean;
+}
+
 /**
- * Closes one run out: the run row, the session, the two comments, and the move
- * to *review*.
+ * A manager run has no card, so there is nothing here it left undone.
+ * `transitioned` is true because the caller reads it as "is this still stuck in
+ * the column", and a run with no column is not.
+ */
+const NO_BOARD_WRITES: BoardWrites = {
+  errorCommented: false,
+  fallbackCommented: false,
+  transitioned: true,
+};
+
+/**
+ * The two comments and the board move, for a run that has a task.
+ *
+ * The comments land before the transition, so a dashboard that reacts to the
+ * status change finds the thread already complete.
+ */
+const closeOnTask = Effect.fnUntraced(function* (input: {
+  readonly attached: WorkerAttachment;
+  readonly closure: RunClosure;
+}) {
+  const { closure } = input;
+  const { context, terminus } = closure;
+  const comments = yield* CommentRepo;
+  const tasks = yield* TaskRepo;
+
+  const asActor = withActor(context.actor);
+  const taskId = input.attached.task.id;
+  const workspaceId = workspaceIdOf(context);
+  const sessionId = sessionIdOf(context);
+
+  // The crash comment. Authored by the orchestrator rather than by the agent,
+  // because the run that produced the error is the one that could not write it.
+  const errorComment = isFailure(terminus)
+    ? yield* asActor(
+        comments.append({
+          author: { kind: "orchestrator", runId: context.runId },
+          body: errorCommentBody(terminus),
+          kind: ERROR_COMMENT,
+          taskId,
+          workspaceId,
+        })
+      ).pipe(bestEffort("posting the crash comment"))
+    : null;
+
+  // The braces to the stop hook's belt. Only when the run posted nothing of its
+  // own, and only when it actually said something — an empty final message is a
+  // run that had nothing to add, not a comment worth collapsing in the UI.
+  const wantsFallback =
+    !closure.commentPosted && terminus.finalText.trim().length > 0;
+  const fallbackComment = wantsFallback
+    ? yield* asActor(
+        comments.append({
+          author: { kind: "agent", runId: context.runId, sessionId },
+          body: fallbackCommentBody(terminus.finalText),
+          kind: FALLBACK_COMMENT,
+          taskId,
+          workspaceId,
+        })
+      ).pipe(bestEffort("posting the fallback comment"))
+    : null;
+
+  // The one move a run may make, and it is the same move for all three
+  // endings. `after` is deliberately absent: the card goes to the bottom of
+  // review, because nobody dragged it there.
+  const moved = yield* asActor(
+    tasks.transition({ id: taskId, to: "review", workspaceId })
+  ).pipe(bestEffort("moving the task to review"));
+
+  return {
+    errorCommented: errorComment !== null,
+    fallbackCommented: fallbackComment !== null,
+    transitioned: moved !== null,
+  } satisfies BoardWrites;
+});
+
+/**
+ * Closes one run out: the run row, whatever it was attached to, and the
+ * session.
  *
  * The order is the order a reader wants it in. The run row closes first, so the
- * task stops looking live the moment anything is written at all. The comments
- * land before the transition, so a dashboard that reacts to the status change
- * finds the thread already complete. The session ends after the comments,
- * because a failed session's message is the same text the crash comment
- * carries and writing it twice from two places is how the two come to differ.
+ * work stops looking live the moment anything is written at all. What the
+ * ending is written back to comes next — see {@link closeOnTask} and
+ * `closeChatTurn`. The session ends last, because a failed session's message is
+ * the same text the crash comment carries and writing it twice from two places
+ * is how the two come to differ.
  *
  * Total by construction: every failure is logged and reported as a flag. The
  * two refusals worth naming are ordinary rather than exceptional — a run closed
@@ -226,12 +324,9 @@ export const closeRun = Effect.fn("Run.close")(function* (closure: RunClosure) {
   const { branch, context, terminus } = closure;
   const runs = yield* RunRepo;
   const sessions = yield* AgentSessionRepo;
-  const comments = yield* CommentRepo;
-  const tasks = yield* TaskRepo;
 
   const asActor = withActor(context.actor);
   const workspaceId = workspaceIdOf(context);
-  const taskId = taskIdOf(context);
   const sessionId = sessionIdOf(context);
   const outcome = outcomeOfTerminus(terminus);
   const fields = errorFieldsOf(terminus);
@@ -240,8 +335,8 @@ export const closeRun = Effect.fn("Run.close")(function* (closure: RunClosure) {
   yield* Effect.annotateCurrentSpan({
     kind: terminus.kind,
     outcome,
+    role: context.attached.role,
     runId: context.runId,
-    taskId,
   });
 
   // The provider's own id for the conversation, which is the only thing a
@@ -293,36 +388,18 @@ export const closeRun = Effect.fn("Run.close")(function* (closure: RunClosure) {
     bestEffort("closing the run row")
   );
 
-  // The crash comment. Authored by the orchestrator rather than by the agent,
-  // because the run that produced the error is the one that could not write it.
-  const errorComment = failed
-    ? yield* asActor(
-        comments.append({
-          author: { kind: "orchestrator", runId: context.runId },
-          body: errorCommentBody(terminus),
-          kind: ERROR_COMMENT,
-          taskId,
-          workspaceId,
-        })
-      ).pipe(bestEffort("posting the crash comment"))
-    : null;
-
-  // The braces to the stop hook's belt. Only when the run posted nothing of its
-  // own, and only when it actually said something — an empty final message is a
-  // run that had nothing to add, not a comment worth collapsing in the UI.
-  const wantsFallback =
-    !closure.commentPosted && terminus.finalText.trim().length > 0;
-  const fallbackComment = wantsFallback
-    ? yield* asActor(
-        comments.append({
-          author: { kind: "agent", runId: context.runId, sessionId },
-          body: fallbackCommentBody(terminus.finalText),
-          kind: FALLBACK_COMMENT,
-          taskId,
-          workspaceId,
-        })
-      ).pipe(bestEffort("posting the fallback comment"))
-    : null;
+  // What the ending is written back to, which is the one thing the role
+  // decides: a task gets its comments and its board move, a conversation gets
+  // the answer. Both run before the session ends, so a dashboard reacting to
+  // either finds the record already complete.
+  const board =
+    context.attached.role === "worker"
+      ? yield* closeOnTask({ attached: context.attached, closure })
+      : NO_BOARD_WRITES;
+  const answerStored =
+    context.attached.role === "manager"
+      ? yield* closeChatTurn({ context, terminus })
+      : false;
 
   const ended = yield* asActor(
     failed
@@ -334,20 +411,14 @@ export const closeRun = Effect.fn("Run.close")(function* (closure: RunClosure) {
       : sessions.finish({ id: sessionId, workspaceId })
   ).pipe(bestEffort("ending the session"));
 
-  // The one move a run may make, and it is the same move for all three
-  // endings. `after` is deliberately absent: the card goes to the bottom of
-  // review, because nobody dragged it there.
-  const moved = yield* asActor(
-    tasks.transition({ id: taskId, to: "review", workspaceId })
-  ).pipe(bestEffort("moving the task to review"));
-
   return {
+    answerStored,
     commentPosted: closure.commentPosted,
-    errorCommented: errorComment !== null,
-    fallbackCommented: fallbackComment !== null,
+    errorCommented: board.errorCommented,
+    fallbackCommented: board.fallbackCommented,
     outcome,
     runClosed: closed !== null,
     sessionEnded: ended !== null,
-    transitioned: moved !== null,
+    transitioned: board.transitioned,
   } satisfies TerminalReport;
 });

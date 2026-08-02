@@ -1,11 +1,17 @@
 /**
- * Which task runs next, and everything that has to be true before it can.
+ * What runs next, and everything that has to be true before it can.
  *
  * This is the front half of the loop and it stops one step short of writing
- * anything: it reads the *in progress* column, decides what is eligible, and
- * hands back the {@link RunClaim} that `./open-run` turns into rows. Opening
- * the session and the run belongs there, and keeping the split at that line is
- * what stops two files deciding which session a `latest` selection resolves to.
+ * anything: it reads the *in progress* column and the threads with something
+ * unanswered, decides what is eligible, and hands back the {@link RunClaim}
+ * that `./open-run` turns into rows. Opening the session and the run belongs
+ * there, and keeping the split at that line is what stops two files deciding
+ * which session a `latest` selection resolves to.
+ *
+ * **Both queues are in Postgres.** A board column read by rank, and a query for
+ * threads holding a user message their newest session has not been shown. A
+ * queue held in a process is dropped when the process restarts, which is
+ * exactly what the chat path used to do.
  *
  * Three rules decide eligibility, and each exists because of a specific
  * failure.
@@ -37,6 +43,8 @@
 
 import {
   AgentSessionRepo,
+  ChatMessageRepo,
+  ChatThreadRepo,
   CurrentActor,
   ProjectRepo,
   RunRepo,
@@ -44,8 +52,12 @@ import {
 } from "@workspace/db";
 import {
   type Actor,
+  ChatMessageId,
+  type ChatThread,
   nextSessionOf,
+  type Project,
   type Run,
+  type RunSubject,
   type RunTrigger,
   type SessionProvider,
   type Task,
@@ -59,6 +71,13 @@ import { Context, DateTime, Effect, Layer, Schema } from "effect";
 import { orchestratorConfig } from "./config";
 import { DispatchFailed, describeFailure } from "./errors";
 import type { RunClaim } from "./open-run";
+import { watermarkOf } from "./prompt";
+import {
+  managerAttachment,
+  type RunAttachment,
+  subjectOfAttachment,
+  workerAttachment,
+} from "./subject";
 
 /**
  * Why a task in the column was passed over. Each is an ordinary state of a
@@ -67,7 +86,12 @@ import type { RunClaim } from "./open-run";
  * nothing to do, and an operator asking "why is this card not moving" wants the
  * three answers spelled apart.
  */
-export const SKIP_REASONS = ["live_run", "not_in_progress", "parked"] as const;
+export const SKIP_REASONS = [
+  "live_run",
+  "not_in_progress",
+  "nothing_unread",
+  "parked",
+] as const;
 
 /** Which rule held a task back. */
 export const SkipReason = Schema.Literals(SKIP_REASONS);
@@ -86,11 +110,11 @@ export interface Planned {
   readonly provider: SessionProvider;
 }
 
-/** The task was passed over, and nothing was written. */
+/** The work was passed over, and nothing was written. */
 export interface Skipped {
   readonly kind: "skipped";
   readonly reason: SkipReason;
-  readonly taskId: TaskId;
+  readonly subject: RunSubject;
 }
 
 /**
@@ -169,9 +193,10 @@ interface TaskRef {
   readonly workspaceId: WorkspaceId;
 }
 
-/** What planning one task needs. The task is passed whole; it was just read. */
+/** What planning one piece of work needs. The row is passed whole; it was just read. */
 export interface PlanInput {
-  readonly task: Task;
+  /** The task or the conversation, and therefore which role the run will be. */
+  readonly attached: RunAttachment;
   /** Why this run exists. A card entering the column is a status change. */
   readonly trigger?: RunTrigger;
 }
@@ -183,10 +208,10 @@ export interface QueueInput {
   readonly workspaceId: WorkspaceId;
 }
 
-const skipped = (taskId: TaskId, reason: SkipReason): Skipped => ({
+const skipped = (attached: RunAttachment, reason: SkipReason): Skipped => ({
   kind: "skipped",
   reason,
-  taskId,
+  subject: subjectOfAttachment(attached),
 });
 
 /**
@@ -199,13 +224,15 @@ const loopInstanceOf = (actor: Actor) =>
 
 const make = Effect.gen(function* () {
   const config = yield* orchestratorConfig;
+  const messages = yield* ChatMessageRepo;
   const projects = yield* ProjectRepo;
   const runs = yield* RunRepo;
   const sessions = yield* AgentSessionRepo;
   const tasks = yield* TaskRepo;
+  const threads = yield* ChatThreadRepo;
 
   /**
-   * Which harness this task will most likely run on.
+   * Which harness this run will most likely take.
    *
    * A read of the same rows `./open-run` resolves the session from, and
    * deliberately not the resolution itself: this answer is wanted *before* a
@@ -214,97 +241,207 @@ const make = Effect.gen(function* () {
    * deleted between this read and that write — the run's own resolution wins
    * and the row records what actually ran.
    */
-  const providerFor = (ref: TaskRef, task: Task) =>
+  const providerFor = (attached: RunAttachment) =>
     Effect.gen(function* () {
-      const selection = nextSessionOf(task);
+      const subject = subjectOfAttachment(attached);
+      const workspaceId =
+        attached.role === "worker"
+          ? attached.task.workspaceId
+          : attached.thread.workspaceId;
+      // A conversation names its own provider and has no selection column; a
+      // task's selection is the one thing that can point somewhere else.
+      const fallback =
+        attached.role === "manager"
+          ? attached.thread.provider
+          : config.defaultProvider;
+      const selection =
+        attached.role === "worker"
+          ? nextSessionOf(attached.task)
+          : ({ mode: "latest" } as const);
+
       if (selection.mode === "new") {
-        return config.defaultProvider;
+        return fallback;
       }
       if (selection.mode === "specific") {
         const pinned = yield* sessions
-          .byId({ id: selection.sessionId, workspaceId: ref.workspaceId })
+          .byId({ id: selection.sessionId, workspaceId })
           .pipe(Effect.catchTag("Db.NotFound", () => Effect.succeed(null)));
-        return pinned?.provider ?? config.defaultProvider;
+        return pinned?.provider ?? fallback;
       }
-      const latest = yield* sessions.latestResumable({
-        taskId: ref.id,
-        workspaceId: ref.workspaceId,
-      });
-      return latest?.provider ?? config.defaultProvider;
+      const latest = yield* sessions.latestResumable({ subject, workspaceId });
+      return latest?.provider ?? fallback;
     });
+
+  /** The claim shared by both roles, once the role-specific reads have passed. */
+  const claimFor = Effect.fnUntraced(function* (input: {
+    readonly attached: RunAttachment;
+    readonly attempt: number;
+    readonly project: Project | null;
+    readonly queueWaitMs: number;
+    readonly trigger: RunTrigger;
+  }) {
+    // Read while the plan's span is open and carried on the claim: the wide
+    // event is emitted as that span closes, and by then `Effect.currentSpan`
+    // answers nothing.
+    //
+    // These are the request's ids wherever the row that asked for this run
+    // carried a `traceparent` — the caller's span is adopted as this fiber's
+    // parent before planning starts, so the run row, the header handed to the
+    // container and the wide event all name the trace that asked, without any
+    // of them knowing where the trace came from.
+    const ids = yield* currentTraceIds;
+    return {
+      attached: input.attached,
+      attempt: input.attempt,
+      dataRoot: config.dataRoot,
+      defaultProvider: config.defaultProvider,
+      loopInstance: loopInstanceOf(yield* CurrentActor),
+      project: input.project,
+      queueWaitMs: input.queueWaitMs,
+      spanId: ids.spanId,
+      traceId: ids.traceId,
+      traceparent: traceparentOf(ids),
+      trigger: input.trigger,
+    } satisfies RunClaim;
+  });
+
+  /** Everything a task's plan reads, before failures are given a name. */
+  const resolveTask = Effect.fnUntraced(function* (input: {
+    readonly task: Task;
+    readonly trigger: RunTrigger;
+  }) {
+    const { task, trigger } = input;
+    const attached = workerAttachment(task);
+    const ref: TaskRef = { id: task.id, workspaceId: task.workspaceId };
+    const claimedAt = yield* DateTime.now;
+
+    // Re-checked against the row in hand rather than trusted from the sweep:
+    // between the read and here a stop command may have moved the card, and
+    // spending a slot on a task that has left the column is the one mistake
+    // this gate exists to prevent.
+    if (task.status !== "in_progress") {
+      return skipped(attached, "not_in_progress");
+    }
+    if (isParked({ now: claimedAt, task })) {
+      return skipped(attached, "parked");
+    }
+    const live = yield* runs.liveForTask({
+      taskId: ref.id,
+      workspaceId: ref.workspaceId,
+    });
+    if (live !== null) {
+      return skipped(attached, "live_run");
+    }
+
+    const project =
+      task.projectId === null
+        ? null
+        : yield* projects.byId({
+            id: task.projectId,
+            workspaceId: ref.workspaceId,
+          });
+
+    const history = yield* runs.listByTask({
+      taskId: ref.id,
+      workspaceId: ref.workspaceId,
+    });
+
+    return {
+      claim: yield* claimFor({
+        attached,
+        attempt: attemptAfter(history),
+        project,
+        queueWaitMs: queueWaitOf({
+          claimedAt,
+          statusChangedAt: task.statusChangedAt,
+        }),
+        trigger,
+      }),
+      kind: "ready",
+      provider: yield* providerFor(attached),
+    } satisfies Planned;
+  });
+
+  /**
+   * Everything a conversation's plan reads.
+   *
+   * The unread re-check is the chat half of the task's status re-check: a turn
+   * may have started and finished between the queue read and here, and starting
+   * a container with nothing to answer is the same wasted slot.
+   *
+   * The wait is measured from the *oldest* unread message rather than the
+   * newest, because that is the one the person has actually been waiting on —
+   * several that arrived while a turn ran are one prompt, and the number worth
+   * reporting is how long the first of them sat there.
+   */
+  const resolveThread = Effect.fnUntraced(function* (input: {
+    readonly thread: ChatThread;
+    readonly trigger: RunTrigger;
+  }) {
+    const { thread, trigger } = input;
+    const attached = managerAttachment(thread);
+    const ref = { id: thread.id, workspaceId: thread.workspaceId };
+    const claimedAt = yield* DateTime.now;
+
+    const live = yield* runs.liveForThread({
+      threadId: thread.id,
+      workspaceId: thread.workspaceId,
+    });
+    if (live !== null) {
+      return skipped(attached, "live_run");
+    }
+
+    const session = yield* sessions.latestResumable({
+      subject: subjectOfAttachment(attached),
+      workspaceId: thread.workspaceId,
+    });
+    const watermark = session === null ? null : watermarkOf(session);
+    const unread = yield* messages.since({
+      threadId: thread.id,
+      // The column holds a chat message's id on a thread's session; the brand
+      // is put back here, where the row it points at is being read.
+      watermark:
+        watermark === null
+          ? null
+          : {
+              createdAt: watermark.createdAt,
+              id: ChatMessageId.make(watermark.id),
+            },
+      workspaceId: thread.workspaceId,
+    });
+    const [oldest] = unread;
+    if (oldest === undefined) {
+      return skipped(attached, "nothing_unread");
+    }
+
+    const history = yield* runs.listByThread({
+      threadId: ref.id,
+      workspaceId: ref.workspaceId,
+    });
+
+    return {
+      claim: yield* claimFor({
+        attached,
+        attempt: attemptAfter(history),
+        project: null,
+        queueWaitMs: queueWaitOf({
+          claimedAt,
+          statusChangedAt: oldest.createdAt,
+        }),
+        trigger,
+      }),
+      kind: "ready",
+      provider: yield* providerFor(attached),
+    } satisfies Planned;
+  });
 
   /** Every read a plan makes, before failures are given a name. */
-  const resolve = (input: PlanInput) =>
-    Effect.gen(function* () {
-      const { task } = input;
-      const trigger = input.trigger ?? DEFAULT_TRIGGER;
-      const ref: TaskRef = { id: task.id, workspaceId: task.workspaceId };
-      const claimedAt = yield* DateTime.now;
-
-      // Re-checked against the row in hand rather than trusted from the sweep:
-      // between the read and here a stop command may have moved the card, and
-      // spending a slot on a task that has left the column is the one mistake
-      // this gate exists to prevent.
-      if (task.status !== "in_progress") {
-        return skipped(task.id, "not_in_progress");
-      }
-      if (isParked({ now: claimedAt, task })) {
-        return skipped(task.id, "parked");
-      }
-      const live = yield* runs.liveForTask({
-        taskId: ref.id,
-        workspaceId: ref.workspaceId,
-      });
-      if (live !== null) {
-        return skipped(task.id, "live_run");
-      }
-
-      const project =
-        task.projectId === null
-          ? null
-          : yield* projects.byId({
-              id: task.projectId,
-              workspaceId: ref.workspaceId,
-            });
-
-      const history = yield* runs.listByTask({
-        taskId: ref.id,
-        workspaceId: ref.workspaceId,
-      });
-
-      // Read while the plan's span is open and carried on the claim: the wide
-      // event is emitted as that span closes, and by then `Effect.currentSpan`
-      // answers nothing.
-      //
-      // These are the request's ids wherever the row that asked for this run
-      // carried a `traceparent` — the caller's span is adopted as this fiber's
-      // parent before planning starts, so the run row, the header handed to the
-      // container and the wide event all name the trace that asked, without any
-      // of them knowing where the trace came from.
-      const ids = yield* currentTraceIds;
-      const provider = yield* providerFor(ref, task);
-
-      return {
-        claim: {
-          attempt: attemptAfter(history),
-          dataRoot: config.dataRoot,
-          defaultProvider: config.defaultProvider,
-          loopInstance: loopInstanceOf(yield* CurrentActor),
-          project,
-          queueWaitMs: queueWaitOf({
-            claimedAt,
-            statusChangedAt: task.statusChangedAt,
-          }),
-          spanId: ids.spanId,
-          task,
-          traceId: ids.traceId,
-          traceparent: traceparentOf(ids),
-          trigger,
-        },
-        kind: "ready",
-        provider,
-      } satisfies Planned;
-    });
+  const resolve = (input: PlanInput) => {
+    const trigger = input.trigger ?? DEFAULT_TRIGGER;
+    return input.attached.role === "worker"
+      ? resolveTask({ task: input.attached.task, trigger })
+      : resolveThread({ thread: input.attached.thread, trigger });
+  };
 
   /**
    * Everything that has to be true before a task can be run, resolved, with no
@@ -315,9 +452,11 @@ const make = Effect.gen(function* () {
    * without anything to undo.
    */
   const plan = Effect.fn("Dispatch.plan")(function* (input: PlanInput) {
+    const subject = subjectOfAttachment(input.attached);
     yield* Effect.annotateCurrentSpan({
-      taskId: input.task.id,
-      workspaceId: input.task.workspaceId,
+      role: input.attached.role,
+      subjectId: subject.id,
+      subjectKind: subject.kind,
     });
 
     return yield* resolve(input).pipe(
@@ -326,7 +465,7 @@ const make = Effect.gen(function* () {
           new DispatchFailed({
             cause,
             detail: describeFailure(cause).errorMessage,
-            taskId: input.task.id,
+            subject,
           })
       )
     );
@@ -371,7 +510,26 @@ const make = Effect.gen(function* () {
     return ready as readonly Task[];
   });
 
-  return { plan, queue } as const;
+  /**
+   * The conversations with something to answer, oldest wait first.
+   *
+   * One query rather than a candidate loop, because the two things the loop
+   * would check per row — an unread message and no live turn — are both in the
+   * repository's own predicate. That is also what makes the chat queue durable:
+   * a restart re-reads it, where the in-memory queue this replaced was simply
+   * dropped.
+   */
+  const chatQueue = Effect.fn("Dispatch.chatQueue")(function* (
+    input: QueueInput
+  ) {
+    yield* Effect.annotateCurrentSpan({ workspaceId: input.workspaceId });
+    return yield* threads.awaitingReply({
+      limit: input.limit,
+      workspaceId: input.workspaceId,
+    });
+  });
+
+  return { chatQueue, plan, queue } as const;
 });
 
 /**

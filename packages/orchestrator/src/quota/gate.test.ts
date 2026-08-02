@@ -454,7 +454,7 @@ describe("QuotaGate isolation", () => {
 });
 
 describe("QuotaGate.announceOnce", () => {
-  test("says it once per task per drain, and again after a resume", async () => {
+  test("says it once per subject per drain, and again after a resume", async () => {
     await run(
       gateLayer({ readers: { codex: fixedReader(usage()) } }),
       Effect.gen(function* () {
@@ -463,14 +463,16 @@ describe("QuotaGate.announceOnce", () => {
           message: "usage limit reached",
           provider: "codex",
         });
-        const announce = (taskId: string) =>
-          gate.announceOnce({ provider: "codex", taskId });
-        expect(yield* announce("task-a")).toBe(true);
-        expect(yield* announce("task-a")).toBe(false);
-        expect(yield* announce("task-b")).toBe(true);
+        const announce = (subjectKey: string) =>
+          gate.announceOnce({ provider: "codex", subjectKey });
+        expect(yield* announce("task:a")).toBe(true);
+        expect(yield* announce("task:a")).toBe(false);
+        // A conversation is a subject like any other, and a drained provider
+        // defers it for the same reason it defers a card.
+        expect(yield* announce("thread:a")).toBe(true);
         yield* TestClock.adjust(BASE.cooldownMs + 1);
         yield* gate.admit({ inflight: 0, provider: "codex" });
-        expect(yield* announce("task-a")).toBe(true);
+        expect(yield* announce("task:a")).toBe(true);
       })
     );
   });

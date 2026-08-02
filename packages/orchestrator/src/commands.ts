@@ -28,15 +28,16 @@ import type {
   RunCommand,
   RunCommandKind,
   RunId,
+  RunSubject,
   RunTrigger,
   Task,
-  TaskId,
   WorkspaceId,
 } from "@workspace/domain";
 import { isRunLive, RUN_COMMAND_KINDS } from "@workspace/domain";
 import { boundedCounter } from "@workspace/telemetry";
 import { Cause, Context, DateTime, Effect, Layer } from "effect";
 import { describeFailure } from "./errors";
+import { subjectKeyOf, subjectOfRow } from "./subject";
 
 /**
  * Where the orchestrator's own run-event markers start numbering.
@@ -70,7 +71,7 @@ const SPAWNABLE_TRIGGERS: readonly RunTrigger[] = ["manual", "research"];
 
 /** What starting a run needs from the part of the loop that owns dispatch. */
 export interface DispatchRequest {
-  readonly taskId: TaskId;
+  readonly subject: RunSubject;
   /**
    * The W3C `traceparent` the command row carried, so the run this starts
    * belongs to the request that asked for it rather than to the poll that
@@ -84,7 +85,8 @@ export interface DispatchRequest {
 /** What killing a container needs. */
 export interface StopRequest {
   readonly runId: RunId;
-  readonly taskId: TaskId;
+  /** Which piece of work the fiber to interrupt is keyed by. */
+  readonly subject: RunSubject;
   readonly workspaceId: WorkspaceId;
 }
 
@@ -171,6 +173,7 @@ export const makeRunCommands = Effect.gen(function* () {
   const appendStopped = (input: {
     readonly command: RunCommand;
     readonly runId: RunId;
+    readonly subject: RunSubject;
   }) =>
     Effect.gen(function* () {
       const occurredAt = yield* DateTime.now;
@@ -186,7 +189,7 @@ export const makeRunCommands = Effect.gen(function* () {
         },
         runId: input.runId,
         seq: STOPPED_SEQ,
-        taskId: input.command.taskId,
+        subject: input.subject,
         workspaceId: input.command.workspaceId,
       });
     });
@@ -233,21 +236,42 @@ export const makeRunCommands = Effect.gen(function* () {
           workspaceId: task.workspaceId,
         });
 
-  /** The run a stop names, or the task's live one when it names none. */
-  const stopTarget = (command: RunCommand) =>
-    command.runId === null
+  /** The live run on whichever piece of work a command names. */
+  const liveFor = (input: {
+    readonly subject: RunSubject;
+    readonly workspaceId: WorkspaceId;
+  }) =>
+    input.subject.kind === "task"
       ? runs.liveForTask({
-          taskId: command.taskId,
-          workspaceId: command.workspaceId,
+          taskId: input.subject.id,
+          workspaceId: input.workspaceId,
         })
+      : runs.liveForThread({
+          threadId: input.subject.id,
+          workspaceId: input.workspaceId,
+        });
+
+  /** The run a stop names, or the live one on its subject when it names none. */
+  const stopTarget = (command: RunCommand, subject: RunSubject) =>
+    command.runId === null
+      ? liveFor({ subject, workspaceId: command.workspaceId })
       : runs.byId({ id: command.runId, workspaceId: command.workspaceId });
 
+  /**
+   * Stops a live run, whatever it is attached to.
+   *
+   * This is also chat's force send: the button files a stop naming the thread,
+   * the turn closes as `interrupted`, and the messages that arrived after it
+   * built its prompt are still unread — so the next dispatch resumes the same
+   * conversation with them appended, with no machinery of its own.
+   */
   const handleStop = Effect.fn("RunCommands.stop")(function* (
-    command: RunCommand
+    command: RunCommand,
+    subject: RunSubject
   ) {
-    const target = yield* stopTarget(command);
+    const target = yield* stopTarget(command, subject);
     if (target === null) {
-      return "there is no live run on this task to stop";
+      return `there is no live run on this ${subject.kind} to stop`;
     }
     if (!isRunLive(target)) {
       return `run ${target.id} is already ${target.status}`;
@@ -255,7 +279,10 @@ export const makeRunCommands = Effect.gen(function* () {
 
     const killed = yield* control.stop({
       runId: target.id,
-      taskId: target.taskId,
+      // The run's own columns, falling back to what the command named: a stop
+      // by run id can target a run on a different subject than the caller
+      // believed, and the fiber to interrupt is keyed by the run's.
+      subject: subjectOfRow(target) ?? subject,
       workspaceId: command.workspaceId,
     });
     if (!killed) {
@@ -264,7 +291,7 @@ export const makeRunCommands = Effect.gen(function* () {
       );
     }
 
-    yield* appendStopped({ command, runId: target.id });
+    yield* appendStopped({ command, runId: target.id, subject });
     yield* closeInterrupted({
       runId: target.id,
       workspaceId: command.workspaceId,
@@ -273,34 +300,59 @@ export const makeRunCommands = Effect.gen(function* () {
   });
 
   /**
+   * The task a command is about, or a refusal naming why there is none.
+   *
+   * Rerunning and spawning a session are moves on a board card. A conversation
+   * has none: the way to make a manager answer again is to say something else
+   * in it, which is a message rather than a command.
+   */
+  const taskOf = Effect.fnUntraced(function* (input: {
+    readonly kind: RunCommandKind;
+    readonly subject: RunSubject;
+    readonly workspaceId: WorkspaceId;
+  }) {
+    if (input.subject.kind !== "task") {
+      return { refusal: `a ${input.kind} names a task, not a thread` } as const;
+    }
+    return {
+      task: yield* tasks.byId({
+        id: input.subject.id,
+        workspaceId: input.workspaceId,
+      }),
+    } as const;
+  });
+
+  /**
    * Resumes the task's session with everything said since as its next prompt —
-   * which is the prompt builder's job, off the session's comment watermark, so
-   * all this has to do is start the run.
+   * which is the prompt builder's job, off the session's watermark, so all this
+   * has to do is start the run.
    *
    * The status check is the reason this is not a back door into the board: a
    * rerun on a task that is not in progress would put a container on a card
    * nobody moved.
    */
   const handleRerun = Effect.fn("RunCommands.rerun")(function* (
-    command: RunCommand
+    command: RunCommand,
+    subject: RunSubject
   ) {
-    const task = yield* tasks.byId({
-      id: command.taskId,
+    const found = yield* taskOf({
+      kind: "rerun",
+      subject,
       workspaceId: command.workspaceId,
     });
-    if (task.status !== "in_progress") {
-      return `a rerun needs the task in progress, and it is in ${task.status}`;
+    if (found.refusal !== undefined) {
+      return found.refusal;
     }
-    const live = yield* runs.liveForTask({
-      taskId: command.taskId,
-      workspaceId: command.workspaceId,
-    });
+    if (found.task.status !== "in_progress") {
+      return `a rerun needs the task in progress, and it is in ${found.task.status}`;
+    }
+    const live = yield* liveFor({ subject, workspaceId: command.workspaceId });
     if (live !== null) {
       return `run ${live.id} is already live on this task — stop it first`;
     }
-    yield* unpark(task);
+    yield* unpark(found.task);
     yield* control.dispatch({
-      taskId: command.taskId,
+      subject,
       traceparent: command.traceparent,
       trigger: "rerun",
       workspaceId: command.workspaceId,
@@ -316,25 +368,27 @@ export const makeRunCommands = Effect.gen(function* () {
    */
   const handleStartSession = Effect.fn("RunCommands.startSession")(function* (
     command: RunCommand,
+    subject: RunSubject,
     trigger: RunTrigger
   ) {
     if (!SPAWNABLE_TRIGGERS.includes(trigger)) {
       return `a start_session cannot claim the ${trigger} trigger`;
     }
-    const task = yield* tasks.byId({
-      id: command.taskId,
+    const found = yield* taskOf({
+      kind: "start_session",
+      subject,
       workspaceId: command.workspaceId,
     });
-    const live = yield* runs.liveForTask({
-      taskId: command.taskId,
-      workspaceId: command.workspaceId,
-    });
+    if (found.refusal !== undefined) {
+      return found.refusal;
+    }
+    const live = yield* liveFor({ subject, workspaceId: command.workspaceId });
     if (live !== null) {
       return `run ${live.id} is already live on this task — stop it first`;
     }
-    yield* unpark(task);
+    yield* unpark(found.task);
     yield* control.dispatch({
-      taskId: command.taskId,
+      subject,
       traceparent: command.traceparent,
       trigger,
       workspaceId: command.workspaceId,
@@ -343,14 +397,14 @@ export const makeRunCommands = Effect.gen(function* () {
   });
 
   /** The refusal, or null where the command was acted on. */
-  const handle = (command: RunCommand) => {
+  const handle = (command: RunCommand, subject: RunSubject) => {
     switch (command.payload.kind) {
       case "stop":
-        return handleStop(command);
+        return handleStop(command, subject);
       case "rerun":
-        return handleRerun(command);
+        return handleRerun(command, subject);
       default:
-        return handleStartSession(command, command.payload.trigger);
+        return handleStartSession(command, subject, command.payload.trigger);
     }
   };
 
@@ -360,8 +414,8 @@ export const makeRunCommands = Effect.gen(function* () {
    * value that escaped would leave an intent with no outcome on it — which is
    * exactly the silence this module exists to avoid.
    */
-  const refusalOf = (command: RunCommand) =>
-    handle(command).pipe(
+  const refusalOf = (command: RunCommand, subject: RunSubject) =>
+    handle(command, subject).pipe(
       Effect.catchCause((cause) =>
         Effect.succeed(describeFailure(Cause.squash(cause)).errorMessage)
       )
@@ -386,13 +440,20 @@ export const makeRunCommands = Effect.gen(function* () {
       return null;
     }
     const { kind } = command.payload;
+    const subject = subjectOfRow(command);
     yield* Effect.annotateCurrentSpan({
       commandId: command.id,
       kind,
-      taskId: command.taskId,
+      subjectKey: subject === null ? null : subjectKeyOf(subject),
     });
 
-    const reason = yield* refusalOf(command);
+    // A command whose two id columns disagree with its role cannot exist —
+    // the check constraint refuses it — so this is a row the database no
+    // longer describes, and refusing it says so rather than guessing.
+    const reason =
+      subject === null
+        ? "this command names neither a task nor a thread"
+        : yield* refusalOf(command, subject);
     if (reason === null) {
       yield* recordOutcome({ kind, result: "acted" });
       return {

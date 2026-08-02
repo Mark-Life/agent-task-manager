@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
   type AgentSession,
+  type ChatThread,
   CostUsd,
   newAgentSessionId,
   newRunId,
   newTaskId,
+  newThreadId,
   type Task,
+  UserId,
   WorkspaceId,
 } from "@workspace/domain";
 import { hostRunLayout } from "@workspace/harness";
@@ -19,16 +22,22 @@ import {
   isFreshSession,
   lostTerminus,
   outcomeOfTerminus,
-  providerHomeDirOf,
   type RunFailed,
   type RunFinished,
   resumeSessionIdOf,
+  roleOf,
   runIdentityOf,
+  subjectOf,
+  taskIdOf,
+  threadIdOf,
+  workspaceIdOf,
 } from "./dispatch-context";
+import { managerAttachment, workerAttachment } from "./subject";
 
 const at = DateTime.makeUnsafe("2026-08-02T10:00:00.000Z");
 const workspaceId = WorkspaceId.make("ws-1");
 const taskId = newTaskId();
+const threadId = newThreadId();
 const runId = newRunId();
 const sessionId = newAgentSessionId();
 
@@ -55,9 +64,21 @@ const task: Task = {
   workspaceId,
 };
 
+const thread: ChatThread = {
+  chatId: null,
+  createdAt: at,
+  id: threadId,
+  isCurrent: true,
+  lastMessageAt: at,
+  provider: "claude",
+  status: "active",
+  title: "what is left this week",
+  updatedAt: at,
+  userId: UserId.make("person-1"),
+  workspaceId,
+};
+
 const session: AgentSession = {
-  commentWatermarkAt: null,
-  commentWatermarkId: null,
   createdAt: at,
   endedAt: null,
   errorMessage: null,
@@ -66,12 +87,16 @@ const session: AgentSession = {
   providerSessionId: "provider-sess-1",
   status: "finished",
   taskId,
+  threadId: null,
+  unreadWatermarkAt: null,
+  unreadWatermarkId: null,
   updatedAt: at,
   workspaceId,
 };
 
 const context: DispatchContext = {
   actor: { kind: "orchestrator", loopInstance: "loop-1", runId },
+  attached: workerAttachment(task),
   attempt: 1,
   image: "atm.local/base:latest",
   layout: hostRunLayout({ dataRoot: ".data", runId }),
@@ -87,7 +112,6 @@ const context: DispatchContext = {
     session,
   },
   spanId: "span-1",
-  task,
   traceId: "trace-1",
   traceparent: "00-trace-1-span-1-01",
   trigger: "status_change",
@@ -145,15 +169,33 @@ describe("DispatchContext", () => {
       sessionId,
       spanId: "span-1",
       taskId,
+      threadId: null,
       traceId: "trace-1",
       workspaceId,
     });
   });
 
-  test("points the provider at this run's own config directory", () => {
-    expect(providerHomeDirOf(context)).toBe(
-      `.data/runs/${runId}/agent-home/claude`
-    );
+  test("reads the role and the attachment as one fact", () => {
+    expect(roleOf(context)).toBe("worker");
+    expect(taskIdOf(context)).toBe(taskId);
+    expect(threadIdOf(context)).toBeNull();
+    expect(subjectOf(context)).toEqual({ id: taskId, kind: "task" });
+    expect(workspaceIdOf(context)).toBe(workspaceId);
+  });
+
+  test("names a conversation the same way, with no task at all", () => {
+    const chat: DispatchContext = {
+      ...context,
+      attached: managerAttachment(thread),
+    };
+    expect(roleOf(chat)).toBe("manager");
+    expect(taskIdOf(chat)).toBeNull();
+    expect(threadIdOf(chat)).toBe(threadId);
+    expect(subjectOf(chat)).toEqual({ id: threadId, kind: "thread" });
+    expect(workspaceIdOf(chat)).toBe(workspaceId);
+    // The container contract has been role-agnostic since it was written: the
+    // ids it is started with simply omit the one that is not there.
+    expect(runIdentityOf(chat).taskId).toBeNull();
   });
 });
 

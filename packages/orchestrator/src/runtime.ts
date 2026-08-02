@@ -47,6 +47,7 @@
 import type { PgClient } from "@effect/sql-pg";
 import {
   AgentSessionRepo,
+  ChatThreadRepo,
   CurrentActor,
   ProjectRepo,
   TaskRepo,
@@ -56,9 +57,9 @@ import {
   Actor,
   parseTraceparent,
   type Run,
+  type RunSubject,
   type RunTrigger,
-  type Task,
-  type TaskId,
+  type SessionProvider,
   type WorkspaceId,
 } from "@workspace/domain";
 import {
@@ -98,7 +99,7 @@ import { describeFailure } from "./errors";
 import { ingestRunEvents, ingestTurnLedger } from "./ingest";
 import { LeaseStore, reconcileLostRuns } from "./lease";
 import { openRun, type RunClaim } from "./open-run";
-import { freeSlots, type PoolStats, WorkerPool } from "./pool";
+import { freeSlots, type PoolLane, type PoolStats, WorkerPool } from "./pool";
 import { QuotaGate, quotaGateLayer } from "./quota";
 import { stampRetry } from "./retry";
 import { type RunClosed, runOpened } from "./run";
@@ -109,6 +110,14 @@ import {
   type RunEventSettings,
   withRunEvent,
 } from "./run-telemetry";
+import {
+  managerAttachment,
+  type RunAttachment,
+  subjectKeyOf,
+  subjectOfAttachment,
+  subjectOfRow,
+  workerAttachment,
+} from "./subject";
 import { closeRun, type TerminalReport } from "./terminal";
 import { ingestTranscript } from "./transcript-ingest";
 import { type DispatchSignal, dispatchSignals } from "./trigger";
@@ -144,6 +153,13 @@ export interface OrchestratorInterface {
 
 /** The trigger a sweep dispatches a card under. */
 const SWEEP_TRIGGER: RunTrigger = "status_change";
+
+/**
+ * The trigger a chat turn dispatches under. `status_change` too, because a
+ * message arriving is the same kind of cause a card entering a column is: the
+ * state of the thing changed, and the loop noticed.
+ */
+const CHAT_TRIGGER: RunTrigger = "status_change";
 
 /**
  * Runs a dispatch under the span that asked for it, where the row that caused
@@ -231,6 +247,7 @@ const make = Effect.gen(function* () {
   const actor = yield* CurrentActor;
   const dispatch = yield* Dispatch;
   const gate = yield* QuotaGate;
+  const threads = yield* ChatThreadRepo;
   const leases = yield* LeaseStore;
   const pool = yield* WorkerPool;
   const projects = yield* ProjectRepo;
@@ -248,23 +265,61 @@ const make = Effect.gen(function* () {
   // served a turn and the one its row claims cannot be two different answers.
   const settings: RunEventSettings = {
     maxAttempts: config.maxAttempts,
-    maxConcurrency: config.maxConcurrency,
     sandboxKind: config.sandboxKind,
   };
 
   /**
-   * The runs this process has a fiber for, keyed by task.
+   * The runs this process has a fiber for, keyed by subject.
    *
-   * By task rather than by run because the key has to exist before the run row
-   * does — a stop arriving between the claim and the insert still names a task
-   * — and because "one run per task at a time" is the invariant the whole loop
-   * is built around. Interrupting an entry is how a container is torn down:
-   * there is no kill anywhere in this system, only an interrupted fiber whose
-   * finalizers close the run out.
+   * By subject rather than by run because the key has to exist before the run
+   * row does — a stop arriving between the claim and the insert still names a
+   * task or a thread — and because "one run per task, one turn per thread" is
+   * the invariant the whole loop is built around. Interrupting an entry is how
+   * a container is torn down: there is no kill anywhere in this system, only an
+   * interrupted fiber whose finalizers close the run out.
    */
-  const running = yield* FiberMap.make<TaskId>();
+  const running = yield* FiberMap.make<string>();
 
-  /** One task, from the plan to the row that says how it ended. */
+  /** Which lane a run holds a slot in. The one thing the role decides here. */
+  const laneOf = (attached: RunAttachment): PoolLane =>
+    attached.role === "manager" ? "chat" : "work";
+
+  /**
+   * The deadline for one turn. A person is waiting on a chat turn, and a
+   * conversation silent for ten minutes has already failed as a conversation
+   * whatever the model is still doing; a worker run has an hour.
+   */
+  const timeoutFor = (attached: RunAttachment) =>
+    attached.role === "manager" ? config.chatTimeoutMs : config.runTimeoutMs;
+
+  /** The host's shared login directory for one provider. Read once, at boot. */
+  const agentHomeDirOf = (provider: SessionProvider) =>
+    config.agentHomeDirs[provider];
+
+  /** The row a subject names, read back so a stage that needs the whole entity has it. */
+  const attach = Effect.fnUntraced(function* (input: {
+    readonly subject: RunSubject;
+    readonly workspaceId: WorkspaceId;
+  }) {
+    const { subject, workspaceId } = input;
+    return subject.kind === "task"
+      ? workerAttachment(yield* tasks.byId({ id: subject.id, workspaceId }))
+      : managerAttachment(yield* threads.byId({ id: subject.id, workspaceId }));
+  });
+
+  /**
+   * What a run row was attached to. A row whose columns name neither is one the
+   * database can no longer produce, and rebuilding a context from a guess would
+   * close somebody else's work out.
+   */
+  const subjectOfLostRun = (row: Run) => {
+    const subject = subjectOfRow(row);
+    return subject === null
+      ? Effect.die(new Error(`run ${row.id} names neither a task nor a thread`))
+      : Effect.succeed(subject);
+  };
+
+  /** One piece of work, from the plan to the row that says how it ended. */
   const runPlanned = (planned: Planned, slot: PoolStats) =>
     Effect.gen(function* () {
       const context = yield* openRun(planned.claim);
@@ -283,6 +338,7 @@ const make = Effect.gen(function* () {
           }).pipe(bestEffort("event ingest failed", null));
 
           yield* ingestTranscript({
+            agentHomeDir: agentHomeDirOf(context.provider),
             context,
             providerSessionId: terminus.providerSessionId,
           }).pipe(bestEffort("transcript ingest failed", null));
@@ -322,17 +378,22 @@ const make = Effect.gen(function* () {
         });
 
       return yield* runOpened({
+        agentHomeDir: agentHomeDirOf(context.provider),
         context,
         dataRoot: planned.claim.dataRoot,
         // Without this a contained turn starts with no Executor credentials at
         // all, and the connector layer is simply absent inside the sandbox.
         env: turnEnv,
+        gatewayUrl: config.gatewayUrl,
         onClose: collect,
         sandboxKind: config.sandboxKind,
-        timeoutMs: config.runTimeoutMs,
+        timeoutMs: timeoutFor(context.attached),
+        tokenTtlMs: config.agentTokenTtlMs,
       }).pipe(
         withRunEvent({
           dispatch: context,
+          lane: slot.lane,
+          laneCapacity: slot.capacity,
           poolDepth: slot.depth,
           progress,
           settings,
@@ -381,24 +442,29 @@ const make = Effect.gen(function* () {
    * database refused costs a slower ladder, never the close-out it is part of.
    */
   const stampLadder = (claim: RunClaim) =>
-    stampRetry({
-      attempt: claim.attempt,
-      policy: {
-        maxAttempts: config.maxAttempts,
-        parkMs: config.parkMs,
-        retryBaseMs: config.retryBaseMs,
-        retryMaxMs: config.retryMaxMs,
-      },
-      taskId: claim.task.id,
-      workspaceId: claim.task.workspaceId,
-    }).pipe(bestEffort("the retry stamp was not written", null));
+    claim.attached.role === "worker"
+      ? stampRetry({
+          attempt: claim.attempt,
+          policy: {
+            maxAttempts: config.maxAttempts,
+            parkMs: config.parkMs,
+            retryBaseMs: config.retryBaseMs,
+            retryMaxMs: config.retryMaxMs,
+          },
+          taskId: claim.attached.task.id,
+          workspaceId: claim.attached.task.workspaceId,
+        }).pipe(bestEffort("the retry stamp was not written", null))
+      : // A conversation has no column to be stuck in. The next thing the
+        // person says is what dispatches the next turn, and a backoff stamped
+        // on a thread would be a chat that ignores them for four minutes.
+        Effect.succeed(null);
 
   /** The backoff stamp for a dispatch that never became a run. */
   const stampFailedClaim = (claim: RunClaim, cause: unknown) =>
     Effect.gen(function* () {
       const described = describeFailure(cause);
       yield* Effect.logError(
-        `dispatch failed for task ${claim.task.id}: ${described.errorMessage}`
+        `dispatch failed for ${subjectKeyOf(subjectOfAttachment(claim.attached))}: ${described.errorMessage}`
       );
       yield* stampLadder(claim);
     });
@@ -406,12 +472,14 @@ const make = Effect.gen(function* () {
   /**
    * The ladder over a run that ended and left its task where it found it.
    *
-   * The close moves every ending to *review*, and that move is best-effort like
-   * the rest of the terminal path — a card a human dragged elsewhere mid-run
-   * refuses the transition, and the run then ends with its task still in the
-   * column. That is the one failure a run *reaches* which the next sweep would
-   * pick up again thirty seconds later, forever, so it is the one that earns a
-   * rung. Everything else the close managed to move is a human's problem now.
+   * The close moves every worker ending to *review*, and that move is
+   * best-effort like the rest of the terminal path — a card a human dragged
+   * elsewhere mid-run refuses the transition, and the run then ends with its
+   * task still in the column. That is the one failure a run *reaches* which the
+   * next sweep would pick up again thirty seconds later, forever, so it is the
+   * one that earns a rung. Everything else the close managed to move is a
+   * human's problem now, and a manager run reports `transitioned` because it
+   * has no card that could be left behind.
    */
   const stampStalled = (input: {
     readonly claim: RunClaim;
@@ -421,49 +489,58 @@ const make = Effect.gen(function* () {
       ? Effect.succeed(null)
       : Effect.gen(function* () {
           yield* Effect.logWarning(
-            `task ${input.claim.task.id} did not reach review after its run ended — applying the backoff ladder`
+            `${subjectKeyOf(subjectOfAttachment(input.claim.attached))} did not reach review after its run ended — applying the backoff ladder`
           );
           return yield* stampLadder(input.claim);
         });
 
   /**
-   * One task, from the column to a closed run: plan it, ask the gate, take a
-   * slot, take the lease, and only then write anything.
+   * One piece of work, from the queue to a closed run: plan it, ask the gate,
+   * take a slot in its lane, take the lease, and only then write anything.
+   *
+   * Identical for both roles and in the same order: a chat turn and a worker
+   * run are one runtime, and this is where that is true rather than claimed.
+   * The lane is the one branch, and it is a property of what the run is
+   * attached to rather than a decision made here.
    *
    * Total by construction. This is the body of a forked fiber, and a fiber that
    * fails takes its reason nowhere — so every failure is named here, and the
    * only thing that escapes is the interrupt a stop or a shutdown produces.
    */
-  const startTask = Effect.fn("Orchestrator.run")(function* (input: {
-    readonly task: Task;
+  const startWork = Effect.fn("Orchestrator.run")(function* (input: {
+    readonly attached: RunAttachment;
     readonly trigger: RunTrigger;
   }) {
+    const subject = subjectOfAttachment(input.attached);
+    const subjectKey = subjectKeyOf(subject);
+    const lane = laneOf(input.attached);
+
     const decision = yield* dispatch
-      .plan({ task: input.task, trigger: input.trigger })
+      .plan({ attached: input.attached, trigger: input.trigger })
       .pipe(
         Effect.catch((error) =>
-          Effect.as(stampFailedClaim(claimOf(input.task), error), null)
+          Effect.as(stampFailedClaim(claimOf(input.attached), error), null)
         )
       );
     if (decision === null) {
       return;
     }
     if (decision.kind === "skipped") {
-      yield* Effect.logDebug(
-        `task ${decision.taskId} skipped: ${decision.reason}`
-      );
+      yield* Effect.logDebug(`${subjectKey} skipped: ${decision.reason}`);
       return;
     }
 
-    const held = yield* pool.stats;
+    // Keyed by provider, not by lane: a drained Claude subscription should
+    // defer a chat turn for the same reason it defers a worker run.
+    const held = yield* pool.statsOf(lane);
     const admission = yield* gate.admit({
-      inflight: held.depth,
+      inflight: held.totalDepth,
       provider: decision.provider,
     });
     if (admission.defer) {
       const first = yield* gate.announceOnce({
         provider: decision.provider,
-        taskId: input.task.id,
+        subjectKey,
       });
       yield* first
         ? Effect.logWarning(
@@ -473,15 +550,13 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const admitted = yield* pool.admit((slot) =>
+    const admitted = yield* pool.admit(lane, (slot) =>
       leases
-        .withLease({ taskId: input.task.id }, () => runPlanned(decision, slot))
+        .withLease({ subject }, () => runPlanned(decision, slot))
         .pipe(
           Effect.catchTag("Orchestrator.AlreadyLive", () =>
             Effect.as(
-              Effect.logDebug(
-                `task ${input.task.id} is already claimed — skipping`
-              ),
+              Effect.logDebug(`${subjectKey} is already claimed — skipping`),
               null
             )
           ),
@@ -492,13 +567,14 @@ const make = Effect.gen(function* () {
     );
     if (admitted.kind === "at_capacity") {
       yield* Effect.logDebug(
-        `task ${input.task.id} found the pool full — waiting for the next sweep`
+        `${subjectKey} found the ${lane} lane full — waiting for the next sweep`
       );
     }
   });
 
-  /** The claim a task would have had, for the failure path that has no plan. */
-  const claimOf = (task: Task): RunClaim => ({
+  /** The claim this work would have had, for the failure path that has no plan. */
+  const claimOf = (attached: RunAttachment): RunClaim => ({
+    attached,
     attempt: 1,
     dataRoot: config.dataRoot,
     defaultProvider: config.defaultProvider,
@@ -506,7 +582,6 @@ const make = Effect.gen(function* () {
     project: null,
     queueWaitMs: 0,
     spanId: null,
-    task,
     traceId: null,
     traceparent: null,
     trigger: SWEEP_TRIGGER,
@@ -515,32 +590,37 @@ const make = Effect.gen(function* () {
   /**
    * Forks a run and remembers it, so a stop command has something to interrupt.
    *
-   * `onlyIfMissing` is the in-process half of "one run per task": the lease
+   * `onlyIfMissing` is the in-process half of "one run per subject": the lease
    * answers it durably and across processes, and this answers it for the notify
    * and the poll that arrive in the same second, without touching a disk.
    *
-   * The command's `traceparent` wins over the task's, because a rerun asked for
-   * now is a newer cause than the move that put the card in the column; a sweep
-   * names none and the task's own stamp answers.
+   * The command's `traceparent` wins over the row's own, because a rerun asked
+   * for now is a newer cause than the move that put the card in the column; a
+   * sweep names none and the task's own stamp answers.
    */
   const forkRun = (input: {
-    readonly task: Task;
+    readonly attached: RunAttachment;
     /** The request that asked, where a command carried one of its own. */
     readonly traceparent?: string | null;
     readonly trigger: RunTrigger;
-  }) =>
-    underCaller(
-      input.traceparent ?? input.task.dispatchTraceparent,
-      startTask(input)
+  }) => {
+    const subjectKey = subjectKeyOf(subjectOfAttachment(input.attached));
+    return underCaller(
+      input.traceparent ??
+        (input.attached.role === "worker"
+          ? input.attached.task.dispatchTraceparent
+          : null),
+      startWork(input)
     ).pipe(
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.void
-          : Effect.logError(`run on task ${input.task.id} died`, cause)
+          : Effect.logError(`run on ${subjectKey} died`, cause)
       ),
-      FiberMap.run(running, input.task.id, { onlyIfMissing: true }),
+      FiberMap.run(running, subjectKey, { onlyIfMissing: true }),
       Effect.asVoid
     );
+  };
 
   /**
    * The loop's own environment, captured once so the two operations that leave
@@ -556,7 +636,7 @@ const make = Effect.gen(function* () {
   const services = yield* Effect.context<
     | Dispatch
     | PgClient.PgClient
-    | Effect.Services<ReturnType<typeof startTask>>
+    | Effect.Services<ReturnType<typeof startWork>>
     | LeaseStore
     | QuotaGate
     | WorkerPool
@@ -571,23 +651,23 @@ const make = Effect.gen(function* () {
   const control: RunControlInterface = {
     dispatch: (request) =>
       Effect.gen(function* () {
-        const task = yield* tasks.byId({
-          id: request.taskId,
-          workspaceId: request.workspaceId,
-        });
         yield* forkRun({
-          task,
+          attached: yield* attach({
+            subject: request.subject,
+            workspaceId: request.workspaceId,
+          }),
           traceparent: request.traceparent,
           trigger: request.trigger,
         });
       }).pipe(Effect.provideContext(services)),
     stop: (request) =>
       Effect.gen(function* () {
-        const held = yield* FiberMap.has(running, request.taskId);
+        const key = subjectKeyOf(request.subject);
+        const held = yield* FiberMap.has(running, key);
         if (held) {
           // Interrupting is the teardown: the run's own finalizers close the
           // row, release the lease and emit its terminus row.
-          yield* FiberMap.remove(running, request.taskId);
+          yield* FiberMap.remove(running, key);
         }
         return held;
       }),
@@ -613,18 +693,53 @@ const make = Effect.gen(function* () {
       .drain({ workspaceId })
       .pipe(bestEffort("the command queue could not be drained", []));
 
-    const stats = yield* pool.stats;
-    const free = freeSlots(stats);
+    // Chat first, and it costs nothing to say so: the two lanes have their own
+    // slots, so this is an ordering between two independent reads rather than a
+    // priority. A person is waiting on one of them.
+    yield* takeChat(workspaceId);
+    yield* takeWork(workspaceId);
+  });
+
+  /** The head of the *in progress* column that fits in the work lane. */
+  const takeWork = Effect.fnUntraced(function* (workspaceId: WorkspaceId) {
+    const free = freeSlots(yield* pool.statsOf("work"));
     if (free === 0) {
       return;
     }
-
     const ready = yield* dispatch
       .queue({ limit: free, workspaceId })
       .pipe(bestEffort("the column could not be read", []));
 
     for (const task of ready) {
-      yield* forkRun({ task, trigger: SWEEP_TRIGGER });
+      yield* forkRun({
+        attached: workerAttachment(task),
+        trigger: SWEEP_TRIGGER,
+      });
+    }
+  });
+
+  /**
+   * The conversations with something unanswered that fit in the chat lane.
+   *
+   * The same shape as the column read above and deliberately so: a queue in
+   * Postgres, bounded by the lane's free slots, claimed through the same lease
+   * and the same `onlyIfMissing` guard. What used to be a `Map` in the bot — and
+   * was dropped on every restart — is this query.
+   */
+  const takeChat = Effect.fnUntraced(function* (workspaceId: WorkspaceId) {
+    const free = freeSlots(yield* pool.statsOf("chat"));
+    if (free === 0) {
+      return;
+    }
+    const waiting = yield* dispatch
+      .chatQueue({ limit: free, workspaceId })
+      .pipe(bestEffort("the chat queue could not be read", []));
+
+    for (const thread of waiting) {
+      yield* forkRun({
+        attached: managerAttachment(thread),
+        trigger: CHAT_TRIGGER,
+      });
     }
   });
 
@@ -662,28 +777,28 @@ const make = Effect.gen(function* () {
     readonly workspaceId: WorkspaceId;
   }) =>
     Effect.gen(function* () {
-      const task = yield* tasks.byId({
-        id: input.run.taskId,
-        workspaceId: input.workspaceId,
+      const { workspaceId } = input;
+      const attached = yield* attach({
+        subject: yield* subjectOfLostRun(input.run),
+        workspaceId,
       });
       const session = yield* sessions.byId({
         id: input.run.agentSessionId,
-        workspaceId: input.workspaceId,
+        workspaceId,
       });
+      const task = attached.role === "worker" ? attached.task : null;
       const project =
-        task.projectId === null
+        task === null || task.projectId === null
           ? null
-          : yield* projects.byId({
-              id: task.projectId,
-              workspaceId: input.workspaceId,
-            });
+          : yield* projects.byId({ id: task.projectId, workspaceId });
       return {
         actor: Actor.cases.orchestrator.make({
           loopInstance: loopInstance(),
           runId: input.run.id,
         }),
+        attached,
         attempt: input.run.attempt,
-        image: sandboxImageFor(task.sandboxImage),
+        image: sandboxImageFor(task?.sandboxImage ?? null),
         layout: hostRunLayout({
           dataRoot: config.dataRoot,
           runId: input.run.id,
@@ -693,7 +808,7 @@ const make = Effect.gen(function* () {
         // The wait this run really had is on the row nobody wrote; a number
         // invented at reconcile time would be averaged with the real ones.
         queueWaitMs: 0,
-        repoUrl: task.repoUrl ?? project?.repoUrl ?? null,
+        repoUrl: task?.repoUrl ?? project?.repoUrl ?? null,
         runId: input.run.id,
         session:
           session.providerSessionId === null
@@ -705,7 +820,6 @@ const make = Effect.gen(function* () {
                 session,
               },
         spanId: null,
-        task,
         traceId: input.run.traceId,
         traceparent: null,
         trigger: input.run.trigger,
@@ -761,13 +875,14 @@ const make = Effect.gen(function* () {
               finalText: "",
               providerSessionId: null,
             });
+      const lane = laneOf(context.attached);
       yield* Effect.logWarning(
-        `run ${input.run.id} on task ${context.task.id} was lost — closing it out`
+        `run ${input.run.id} on ${subjectKeyOf(subjectOfAttachment(context.attached))} was lost — closing it out`
       );
       // The same terminal path a run that died in front of the loop takes: the
       // run row is already closed by the reconcile, which this treats as the
-      // ordinary agreement it is, and the comment, the session and the move to
-      // *review* are what is actually left to do.
+      // ordinary agreement it is, and what it was attached to, the session and
+      // the move to *review* are what is actually left to do.
       yield* closeRun({
         branch: null,
         commentPosted: false,
@@ -777,6 +892,8 @@ const make = Effect.gen(function* () {
       yield* emitLostRun({
         context,
         eventsSeen: terminus.eventsSeen,
+        lane,
+        laneCapacity: pool.capacityOf(lane),
         settings,
         terminus,
       });
@@ -851,8 +968,13 @@ const make = Effect.gen(function* () {
     yield* announceSandbox;
     yield* announceTurnEnv;
     yield* Effect.logInfo(
-      `loop listening on ${config.maxConcurrency} slots, polling every ${config.pollIntervalMs}ms`
+      `loop listening on ${config.maxConcurrency} work slots and ${config.maxChatConcurrency} chat slots, polling every ${config.pollIntervalMs}ms`
     );
+    yield* config.gatewayUrl === null
+      ? Effect.logWarning(
+          "turns run with no board tools: set ORCHESTRATOR_GATEWAY_URL to the gateway as a container sees it"
+        )
+      : Effect.logInfo(`turns reach the board at ${config.gatewayUrl}`);
     yield* pump;
   });
 

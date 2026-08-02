@@ -1,28 +1,39 @@
 /**
- * Turning a claimed task into a run: which session it continues, which attempt
- * it is, and everything the later stages read off one immutable record.
+ * Turning a claim into a run: which session it continues, which attempt it is,
+ * and everything the later stages read off one immutable record.
  *
- * Nothing here touches a disk and nothing here decides *whether* to run a task
- * — the dispatcher has already decided that. What is left is the set of
- * questions a run cannot be started without an answer to, asked once so no
- * later stage asks them again and gets a different answer.
+ * Nothing here touches a disk and nothing here decides *whether* to run — the
+ * dispatcher has already decided that. What is left is the set of questions a
+ * run cannot be started without an answer to, asked once so no later stage asks
+ * them again and gets a different answer.
+ *
+ * Both roles open the same way, and that is the point rather than a
+ * coincidence: a session row, a run row, one attempt. The attachment is
+ * branched on exactly three times — which selection resolves the session, which
+ * image runs, and whether there is a repo — and each of those is one of the
+ * four things a role is allowed to change.
  */
 
 import { AgentSessionRepo, RunRepo, TaskRepo, withActor } from "@workspace/db";
 import {
   Actor,
   isResumable,
+  type NextSession,
   nextSessionOf,
   type Project,
   type RunTrigger,
   type SessionProvider,
-  type Task,
 } from "@workspace/domain";
 import { hostRunLayout } from "@workspace/harness";
 import { sandboxImageFor } from "@workspace/sandbox";
 import { Effect } from "effect";
 import type { DispatchContext, ResolvedSession } from "./dispatch-context";
 import { AlreadyLive, DispatchFailed, describeFailure } from "./errors";
+import {
+  type RunAttachment,
+  subjectOfAttachment,
+  workspaceIdOfAttachment,
+} from "./subject";
 
 /**
  * What one dispatch has decided before any row exists.
@@ -34,6 +45,8 @@ import { AlreadyLive, DispatchFailed, describeFailure } from "./errors";
  * resolves to.
  */
 export interface RunClaim {
+  /** The task or the conversation this run is for, which is also its role. */
+  readonly attached: RunAttachment;
   /** 1-based. The retry ladder and the park decision both count from here. */
   readonly attempt: number;
   readonly dataRoot: string;
@@ -41,18 +54,80 @@ export interface RunClaim {
   readonly defaultProvider: SessionProvider;
   /** Which loop is acting, as the audit log records it. */
   readonly loopInstance: string;
-  /** Null for a task that belongs to no project — ordinary, not missing. */
+  /** Null for a task with no project, and for every manager run. */
   readonly project: Project | null;
-  /** How long the task waited between entering *in progress* and this claim. */
+  /** How long the work waited between becoming ready and this claim. */
   readonly queueWaitMs: number;
   /** The claim span, captured at the top so an `onExit` emit still has it. */
   readonly spanId: string | null;
-  readonly task: Task;
   readonly traceId: string | null;
   /** W3C `traceparent` for the container, so the turns inside it join this trace. */
   readonly traceparent: string | null;
   readonly trigger: RunTrigger;
 }
+
+/**
+ * A conversation always continues its newest session, so its selection is a
+ * constant. There is no per-thread override column and deliberately so: a
+ * thread that should start over is a new thread, which is a row a person can
+ * see rather than a flag they cannot.
+ */
+const THREAD_SELECTION: NextSession = { mode: "latest" };
+
+/**
+ * Which conversation this run continues, and what the task asked for.
+ *
+ * A pinned session is read by id; `latest` asks the repository, which already
+ * excludes the failed ones. `new` asks nothing — it is the one selection that
+ * is an instruction rather than a lookup. A pin whose session has been deleted
+ * degrades to a fresh one rather than failing the dispatch: the selection is a
+ * preference, and work that cannot start is a worse answer than work that
+ * starts clean.
+ */
+const selectSession = Effect.fnUntraced(function* (input: {
+  readonly asActor: <A, E, R>(
+    effect: Effect.Effect<A, E, R>
+  ) => Effect.Effect<A, E, R>;
+  readonly attached: RunAttachment;
+}) {
+  const sessions = yield* AgentSessionRepo;
+  const { asActor, attached } = input;
+  const subject = subjectOfAttachment(attached);
+  const workspaceId = workspaceIdOfAttachment(attached);
+  const selection =
+    attached.role === "worker"
+      ? nextSessionOf(attached.task)
+      : THREAD_SELECTION;
+
+  if (selection.mode === "specific") {
+    const pinned = yield* asActor(
+      sessions.byId({ id: selection.sessionId, workspaceId })
+    ).pipe(Effect.catchTag("Db.NotFound", () => Effect.succeed(null)));
+    return { found: pinned, selection } as const;
+  }
+  if (selection.mode === "latest") {
+    return {
+      found: yield* asActor(sessions.latestResumable({ subject, workspaceId })),
+      selection,
+    } as const;
+  }
+  return { found: null, selection } as const;
+});
+
+/** The image this run's container is started from. One of the four role knobs. */
+const imageOf = (attached: RunAttachment) =>
+  sandboxImageFor(
+    attached.role === "worker" ? attached.task.sandboxImage : null
+  );
+
+/**
+ * The repo to clone, already resolved: the task's override, else the project's,
+ * else null. A manager run has no checkout at all, which is the same null.
+ */
+const repoUrlOf = (claim: RunClaim) =>
+  claim.attached.role === "worker"
+    ? (claim.attached.task.repoUrl ?? claim.project?.repoUrl ?? null)
+    : null;
 
 /**
  * Opens the session, claims the attempt, and answers with the context every
@@ -62,49 +137,38 @@ export interface RunClaim {
  * domain requires — a process that dies in between leaves a running session
  * with no runs, a state the reconcile already knows how to close, whereas a run
  * with no session is a row that cannot be resumed or attributed.
- *
- * Which session runs is the task's own property rather than an argument, so a
- * dropdown in the dashboard and a sentence to the manager end up writing one
- * value and this reads it. A pinned session that has since failed degrades to a
- * fresh one instead of refusing the dispatch: the selection is a preference,
- * and a task that cannot start is a worse answer than a task that starts clean.
  */
 const claimRun = Effect.fn("Run.open")(function* (claim: RunClaim) {
-  const sessions = yield* AgentSessionRepo;
   const runs = yield* RunRepo;
+  const sessions = yield* AgentSessionRepo;
   const tasks = yield* TaskRepo;
 
-  const { task } = claim;
-  const { id: taskId, workspaceId } = task;
+  const { attached } = claim;
+  const subject = subjectOfAttachment(attached);
+  const workspaceId = workspaceIdOfAttachment(attached);
   const asActor = withActor(
     Actor.cases.orchestrator.make({ loopInstance: claim.loopInstance })
   );
 
-  yield* Effect.annotateCurrentSpan({ attempt: claim.attempt, taskId });
+  yield* Effect.annotateCurrentSpan({
+    attempt: claim.attempt,
+    role: attached.role,
+    subjectId: subject.id,
+    subjectKind: subject.kind,
+  });
 
-  const selection = nextSessionOf(task);
-  // A pinned session is read by id; `latest` asks the repository, which already
-  // excludes the failed ones. `new` asks nothing — it is the one selection that
-  // is an instruction rather than a lookup. A pin whose session has been
-  // deleted degrades to a fresh one rather than failing the dispatch.
-  const lookup = () => {
-    if (selection.mode === "specific") {
-      return asActor(
-        sessions.byId({ id: selection.sessionId, workspaceId })
-      ).pipe(Effect.catchTag("Db.NotFound", () => Effect.succeed(null)));
-    }
-    if (selection.mode === "latest") {
-      return asActor(sessions.latestResumable({ taskId, workspaceId }));
-    }
-    return Effect.succeed(null);
-  };
-
-  const found = yield* lookup();
+  const { found, selection } = yield* selectSession({ asActor, attached });
   const resumable = found !== null && isResumable(found) ? found : null;
-  const provider = resumable?.provider ?? claim.defaultProvider;
+  // A conversation names its own provider; a task takes the loop's default
+  // unless a session it is resuming already chose one.
+  const provider =
+    resumable?.provider ??
+    (attached.role === "manager"
+      ? attached.thread.provider
+      : claim.defaultProvider);
   const session =
     resumable ??
-    (yield* asActor(sessions.open({ provider, taskId, workspaceId })));
+    (yield* asActor(sessions.open({ provider, subject, workspaceId })));
 
   // A resumed session with no provider id has a row and no conversation behind
   // it — a session opened by a run that died before the harness answered. It is
@@ -124,17 +188,23 @@ const claimRun = Effect.fn("Run.open")(function* (claim: RunClaim) {
   // would report a pin this run has already consumed. Skipped where the task
   // already sits on the default — an UPDATE that changes nothing still costs an
   // audit row, and a trail full of no-op rows is a trail nobody reads.
-  const claimed =
-    task.nextSessionId !== null || task.nextSessionNew
-      ? yield* asActor(tasks.clearNextSession({ id: taskId, workspaceId }))
-      : task;
+  const spent =
+    attached.role === "worker" &&
+    (attached.task.nextSessionId !== null || attached.task.nextSessionNew)
+      ? {
+          role: "worker" as const,
+          task: yield* asActor(
+            tasks.clearNextSession({ id: attached.task.id, workspaceId })
+          ),
+        }
+      : attached;
 
   const run = yield* asActor(
     runs.create({
       agentSessionId: session.id,
       attempt: claim.attempt,
       provider,
-      taskId,
+      subject,
       traceId: claim.traceId ?? undefined,
       trigger: claim.trigger,
       workspaceId,
@@ -148,20 +218,17 @@ const claimRun = Effect.fn("Run.open")(function* (claim: RunClaim) {
       loopInstance: claim.loopInstance,
       runId: run.id,
     }),
+    attached: spent,
     attempt: run.attempt,
-    image: sandboxImageFor(task.sandboxImage),
+    image: imageOf(attached),
     layout: hostRunLayout({ dataRoot: claim.dataRoot, runId: run.id }),
     project: claim.project,
     provider,
     queueWaitMs: claim.queueWaitMs,
-    // The task's override, else the project's, else no repo at all — which is a
-    // scratch directory and the whole difference between a coding task and a
-    // personal one at this layer.
-    repoUrl: task.repoUrl ?? claim.project?.repoUrl ?? null,
+    repoUrl: repoUrlOf(claim),
     runId: run.id,
     session: resolved,
     spanId: claim.spanId,
-    task: claimed,
     traceId: claim.traceId,
     traceparent: claim.traceparent,
     trigger: claim.trigger,
@@ -181,18 +248,16 @@ const claimRun = Effect.fn("Run.open")(function* (claim: RunClaim) {
  */
 export const openRun = (claim: RunClaim) =>
   claimRun(claim).pipe(
-    Effect.catch((error) =>
-      Effect.fail(
+    Effect.catch((error) => {
+      const subject = subjectOfAttachment(claim.attached);
+      return Effect.fail(
         error._tag === "RunRepo.AlreadyLive"
-          ? new AlreadyLive({
-              runId: error.liveRunId,
-              taskId: claim.task.id,
-            })
+          ? new AlreadyLive({ runId: error.liveRunId, subject })
           : new DispatchFailed({
               cause: error,
               detail: describeFailure(error).errorMessage,
-              taskId: claim.task.id,
+              subject,
             })
-      )
-    )
+      );
+    })
   );

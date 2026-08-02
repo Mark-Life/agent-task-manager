@@ -28,8 +28,8 @@
 import {
   RunId,
   type RunOutcome,
+  RunSubject,
   SessionProvider,
-  TaskId,
 } from "@workspace/domain";
 import {
   classify,
@@ -62,18 +62,19 @@ export type IngestSource = typeof IngestSource.Type;
  */
 export class DispatchFailed extends Schema.TaggedErrorClass<DispatchFailed>()(
   "Orchestrator.DispatchFailed",
-  { cause: Schema.Unknown, detail: Schema.String, taskId: TaskId }
+  { cause: Schema.Unknown, detail: Schema.String, subject: RunSubject }
 ) {}
 
 /**
  * The lease this loop held is no longer ours — expired under a slow heartbeat,
  * or reclaimed by a loop that thought we had crashed. The run is abandoned
- * rather than raced: two containers on one task means two writers on one
- * artifacts directory, which is the failure the lease exists to prevent.
+ * rather than raced: two containers on one subject means two writers on one
+ * artifacts directory or two answers in one conversation, which is the failure
+ * the lease exists to prevent.
  */
 export class LeaseLost extends Schema.TaggedErrorClass<LeaseLost>()(
   "Orchestrator.LeaseLost",
-  { detail: Schema.String, runId: RunId, taskId: TaskId }
+  { detail: Schema.String, runId: RunId, subject: RunSubject }
 ) {}
 
 /**
@@ -88,13 +89,13 @@ export class LeaseReclaimFailed extends Schema.TaggedErrorClass<LeaseReclaimFail
 ) {}
 
 /**
- * The task already has a container working on it. A signal, not a fault — the
- * dispatcher skips and moves on, which is what makes "one run per task at a
- * time" hold when a notify and a poll arrive at once.
+ * The subject already has a container working on it. A signal, not a fault —
+ * the dispatcher skips and moves on, which is what makes "one run per task and
+ * one turn per thread" hold when a notify and a poll arrive at once.
  */
 export class AlreadyLive extends Schema.TaggedErrorClass<AlreadyLive>()(
   "Orchestrator.AlreadyLive",
-  { runId: Schema.NullOr(RunId), taskId: TaskId }
+  { runId: Schema.NullOr(RunId), subject: RunSubject }
 ) {}
 
 /**
@@ -105,7 +106,7 @@ export class AlreadyLive extends Schema.TaggedErrorClass<AlreadyLive>()(
  */
 export class PromptBuildFailed extends Schema.TaggedErrorClass<PromptBuildFailed>()(
   "Orchestrator.PromptBuildFailed",
-  { cause: Schema.Unknown, taskId: TaskId }
+  { cause: Schema.Unknown, subject: RunSubject }
 ) {}
 
 /**
@@ -322,7 +323,7 @@ export const classifyFailure = (failure: unknown): RunErrorClass => {
 const messageOf = (error: OrchestratorError): string => {
   switch (error._tag) {
     case "Orchestrator.AlreadyLive":
-      return "a run is already live on this task";
+      return "a run is already live on this subject";
     case "Orchestrator.DispatchFailed":
       return error.detail;
     case "Orchestrator.IngestFailed":

@@ -33,25 +33,48 @@
  * Which session it is and which attempt is `./open-run`.
  */
 
+import {
+  CONTAINER_AGENT_MCP_PATH,
+  claudeManagerMcpServers,
+} from "@workspace/agent-tools";
 import { RunEventRepo, RunRepo, withActor } from "@workspace/db";
 import {
   type AgentEvent,
   AgentEventRecord,
-  agentHomeRelativePath,
   COMMENT_MARKER_ENV_VAR,
   commentMarkerPathOf,
+  entrypointBundlePathOf,
+  mcpServersPathOf,
   ProviderRegistry,
-  scopedAgentHome,
   TimedOut,
 } from "@workspace/harness";
+import type { RunPlacement } from "@workspace/prompts";
 import {
   identityEnv,
+  type Mount,
+  managerMountsFor,
+  mountsFor,
   repoSourceFor,
   type SandboxKind,
   Workspace,
 } from "@workspace/sandbox";
-import { Cause, DateTime, Effect, Ref, Schema, Stream } from "effect";
+import { makeTokenSigner, mintAgentToken } from "@workspace/token";
+import {
+  Cause,
+  DateTime,
+  Effect,
+  type Redacted,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import { FileSystem } from "effect/FileSystem";
+import {
+  bindingOf,
+  copyAgentBundle,
+  scopedMcpServersFile,
+} from "./agent-token";
+import { materializeThreadRun, threadPlacementOf } from "./chat-turn";
 import { type ContainerRecord, containerTurn } from "./container-turn";
 import {
   type DispatchContext,
@@ -61,6 +84,7 @@ import {
   type RunTerminus,
   resumeSessionIdOf,
   runIdentityOf,
+  subjectOf,
   taskIdOf,
   workspaceIdOf,
 } from "./dispatch-context";
@@ -84,8 +108,33 @@ import {
 /** Encoder for one line of the run's event file, built once rather than per event. */
 const encodeRecord = Schema.encodeEffect(AgentEventRecord);
 
+/**
+ * The directories one turn runs over, whichever role it is.
+ *
+ * Assembled by {@link directoriesFor} and handed on: what a run may reach is a
+ * property of what it is attached to, and deciding it once here is what lets
+ * `./container-turn` stay a function of a mount set rather than of a role.
+ */
+export interface RunDirectories {
+  /** The branch a checkout is on, or null for a run with no repo. */
+  readonly branch: string | null;
+  /** The exact mount set, entrypoint included. */
+  readonly mounts: readonly Mount[];
+  /** The paths as the run itself sees them, which is what the prompt names. */
+  readonly placement: RunPlacement;
+  /** Where the agent works, on the host. */
+  readonly workspaceDir: string;
+}
+
 /** What running one turn needs beyond the context it runs under. */
 export interface ExecuteRunInput {
+  /**
+   * The host's system-owned login directory for this run's provider, already
+   * resolved. Shared by every run on the box, mounted read-write, never copied
+   * — so a token the vendor refreshes inside the container is refreshed for
+   * good rather than thrown away with it.
+   */
+  readonly agentHomeDir: string;
   readonly context: DispatchContext;
   /**
    * Where on-disk state lives. Passed alongside the context rather than read
@@ -99,6 +148,13 @@ export interface ExecuteRunInput {
    * the two that matter. Never the host's OTLP token.
    */
   readonly env: Readonly<Record<string, string>>;
+  /**
+   * The gateway as the **container** sees it, which is rarely `localhost`, or
+   * null on an install that configured none. Null is what makes a turn run with
+   * no board tools rather than fail: both halves or neither, and the banner
+   * says which at boot.
+   */
+  readonly gatewayUrl: string | null;
   readonly progress: Ref.Ref<TurnProgress>;
   /**
    * Which implementation serves this turn, already resolved by the caller from
@@ -118,28 +174,93 @@ export interface ExecuteRunInput {
    * hangs exactly as quietly as a wedged model does.
    */
   readonly timeoutMs: number;
+  /** How long this turn's board credential lives. */
+  readonly tokenTtlMs: number;
 }
+
+/**
+ * The directories and mounts this run is given, decided from what it is
+ * attached to.
+ *
+ * A task means a checkout, its own artifacts folder and its project's; a
+ * conversation means a scratch directory and the global folder to read. Both
+ * end up as the same four fields, so nothing downstream asks which it got.
+ */
+const directoriesFor = Effect.fnUntraced(function* (input: {
+  readonly agentHomeDir: string;
+  readonly context: DispatchContext;
+  readonly dataRoot: string;
+  readonly sandboxKind: SandboxKind;
+}) {
+  const { context } = input;
+  const extras = { entrypointPath: entrypointBundlePathOf(input.dataRoot) };
+
+  if (context.attached.role === "manager") {
+    const dirs = yield* materializeThreadRun({
+      agentHomeDir: input.agentHomeDir,
+      dataRoot: input.dataRoot,
+      provider: context.provider,
+      runId: context.runId,
+    });
+    return {
+      branch: null,
+      mounts: managerMountsFor(
+        { agentHomeDir: input.agentHomeDir, ...dirs },
+        extras
+      ),
+      placement: threadPlacementOf({ dirs, kind: input.sandboxKind }),
+      workspaceDir: dirs.workspaceDir,
+    } satisfies RunDirectories;
+  }
+
+  const taskId = context.attached.task.id;
+  const workspaces = yield* Workspace;
+  const made = yield* workspaces.materialize({
+    agentHomeDir: input.agentHomeDir,
+    dataRoot: input.dataRoot,
+    identity: runIdentityOf(context),
+    projectId: projectIdOf(context),
+    provider: context.provider,
+    repo: repoSourceFor({
+      dataRoot: input.dataRoot,
+      defaultBranch: context.project?.repoDefaultBranch ?? null,
+      repoUrl: context.repoUrl,
+      taskId,
+    }),
+    taskId,
+  });
+  return {
+    branch: made.branch,
+    mounts: mountsFor(made, extras),
+    placement: placementOf({ kind: input.sandboxKind, workspace: made }),
+    workspaceDir: made.workspaceDir,
+  } satisfies RunDirectories;
+});
 
 /**
  * Materializes the run's directories, runs the turn, and streams what it says
  * into the timeline.
  *
- * **The scope is the caller's, not this function's.** The checkout and the
- * seeded agent home are acquired into whichever scope this is run in, and
- * released when *that* closes — which is what lets {@link runOpened} copy the
- * transcript out of the agent home before the credentials in it are removed.
+ * **The scope is the caller's, not this function's.** The checkout — or, for a
+ * conversation, the scratch directory — is acquired into whichever scope this
+ * is run in and released when *that* closes, which is what lets
+ * {@link runOpened} read the run's directory back before anything is removed.
  * Everything acquired here is released on every path including an interrupt,
  * because that is what a scope does; the only thing this file decides is how
  * far the scope reaches. What survives it is what should — the run directory
  * with its event file and the transcript copied into it, and the artifacts
  * folder, which is the point.
  *
+ * The agent home is not on that list and deliberately so: it is the host's own
+ * system-owned login for the provider, shared by every run and mounted rather
+ * than copied, so there is nothing per-run to acquire and nothing to tear down.
+ *
  * A failure of the turn itself is an answer rather than an error: it becomes a
- * failed terminus, because a crashed run is still a run that has to close out
- * and land its task in *review*. The deadline is the same kind of answer — see
+ * failed terminus, because a crashed run is still a run that has to close out.
+ * The deadline is the same kind of answer — see
  * {@link ExecuteRunInput.timeoutMs}. Only the stages before the turn — the
- * workspace, the credentials, the prompt — fail this effect, and the caller's
- * `onExit` closes the run out from those too.
+ * directories and the prompt — fail this effect, and the caller's `onExit`
+ * closes the run out from those too.
  */
 export const executeRun = (input: ExecuteRunInput) =>
   Effect.gen(function* () {
@@ -149,44 +270,31 @@ export const executeRun = (input: ExecuteRunInput) =>
     const registry = yield* ProviderRegistry;
     const runEvents = yield* RunEventRepo;
     const runs = yield* RunRepo;
-    const workspaces = yield* Workspace;
 
     const asActor = withActor(context.actor);
     const workspaceId = workspaceIdOf(context);
-    const taskId = taskIdOf(context);
+    const subject = subjectOf(context);
     const identity = runIdentityOf(context);
     const eventLogPath = eventLogPathOf(context);
 
-    const made = yield* workspaces.materialize({
+    const made = yield* directoriesFor({
+      agentHomeDir: input.agentHomeDir,
+      context,
       dataRoot: input.dataRoot,
-      identity,
-      projectId: projectIdOf(context),
-      repo: repoSourceFor({
-        dataRoot: input.dataRoot,
-        defaultBranch: context.project?.repoDefaultBranch ?? null,
-        repoUrl: context.repoUrl,
-        taskId,
-      }),
-      taskId,
+      sandboxKind: input.sandboxKind,
     });
     yield* Ref.update(progress, (current) => ({
       ...current,
       branch: made.branch,
     }));
 
-    const home = yield* scopedAgentHome({
-      layout: context.layout,
-      provider: context.provider,
-      sourceDir: null,
-    });
-
     // The prompt is built after the directories exist, because it names them:
     // where to write an artifact worth keeping, and which branch the checkout
-    // is on. It also advances the session's watermark, so the comments that
-    // went into it are not delivered twice.
+    // is on. It also advances the session's watermark, so the rows that went
+    // into it are not delivered twice.
     const prompt = yield* buildRunPrompt({
       context,
-      placement: placementOf({ kind: input.sandboxKind, workspace: made }),
+      placement: made.placement,
     });
     yield* Ref.update(progress, (current) => ({
       ...current,
@@ -244,7 +352,7 @@ export const executeRun = (input: ExecuteRunInput) =>
             payload: toRunEventPayload(event, mapping),
             runId: context.runId,
             seq,
-            taskId,
+            subject,
             workspaceId,
           })
           .pipe(
@@ -264,7 +372,6 @@ export const executeRun = (input: ExecuteRunInput) =>
         if (event.kind === "session_init") {
           yield* asActor(
             runs.start({
-              agentHomePath: agentHomeRelativePath(context.runId),
               id: context.runId,
               model: event.model ?? undefined,
               sandboxImage: context.image,
@@ -303,41 +410,42 @@ export const executeRun = (input: ExecuteRunInput) =>
       });
 
     /** The turn in this process, against host paths. The escape hatch. */
-    const hostTurn = Effect.gen(function* () {
-      const events = registry.get(context.provider).run({
-        agentHomeDir: home.agentHomeDir,
-        effort: null,
-        env: {
-          ...identityEnv(identity),
-          ...input.env,
-          // The hook runs outside a container here, so it is told where the
-          // marker really is rather than assuming the container's own path.
-          [COMMENT_MARKER_ENV_VAR]: commentMarkerPathOf(context.layout),
-          ...home.env,
-        },
-        model: null,
-        prompt: prompt.text,
-        resumeSessionId: resumeSessionIdOf(context),
-        runId: context.runId,
-        signal: null,
-        taskId,
-        workspaceDir: made.workspaceDir,
+    const hostTurn = (servers: Readonly<Record<string, unknown>> | null) =>
+      Effect.gen(function* () {
+        const said = registry.get(context.provider).run({
+          agentHomeDir: input.agentHomeDir,
+          effort: null,
+          env: {
+            ...identityEnv(identity),
+            ...input.env,
+            // The hook runs outside a container here, so it is told where the
+            // marker really is rather than assuming the container's own path.
+            [COMMENT_MARKER_ENV_VAR]: commentMarkerPathOf(context.layout),
+          },
+          mcpServers: servers,
+          model: null,
+          prompt: prompt.text,
+          resumeSessionId: resumeSessionIdOf(context),
+          runId: context.runId,
+          signal: null,
+          taskId: taskIdOf(context),
+          workspaceDir: made.workspaceDir,
+        });
+        yield* Stream.runForEach(said, fromProvider);
+        const state = yield* Ref.get(progress);
+        return (
+          state.terminus ??
+          // No terminus and no failure: the process went away mid-stream. Its
+          // own ending, because the count of how far it got is the only thing
+          // there is to say about it.
+          lostTerminus({
+            eventsSeen: state.eventsSeen,
+            exitCode: null,
+            finalText: state.finalText,
+            providerSessionId: state.providerSessionId,
+          })
+        );
       });
-      yield* Stream.runForEach(events, fromProvider);
-      const state = yield* Ref.get(progress);
-      return (
-        state.terminus ??
-        // No terminus and no failure: the process went away mid-stream. Its
-        // own ending, because the count of how far it got is the only thing
-        // there is to say about it.
-        lostTerminus({
-          eventsSeen: state.eventsSeen,
-          exitCode: null,
-          finalText: state.finalText,
-          providerSessionId: state.providerSessionId,
-        })
-      );
-    });
 
     /**
      * The typed failure of either path, as the ending it is. A provider that
@@ -349,19 +457,63 @@ export const executeRun = (input: ExecuteRunInput) =>
     const asEnding = (error: unknown) =>
       Effect.map(Ref.get(progress), (state) => terminusOfFailure(error, state));
 
+    /**
+     * The board tools this run's token reaches, as the provider is handed them.
+     *
+     * Both halves or neither: an install that named no gateway runs every turn
+     * without board tools, which is a smaller agent and not a broken one, and
+     * the banner says so once at boot rather than every run discovering it. An
+     * install that did name one must produce a bundle and a token, because an
+     * agent that cannot reach the board answers anyway — and what it answers is
+     * a confident account of tasks it did not file.
+     *
+     * The file is written into the run's own scope, so the credential is
+     * removed on every path the run can end on. The map it is built from is the
+     * same value the local path is handed directly, so the two sandbox modes
+     * cannot be given different tools.
+     */
+    const mcpServers = yield* Effect.gen(function* () {
+      const { gatewayUrl } = input;
+      if (gatewayUrl === null) {
+        return null;
+      }
+      const bundlePath = yield* copyAgentBundle({
+        dataRoot: input.dataRoot,
+        runDir: context.layout.runDir,
+      });
+      const signer = yield* makeTokenSigner;
+      const token: Redacted.Redacted<string> = yield* mintAgentToken({
+        binding: bindingOf(context),
+        signer,
+        ttlMs: input.tokenTtlMs,
+        workspaceId,
+      });
+      yield* scopedMcpServersFile({
+        gatewayUrl,
+        path: mcpServersPathOf(context.layout),
+        token,
+      });
+      return claudeManagerMcpServers({
+        // The container reads the bundle at its own mount point; a host process
+        // reads the copy where it actually is.
+        bundlePath: contained ? CONTAINER_AGENT_MCP_PATH : bundlePath,
+        gatewayUrl,
+        token,
+      });
+    });
+
     if (contained) {
       return yield* containerTurn({
         context,
-        dataRoot: input.dataRoot,
         env: input.env,
+        mounts: made.mounts,
         onRecord: fromContainer,
         progress,
         prompt: prompt.text,
         timeoutMs: input.timeoutMs,
-        workspace: made,
       }).pipe(Effect.catch(asEnding));
     }
-    return yield* hostTurn.pipe(Effect.catch(asEnding));
+    return yield* hostTurn(mcpServers).pipe(Effect.catch(asEnding));
   }).pipe(
     // The cap over everything above, and an ending rather than an error: a
     // turn that outlived its deadline is one more way a run finishes, so it
@@ -385,13 +537,14 @@ export const executeRun = (input: ExecuteRunInput) =>
     Effect.withSpan("Run.execute")
   );
 
-/** What running one claimed task needs. */
-export interface PerformRunInput {
+/** What running one claim needs. */
+export interface PerformRunInput
+  extends Pick<
+    ExecuteRunInput,
+    "agentHomeDir" | "gatewayUrl" | "sandboxKind" | "timeoutMs" | "tokenTtlMs"
+  > {
   readonly claim: RunClaim;
   readonly env?: Readonly<Record<string, string>>;
-  /** Which implementation serves the turn. See {@link ExecuteRunInput.sandboxKind}. */
-  readonly sandboxKind: SandboxKind;
-  readonly timeoutMs: number;
 }
 
 /** What one run leaves behind: the context it ran under and how it was closed. */
@@ -419,7 +572,11 @@ export interface RunClosed {
  * so the loop can read the run's directory back through its own repositories
  * without this file naming them.
  */
-export interface RunOpenedInput<R = never> {
+export interface RunOpenedInput<R = never>
+  extends Pick<
+    ExecuteRunInput,
+    "agentHomeDir" | "gatewayUrl" | "sandboxKind" | "timeoutMs" | "tokenTtlMs"
+  > {
   readonly context: DispatchContext;
   readonly dataRoot: string;
   readonly env?: Readonly<Record<string, string>>;
@@ -431,18 +588,12 @@ export interface RunOpenedInput<R = never> {
    * the path where there is no value.
    *
    * It runs inside the run's own scope, so everything the turn was given is
-   * still on disk — the checkout, and the agent home the provider wrote its
-   * transcript into. Both are removed as this returns, and the transcript has
-   * already been copied into the run directory by then.
+   * still on disk — the checkout above all, which is removed as this returns.
    *
    * Total by contract. A hook that could fail would be a run that closed and
    * then failed to close.
    */
   readonly onClose?: (closed: RunClosed) => Effect.Effect<void, never, R>;
-  /** Which implementation serves the turn. See {@link ExecuteRunInput.sandboxKind}. */
-  readonly sandboxKind: SandboxKind;
-  /** The turn's deadline. Required, because a run with no cap holds its slot forever. */
-  readonly timeoutMs: number;
 }
 
 /**
@@ -468,20 +619,20 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
     /** Closes the run from whatever the turn ended as, including a cause. */
     const closeFrom = (ending: RunTerminus) =>
       Effect.gen(function* () {
-        // First, because everything after it can take time and the file it
-        // rescues is deleted the moment this scope closes: the provider writes
-        // its transcript inside the run's agent home, and the home goes with
-        // its copy of a live credential. One file is copied into the run
-        // directory, which survives; the credentials stay behind and are torn
-        // down as they always were. A failed copy is a warning rather than an
-        // ending — the run is over, and losing its transcript must not turn
-        // that into a run that failed to close.
+        // First, because everything after it can take time and because the
+        // durable copy is what makes a re-ingest weeks later read the same
+        // bytes: the provider writes its transcript into the shared agent home
+        // alongside every other run's, and one file — the one this run's
+        // session named — is copied into the run directory. A failed copy is a
+        // warning rather than an ending: the run is over, and losing its
+        // transcript must not turn that into a run that failed to close.
         yield* preserveTranscript({
+          agentHomeDir: input.agentHomeDir,
           context,
           providerSessionId: ending.providerSessionId,
         }).pipe(
           Effect.tapError((cause) =>
-            Effect.logWarning("transcript not copied out of the agent home", {
+            Effect.logWarning("transcript not copied into the run directory", {
               cause,
             })
           ),
@@ -511,25 +662,21 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
       });
 
     // The scope is opened here and not inside the turn, and the ordering that
-    // buys is the whole reason: turn, then close, then release. The close
-    // copies the transcript the provider wrote *inside* the run's agent home
-    // into the run directory, and then reads the run's directory back; the
-    // release is what deletes that agent home. Released first, there is
-    // nothing left to copy and every run's conversation is lost.
-    //
-    // It is this way round rather than by keeping the agent home alive longer:
-    // the directory holds a copy of a live subscription credential, which is
-    // why it is torn down at all, so the release still runs on every path an
-    // `onExit` runs on — a value, a failure, a defect, an interrupt from a stop
-    // command — and no run leaves credentials on disk behind it.
+    // buys is the whole reason: turn, then close, then release. The close reads
+    // the run's directory back, and the release is what removes the checkout it
+    // is reading beside. Released first, an artifact rescan would walk a
+    // directory that is already gone.
     const terminus = yield* Effect.scoped(
       executeRun({
+        agentHomeDir: input.agentHomeDir,
         context,
         dataRoot: input.dataRoot,
         env: input.env ?? {},
+        gatewayUrl: input.gatewayUrl,
         progress,
         sandboxKind: input.sandboxKind,
         timeoutMs: input.timeoutMs,
+        tokenTtlMs: input.tokenTtlMs,
       }).pipe(
         Effect.onExit((exit) =>
           exit._tag === "Success"
@@ -563,10 +710,13 @@ export const performRun = (input: PerformRunInput) =>
   Effect.gen(function* () {
     const context = yield* openRun(input.claim);
     return yield* runOpened({
+      agentHomeDir: input.agentHomeDir,
       context,
       dataRoot: input.claim.dataRoot,
       env: input.env,
+      gatewayUrl: input.gatewayUrl,
       sandboxKind: input.sandboxKind,
       timeoutMs: input.timeoutMs,
+      tokenTtlMs: input.tokenTtlMs,
     });
   }).pipe(Effect.withSpan("Run.perform"));

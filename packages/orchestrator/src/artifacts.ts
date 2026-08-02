@@ -108,14 +108,22 @@ export const rescanTaskArtifacts = Effect.fn("Ingest.artifacts")(function* (
  * The same rescan, addressed by the run that just finished. One reader of the
  * dispatch context, so the loop and any later caller cannot disagree about
  * which task's folder a run's teardown rebuilds.
+ *
+ * A run attached to a conversation rescans nothing and says so with a null: it
+ * has no task folder, because the board tools are how it changes anything that
+ * outlives it.
  */
 export const rescanRunArtifacts = (input: {
   readonly context: DispatchContext;
   readonly dataRoot: string;
-}) =>
-  rescanTaskArtifacts({
-    dataRoot: input.dataRoot,
-    runId: input.context.runId,
-    taskId: taskIdOf(input.context),
-    workspaceId: workspaceIdOf(input.context),
-  });
+}) => {
+  const taskId = taskIdOf(input.context);
+  return taskId === null
+    ? Effect.succeed(null)
+    : rescanTaskArtifacts({
+        dataRoot: input.dataRoot,
+        runId: input.context.runId,
+        taskId,
+        workspaceId: workspaceIdOf(input.context),
+      });
+};

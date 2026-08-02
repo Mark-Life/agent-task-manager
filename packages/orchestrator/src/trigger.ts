@@ -1,6 +1,6 @@
 /**
- * When the loop looks for work. Three sources, one stream, and no one of them
- * is allowed to be the only one.
+ * When the loop looks for work. Four sources, one stream, and no one of them is
+ * allowed to be the only one.
  *
  * `LISTEN/NOTIFY` is what makes moving a card to *in progress* start a run at
  * once: the first migration puts an `AFTER INSERT OR UPDATE` trigger on `task`
@@ -23,6 +23,12 @@
  * a written command is what makes Stop an immediate thing rather than something
  * that happens by the next poll — and the poll still covers it, for the same
  * reason it covers the other channel.
+ *
+ * The fourth is a message arriving in a conversation, on a channel of its own
+ * from the chat-dispatch migration. It is the same shape as a card entering the
+ * column, and deliberately so: the bot writes the row and stops, and this is
+ * what turns that row into a turn. A person waiting half a minute for a poll to
+ * notice them would be the one place the poll's latency is visible.
  *
  * Nothing here decides anything. A signal is a nudge to sweep, and the sweep
  * reads the column through `TaskRepo.byStatus` whichever source woke it — the
@@ -58,14 +64,24 @@ export const DISPATCH_CHANNEL = "atm_task_dispatch";
 export const COMMAND_CHANNEL = "atm_run_command";
 
 /**
+ * The channel `notify_chat_dispatch` publishes on, from the chat-dispatch
+ * migration, on every `chat_message` insert where the role is `user`.
+ *
+ * Here for the same reason as the other two: the trigger is raw SQL in a custom
+ * migration and `@workspace/db` exports repositories rather than channel names.
+ */
+export const CHAT_CHANNEL = "atm_chat_dispatch";
+
+/**
  * What the trigger puts on the wire. Ids and the rank, no task body — the
  * payload limit is small enough that carrying anything real would fail at
  * exactly the moment a task got interesting, so a listener reads the row.
  */
 export const DispatchNotice = Schema.Struct({
-  /** The task's position in its column at the moment it entered. */
+  /** The task's position in its column at the moment it entered. Zero for a chat notice. */
   rank: Schema.Number,
-  taskId: TaskId,
+  /** Null on a chat notice, which names a workspace and nothing else. */
+  taskId: Schema.NullOr(TaskId),
   workspaceId: WorkspaceId,
 });
 
@@ -73,7 +89,12 @@ export interface DispatchNotice
   extends Schema.Schema.Type<typeof DispatchNotice> {}
 
 /** Where a wake-up came from. On the signal so a sweep can be attributed. */
-export const DISPATCH_SIGNAL_SOURCES = ["command", "notify", "poll"] as const;
+export const DISPATCH_SIGNAL_SOURCES = [
+  "chat",
+  "command",
+  "notify",
+  "poll",
+] as const;
 
 /** Which of the two sources produced a signal. */
 export const DispatchSignalSource = Schema.Literals(DISPATCH_SIGNAL_SOURCES);
@@ -187,6 +208,55 @@ export const commandSignals = listening(COMMAND_CHANNEL, () =>
 );
 
 /**
+ * What the chat trigger puts on the wire. The message and its thread are on it
+ * for a human reading `pg_notify` output; the sweep reads only the workspace,
+ * because the chat queue is a query over every thread with something
+ * unanswered, in the order they have been waiting.
+ */
+const ChatNotice = Schema.Struct({
+  messageId: Schema.String,
+  threadId: Schema.String,
+  workspaceId: WorkspaceId,
+});
+
+const decodeChatNotice = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ChatNotice)
+);
+
+/** A wake-up with nothing readable attached, which is still a wake-up. */
+const BARE_CHAT: DispatchSignal = { notice: null, source: "chat" };
+
+/** A chat signal says only that somebody said something in this workspace. */
+const chatSignalOf = (payload: string) =>
+  decodeChatNotice(payload).pipe(
+    Effect.map(
+      (notice): DispatchSignal => ({
+        notice: { rank: 0, taskId: null, workspaceId: notice.workspaceId },
+        source: "chat",
+      })
+    ),
+    Effect.catch((error) =>
+      Effect.as(
+        Effect.logWarning("chat notice did not decode", {
+          channel: CHAT_CHANNEL,
+          reason: String(error),
+        }),
+        BARE_CHAT
+      )
+    )
+  );
+
+/**
+ * Somebody said something in a conversation.
+ *
+ * The payload names the workspace, which is all the sweep reads off any notice:
+ * the chat queue is a query over the threads with something unanswered, in the
+ * order they have been waiting, and a notice naming one thread would be a
+ * second ordering that eventually disagrees with it.
+ */
+export const chatSignals = listening(CHAT_CHANNEL, chatSignalOf);
+
+/**
  * The safety net. `Stream.tick` emits once immediately and then on the
  * interval, so the first tick doubles as the startup sweep — a loop that
  * restarts after a crash picks up whatever landed in the column while it was
@@ -207,6 +277,11 @@ export const pollSignals = (pollIntervalMs: number) =>
  */
 export const dispatchSignals = (options: { readonly pollIntervalMs: number }) =>
   Stream.mergeAll(
-    [pollSignals(options.pollIntervalMs), notifySignals, commandSignals],
+    [
+      pollSignals(options.pollIntervalMs),
+      notifySignals,
+      commandSignals,
+      chatSignals,
+    ],
     { concurrency: "unbounded" }
   );

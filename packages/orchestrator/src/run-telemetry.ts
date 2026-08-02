@@ -39,6 +39,8 @@
 
 import {
   costUsdToNumber,
+  RUN_ROLES,
+  RunRole,
   RunTrigger,
   SESSION_PROVIDERS,
   SessionProvider,
@@ -76,8 +78,10 @@ import {
   projectIdOf,
   type RunTerminus,
   resumeSessionIdOf,
+  roleOf,
 } from "./dispatch-context";
 import { describeFailure, type RunErrorClass } from "./errors";
+import { POOL_LANES, type PoolLane } from "./pool";
 
 /** The filter key every query over this system starts from. */
 export const RUN_EVENT_MARKER = "atm.run";
@@ -186,12 +190,15 @@ export const RunEvent = defineEvent(RUN_EVENT_MARKER, {
   image: SanitizedText,
   /** Which sandbox implementation served the run, so a host run cannot be mistaken for a contained one. */
   kind: SandboxKind,
+  /** Which lane's slot this run held: board work, or a conversation. */
+  lane: Schema.Literals(POOL_LANES),
   /** Claim to terminus, measured by the loop across every exit path. Null on a start row, which has not ended. */
   leaseDurationMs: Schema.NullOr(Schema.Number),
   maxAttempts: Schema.Natural,
-  /** The cap in force, without which {@link poolDepth} does not say whether the pool was full. */
+  /** The lane's cap, without which {@link poolDepth} does not say whether it was full. */
   maxConcurrency: Schema.Natural,
   outcome: outcomeField(RUN_EVENT_EXTRA_OUTCOMES),
+  /** Slots held in this run's lane at the instant it took one. */
   poolDepth: Schema.Natural,
   projectId: Schema.NullOr(SanitizedText),
   /** The prompt is measured, never carried. Null on a row written before it was built. */
@@ -202,11 +209,19 @@ export const RunEvent = defineEvent(RUN_EVENT_MARKER, {
   /** `owner/name`, parsed out of the URL — which may carry a token and never reaches a row. */
   repo: Schema.NullOr(SanitizedText),
   retryInMs: Schema.NullOr(Schema.Number),
+  /** Which runtime this was: a worker on a card, or the manager in a thread. */
+  role: RunRole,
   sessionMode: Schema.Literals(SESSION_MODES),
   /** What the task asked for, against what it got: a `latest` that resolves to `fresh` is a task with no sessions. */
   sessionSelected: Schema.Literals(SESSION_SELECTIONS),
-  /** The column the task was claimed from — `in_progress` for work, `backlog` for a research run. */
-  taskStatus: TaskStatus,
+  /** The column the task was claimed from, or null on a run with no card. */
+  taskStatus: Schema.NullOr(TaskStatus),
+  /**
+   * The conversation a manager run answered in, null on a worker run. Declared
+   * here rather than in the telemetry base beside `taskId`, because a thread is
+   * this system's idea and the base is the shape every unit of work shares.
+   */
+  threadId: Schema.NullOr(SanitizedText),
   trigger: RunTrigger,
 });
 
@@ -216,14 +231,18 @@ export type RunEventInput = Parameters<typeof RunEvent.encode>[0];
 /** The caps a row reports, off the loop's own config so a row cannot claim one the dispatcher is not honouring. */
 export type RunEventSettings = Pick<
   OrchestratorConfig,
-  "maxAttempts" | "maxConcurrency" | "sandboxKind"
+  "maxAttempts" | "sandboxKind"
 >;
 
 /** What the emit site knows about one run. */
 export interface RunEventContext {
-  /** Everything resolved at the claim: task, project, session, image, ids, attempt. */
+  /** Everything resolved at the claim: the attachment, project, session, image, ids, attempt. */
   readonly dispatch: DispatchContext;
-  /** How many runs already held a slot when this one claimed its lease. */
+  /** Which lane's slot this run holds, and the cap on it. */
+  readonly lane: PoolLane;
+  /** The lane's cap, so a depth is readable as "was it full". */
+  readonly laneCapacity: number;
+  /** How many runs already held a slot in that lane when this one claimed its lease. */
   readonly poolDepth: number;
   /** The cell the loop folds its facts into; read once, as the run exits. */
   readonly progress: Ref.Ref<RunProgress>;
@@ -374,8 +393,9 @@ const claimFields = (
     attempt: dispatch.attempt,
     image: dispatch.image,
     kind: settings.sandboxKind,
+    lane: context.lane,
     maxAttempts: settings.maxAttempts,
-    maxConcurrency: settings.maxConcurrency,
+    maxConcurrency: context.laneCapacity,
     poolDepth: context.poolDepth,
     projectId: projectIdOf(dispatch),
     provider: dispatch.provider,
@@ -383,13 +403,18 @@ const claimFields = (
     // task sat in its column waiting for a slot.
     queueWaitMs: dispatch.queueWaitMs,
     repo: repoSlugOf(dispatch.repoUrl),
+    role: roleOf(dispatch),
     runId: identity.runId,
     sessionId: identity.sessionId,
     sessionMode: dispatch.session.mode,
     sessionSelected: dispatch.session.selected,
     spanId: identity.spanId,
     taskId: identity.taskId,
-    taskStatus: dispatch.task.status,
+    taskStatus:
+      dispatch.attached.role === "worker"
+        ? dispatch.attached.task.status
+        : null,
+    threadId: identity.threadId,
     traceId: identity.traceId,
     trigger: dispatch.trigger,
     workspaceId: identity.workspaceId,
@@ -446,6 +471,9 @@ export interface LostRunInput {
   readonly context: DispatchContext;
   /** How far the run's own event file got before it stopped. */
   readonly eventsSeen: number;
+  /** The lane this run would have held, so the row is comparable to a live one's. */
+  readonly lane: PoolLane;
+  readonly laneCapacity: number;
   readonly settings: RunEventSettings;
   readonly terminus: RunTerminus;
 }
@@ -470,6 +498,8 @@ export const emitLostRun = (input: LostRunInput) =>
     ...runRow(
       {
         dispatch: input.context,
+        lane: input.lane,
+        laneCapacity: input.laneCapacity,
         // Nothing was holding a slot for this run by the time it was found.
         poolDepth: 0,
         settings: input.settings,
@@ -509,11 +539,12 @@ const TURNS_BOUNDARIES = [1, 2, 5, 10, 20, 50, 100, 200];
  * workspace, project, repo — stay off it. The ceiling is 2 × 7 × 2 series.
  */
 const runsTotal = boundedCounter("atm_runs_total", {
-  description: "Runs terminated, by sandbox kind, ending and provider",
+  description: "Runs terminated, by sandbox kind, ending, provider and role",
   tags: {
     kind: SANDBOX_KINDS,
     outcome: RUN_EVENT_OUTCOMES,
     provider: SESSION_PROVIDERS,
+    role: RUN_ROLES,
   },
 });
 
@@ -577,6 +608,7 @@ const recordRunMetrics = (
       kind: context.settings.sandboxKind,
       outcome: ending.outcome,
       provider,
+      role: roleOf(context.dispatch),
     });
     if (progress.retryInMs !== null) {
       yield* retriesTotal.increment({ provider });
@@ -623,8 +655,8 @@ const recordRunMetrics = (
  *   Effect.gen(function* () {
  *     const progress = yield* makeRunProgress;
  *     const work = Effect.gen(function* () {
- *       const prompt = yield* buildPrompt(dispatch);
- *       yield* observeRunProgress(progress, { promptChars: prompt.length });
+ *       const prompt = yield* buildRunPrompt(dispatch);
+ *       yield* observeRunProgress(progress, { promptChars: prompt.chars });
  *       const terminus = yield* runContainer(dispatch, prompt);
  *       yield* observeRunProgress(progress, { eventsSeen, terminus });
  *       yield* observeRunProgress(progress, yield* closeOut(dispatch, terminus));

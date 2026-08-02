@@ -71,6 +71,7 @@ import { Telemetry } from "@workspace/telemetry";
 import { Effect, Layer, Stream } from "effect";
 import { openRun, type RunClaim } from "./open-run";
 import { performRun, runOpened } from "./run";
+import { workerAttachment } from "./subject";
 import { loadRootEnv } from "./testing/root-env";
 import {
   durableTranscriptPathOf,
@@ -119,6 +120,24 @@ const dataRoot = mkdtempSync(join(tmpdir(), "atm-run-test-"));
 process.env.DATA_ROOT = dataRoot;
 process.env.EVENT_LOG_DIR = join(dataRoot, "events");
 
+/**
+ * The host's system-owned login for the provider, standing in for
+ * `~/.claude-task-management`. Created here because nothing on the run path
+ * creates it: an auto-made empty home boots a container that reports an auth
+ * error nobody can tell from an expired token.
+ */
+const agentHomeDir = join(dataRoot, "agent-home", "claude");
+mkdirSync(agentHomeDir, { recursive: true });
+
+/** What every run in this file is given, beside its claim. */
+const RUN_SETTINGS = {
+  agentHomeDir,
+  // No gateway, so no board tools and no token: the run path is what is under
+  // test here, and `agent-token` has the credential's own claims.
+  gatewayUrl: null,
+  tokenTtlMs: 900_000,
+} as const;
+
 /** The conversation id the written transcript names itself with. */
 const TRANSCRIPT_SESSION_ID = "transcript-session-1";
 
@@ -126,15 +145,15 @@ const TRANSCRIPT_SESSION_ID = "transcript-session-1";
 const TRANSCRIPT_TEXT = "what the provider wrote inside its own agent home";
 
 /**
- * A transcript in the run's agent home, in the layout Claude Code uses:
+ * A transcript in the host's shared agent home, in the layout Claude Code uses:
  * `projects/<workspace>/<session>.jsonl` under the config directory.
  *
  * Written by the provider rather than by the test, because that is what makes
- * the claim about ordering real — the file exists exactly as long as the agent
- * home does, and the agent home is torn down with the run.
+ * the claim real — the home is the operator's own login, shared by every run on
+ * the box, and the file the ingest reads is the one this run's session named.
  */
-const writeTranscript = (agentHomeDir: string) => {
-  const directory = join(agentHomeDir, "projects", "-workspace");
+const writeTranscript = (home: string) => {
+  const directory = join(home, "projects", "-workspace");
   mkdirSync(directory, { recursive: true });
   const lines = [
     JSON.stringify({
@@ -277,6 +296,7 @@ const seedTask = (input: { readonly owner: UserId; readonly title: string }) =>
   });
 
 const claimOf = (task: Task): RunClaim => ({
+  attached: workerAttachment(task),
   attempt: 1,
   dataRoot,
   defaultProvider: "claude",
@@ -284,7 +304,6 @@ const claimOf = (task: Task): RunClaim => ({
   project: null,
   queueWaitMs: 0,
   spanId: null,
-  task,
   traceId: null,
   traceparent: null,
   trigger: "status_change",
@@ -302,6 +321,7 @@ const runOnce = (input: {
     const { owner } = yield* ensureWorkspace;
     const task = yield* seedTask({ owner, title: input.title });
     const outcome = yield* performRun({
+      ...RUN_SETTINGS,
       claim: claimOf(task),
       // The host path, which is what a scripted provider is: the container path
       // has a container test of its own, in `./container-turn.test`.
@@ -578,7 +598,7 @@ test("the fallback comment appears only when the run posted none", async () => {
   ).toBe(true);
 });
 
-test("the close hook reads the transcript before the agent home is removed", async () => {
+test("the close hook copies the transcript out of the shared home and reads it there", async () => {
   const seen = await provide(
     Effect.gen(function* () {
       const { owner } = yield* ensureWorkspace;
@@ -587,6 +607,7 @@ test("the close hook reads the transcript before the agent home is removed", asy
       const ingested: TranscriptIngestReport[] = [];
 
       yield* runOpened({
+        ...RUN_SETTINGS,
         context,
         dataRoot,
         // What the loop's own close hook does, reduced to the one step this
@@ -594,6 +615,7 @@ test("the close hook reads the transcript before the agent home is removed", asy
         onClose: (closed) =>
           withActor(context.actor)(
             ingestTranscript({
+              agentHomeDir,
               context,
               providerSessionId: closed.terminus.providerSessionId,
             })
@@ -626,43 +648,52 @@ test("the close hook reads the transcript before the agent home is removed", asy
         }),
       };
     }).pipe(
-      // No events at all: the stream leaves no timeline, so the transcript is
-      // the only account of the run there is — and the rows it restores are the
-      // proof it was read rather than merely looked for.
+      // One event, and it is the one that names the conversation: the stream
+      // leaves no timeline, so the transcript is the only account of the run
+      // there is, and the rows it restores are the proof it was read rather
+      // than merely looked for. The id is what narrows the read to this run's
+      // own file in a tree every run on the host writes into.
       Effect.provide(
-        registryLayer({ events: [], failure: null, transcript: true })
+        registryLayer({
+          events: [
+            {
+              kind: "session_init",
+              model: "claude-test",
+              provider: "claude",
+              providerSessionId: TRANSCRIPT_SESSION_ID,
+            },
+          ],
+          failure: null,
+          transcript: true,
+        })
       )
     )
   );
 
   expect(seen.report?.found).toBe(true);
   expect(seen.report?.entries).toBe(2);
-  expect(seen.report?.restored).toBe(true);
   expect(seen.report?.providerSessionId).toBe(TRANSCRIPT_SESSION_ID);
   expect(seen.session.providerSessionId).toBe(TRANSCRIPT_SESSION_ID);
 
-  // The conversation, in the restored band, on the run's own timeline.
-  expect(seen.timeline.map((event) => event.seq)).toEqual([
-    TRANSCRIPT_SEQ_BASE,
-    TRANSCRIPT_SEQ_BASE + 1,
-  ]);
-  const said = seen.timeline.find(
-    (event) => event.payload.kind === "assistant_message"
+  // The stream did leave a timeline — one row, the event that named the
+  // conversation — so the transcript is read and not replayed into it. Restoring
+  // a timeline that already exists is `./ingest.test`'s claim, over a run whose
+  // stream left none.
+  expect(seen.report?.restored).toBe(false);
+  expect(seen.timeline.every((event) => event.seq < TRANSCRIPT_SEQ_BASE)).toBe(
+    true
   );
-  expect(said?.payload).toMatchObject({ text: TRANSCRIPT_TEXT });
 
-  // And the credentials the transcript sat beside are gone: the agent home is
-  // released as the close hook returns, not before it and not never.
-  expect(existsSync(seen.context.layout.agentHomeDir)).toBe(false);
-
-  // The conversation outlives both, at full length, in the run directory — and
-  // the ingest above read it there rather than in the home that is now gone.
+  // The conversation is in the run directory at full length, and the ingest
+  // above read it there rather than back in the shared tree.
   const durable = durableTranscriptPathOf(seen.context.layout);
   expect(seen.report?.path).toBe(durable);
   expect(readFileSync(durable, "utf8")).toContain(TRANSCRIPT_TEXT);
 
-  // One file came out, and it is the transcript: a copy that took the directory
-  // rather than the file would have brought the login with it.
+  // One file came out of the operator's own login directory, and it is the
+  // transcript: a copy that took the directory rather than the one file this
+  // run's session named would have brought the credential with it — and every
+  // other run's conversation besides.
   const left = readdirSync(seen.context.layout.runDir, { recursive: true });
   expect(left).toContain(TRANSCRIPT_FILE);
   expect(

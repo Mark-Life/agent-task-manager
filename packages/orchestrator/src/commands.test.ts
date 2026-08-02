@@ -23,7 +23,13 @@ import {
   WorkspaceRepo,
   withActor,
 } from "@workspace/db";
-import type { Task, TaskStatus, WorkspaceId } from "@workspace/domain";
+import type {
+  RunSubject,
+  Task,
+  TaskId,
+  TaskStatus,
+  WorkspaceId,
+} from "@workspace/domain";
 import { Actor, parseTraceparent } from "@workspace/domain";
 import { DateTime, Effect, Layer, Schema, Tracer } from "effect";
 import {
@@ -80,6 +86,9 @@ const actor = Actor.cases.orchestrator.make({ loopInstance: APPLICATION_NAME });
 
 /** Whoever wrote the intent. `system` so no user row has to exist for the test. */
 const asker = Actor.cases.system.make({ reason: APPLICATION_NAME });
+
+/** A task, as the thing a command names. A thread takes the same shape. */
+const taskSubject = (id: TaskId): RunSubject => ({ id, kind: "task" });
 
 const store = storeLayer({ applicationName: APPLICATION_NAME });
 
@@ -182,15 +191,16 @@ const makeLiveRun = (taskId: Task["id"]) =>
     Effect.gen(function* () {
       const sessions = yield* AgentSessionRepo;
       const runs = yield* RunRepo;
+      const subject = taskSubject(taskId);
       const session = yield* sessions.open({
         provider: "claude",
-        taskId,
+        subject,
         workspaceId,
       });
       return yield* runs.create({
         agentSessionId: session.id,
         provider: "claude",
-        taskId,
+        subject,
         trigger: "status_change",
         workspaceId,
       });
@@ -210,7 +220,7 @@ test("a stop kills the container, marks the run interrupted and names who asked"
       yield* withActor(asker)(
         commands.enqueue({
           payload: { kind: "stop" },
-          taskId: task.id,
+          subject: taskSubject(task.id),
           workspaceId,
         })
       );
@@ -222,7 +232,7 @@ test("a stop kills the container, marks the run interrupted and names who asked"
   expect(outcome?.result).toBe("acted");
   expect(outcome?.command.status).toBe("consumed");
   expect(calls.stopped).toEqual([
-    { runId: run.id, taskId: task.id, workspaceId },
+    { runId: run.id, subject: taskSubject(task.id), workspaceId },
   ]);
 
   const [closed, events] = await runStore(
@@ -261,7 +271,7 @@ test("a stop with nothing running is rejected with the reason on the row", async
       yield* withActor(asker)(
         commands.enqueue({
           payload: { kind: "stop" },
-          taskId: task.id,
+          subject: taskSubject(task.id),
           workspaceId,
         })
       );
@@ -291,7 +301,7 @@ test("a stop whose container is already gone still closes the row out", async ()
       yield* withActor(asker)(
         commands.enqueue({
           payload: { kind: "stop" },
-          taskId: task.id,
+          subject: taskSubject(task.id),
           workspaceId,
         })
       );
@@ -335,7 +345,7 @@ test("a rerun starts a run, clears the park, and says so on the trigger", async 
       yield* withActor(asker)(
         commands.enqueue({
           payload: { kind: "rerun" },
-          taskId: task.id,
+          subject: taskSubject(task.id),
           workspaceId,
         })
       );
@@ -349,7 +359,7 @@ test("a rerun starts a run, clears the park, and says so on the trigger", async 
   // repository method opens a span of its own. Its value is the next test.
   expect(calls.dispatched).toEqual([
     {
-      taskId: task.id,
+      subject: taskSubject(task.id),
       traceparent: expect.any(String),
       trigger: "rerun",
       workspaceId,
@@ -380,7 +390,7 @@ test("a rerun carries the asking request's trace across to the dispatcher", asyn
       yield* withActor(asker)(
         commands.enqueue({
           payload: { kind: "rerun" },
-          taskId: task.id,
+          subject: taskSubject(task.id),
           workspaceId,
         })
       ).pipe(
@@ -418,7 +428,7 @@ test("a rerun on a task that is not in progress is refused, not silently obeyed"
       yield* withActor(asker)(
         commands.enqueue({
           payload: { kind: "rerun" },
-          taskId: task.id,
+          subject: taskSubject(task.id),
           workspaceId,
         })
       );
@@ -447,7 +457,7 @@ test("a rerun while a container is working is refused rather than doubling up", 
       yield* withActor(asker)(
         commands.enqueue({
           payload: { kind: "rerun" },
-          taskId: task.id,
+          subject: taskSubject(task.id),
           workspaceId,
         })
       );
@@ -473,7 +483,7 @@ test("a start_session spawns research from the backlog without moving the card",
       yield* withActor(asker)(
         commands.enqueue({
           payload: { kind: "start_session", trigger: "research" },
-          taskId: task.id,
+          subject: taskSubject(task.id),
           workspaceId,
         })
       );
@@ -485,7 +495,7 @@ test("a start_session spawns research from the backlog without moving the card",
   expect(outcome?.result).toBe("acted");
   expect(calls.dispatched).toEqual([
     {
-      taskId: task.id,
+      subject: taskSubject(task.id),
       traceparent: expect.any(String),
       trigger: "research",
       workspaceId,
@@ -513,7 +523,7 @@ test("a start_session cannot borrow the dispatcher's own trigger", async () => {
       yield* withActor(asker)(
         commands.enqueue({
           payload: { kind: "start_session", trigger: "status_change" },
-          taskId: task.id,
+          subject: taskSubject(task.id),
           workspaceId,
         })
       );
@@ -541,7 +551,7 @@ test("a failure inside the handler still leaves a reason on the row", async () =
       yield* withActor(asker)(
         commands.enqueue({
           payload: { kind: "rerun" },
-          taskId: task.id,
+          subject: taskSubject(task.id),
           workspaceId,
         })
       );
@@ -581,7 +591,7 @@ test("a drain takes the queue in the order it was written and stops when it is e
         yield* withActor(asker)(
           commands.enqueue({
             payload: { kind: "start_session", trigger: "manual" },
-            taskId: task.id,
+            subject: taskSubject(task.id),
             workspaceId,
           })
         );
@@ -596,8 +606,8 @@ test("a drain takes the queue in the order it was written and stops when it is e
     first.id,
     second.id,
   ]);
-  expect(calls.dispatched.map((request) => request.taskId)).toEqual([
-    first.id,
-    second.id,
+  expect(calls.dispatched.map((request) => request.subject)).toEqual([
+    taskSubject(first.id),
+    taskSubject(second.id),
   ]);
 });

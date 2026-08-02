@@ -1,14 +1,20 @@
 /**
- * Who is allowed to work on a task, and what becomes of the runs a dead process
- * left behind.
+ * Who is allowed to work on a subject, and what becomes of the runs a dead
+ * process left behind.
+ *
+ * A subject is a task or a conversation, and the claim is the same either way:
+ * one worker on a card, one live turn in a thread. Keying by
+ * {@link subjectFileNameOf} rather than by a task id is what lets a chat turn
+ * have a durable claim at all — without it, two loops on one data root would
+ * both answer the same message.
  *
  * A claim is two things at once, and it has to be, because they answer
  * different questions. The in-memory set answers "is this process already
- * working on that task", which a notify and a poll arriving together ask many
- * times a minute and which must never touch a disk. The file under the data
- * root answers "was anybody working on that task when the power went out",
- * which is asked exactly once, at boot, and can only be answered by something
- * that outlived the process.
+ * working on that subject", which a notify and a poll arriving together ask
+ * many times a minute and which must never touch a disk. The file under the
+ * data root answers "was anybody working on it when the power went out", which
+ * is asked exactly once, at boot, and can only be answered by something that
+ * outlived the process.
  *
  * The file is heartbeated rather than merely written, and that is the whole
  * mechanism behind "kill the loop mid-run and it recovers on restart". Nothing
@@ -37,7 +43,7 @@ import {
   Actor,
   type Run,
   RunId,
-  TaskId,
+  RunSubject,
   type WorkspaceId,
 } from "@workspace/domain";
 import { hostRunLayout } from "@workspace/harness";
@@ -61,8 +67,9 @@ import {
   type RunLost,
 } from "./dispatch-context";
 import { AlreadyLive, DispatchFailed, LeaseReclaimFailed } from "./errors";
+import { subjectFileNameOf, subjectKeyOf, subjectOfRow } from "./subject";
 
-/** Directory under the data root holding one lease file per claimed task. */
+/** Directory under the data root holding one lease file per claimed subject. */
 export const LEASES_SEGMENT = "leases";
 
 /** What a lease file is called, and what a directory listing filters on. */
@@ -71,19 +78,21 @@ const LEASE_SUFFIX = ".json";
 /** Where every lease this loop holds lives. */
 export const leasesDirOf = (dataRoot: string) => join(dataRoot, LEASES_SEGMENT);
 
-/** Names one task's lease. */
+/** Names one subject's lease. */
 export interface LeasePathInput {
   readonly dataRoot: string;
-  readonly taskId: TaskId;
+  readonly subject: RunSubject;
 }
 
 /**
- * A task's lease file. Keyed by task rather than by run because the claim is
- * made before the run row exists, and because "one run per task at a time" is
- * the invariant being defended. The id is a uuid, so it is already a filename.
+ * A subject's lease file. Keyed by the subject rather than by the run because
+ * the claim is made before the run row exists, and because "one run per task
+ * and one turn per thread" is the invariant being defended. The name carries
+ * the kind as well as the id, so a task and a conversation can never collide
+ * even if a uuid somehow did.
  */
-export const leasePathOf = ({ dataRoot, taskId }: LeasePathInput) =>
-  join(leasesDirOf(dataRoot), `${taskId}${LEASE_SUFFIX}`);
+export const leasePathOf = ({ dataRoot, subject }: LeasePathInput) =>
+  join(leasesDirOf(dataRoot), `${subjectFileNameOf(subject)}${LEASE_SUFFIX}`);
 
 /**
  * What one loop wrote to say it is working on a task.
@@ -104,7 +113,8 @@ export const LeaseRecord = Schema.Struct({
   pid: Schema.Int,
   /** Null between the claim and the run row, which is a real window and not a missing value. */
   runId: Schema.NullOr(RunId),
-  taskId: TaskId,
+  /** The task or the conversation this claim is on. */
+  subject: RunSubject,
 });
 
 /** A lease as it is held in memory and on disk. */
@@ -155,7 +165,7 @@ export type LeaseState = (typeof LEASE_STATES)[number];
 
 /** What identifies a lease to every operation below. */
 export interface LeaseRef {
-  readonly taskId: TaskId;
+  readonly subject: RunSubject;
 }
 
 /** Stamps the run a claim turned into onto the lease that is holding it. */
@@ -173,17 +183,17 @@ export interface LeaseStoreInterface {
     input: LeaseAttachInput
   ) => Effect.Effect<LeaseRecord | null, DispatchFailed>;
   /**
-   * Takes the task, unless this process is already on it or a live lease says
-   * another loop is. The refusal is {@link AlreadyLive} because that is what the
-   * dispatcher does with it: skip this task and move to the next one.
+   * Takes the subject, unless this process is already on it or a live lease
+   * says another loop is. The refusal is {@link AlreadyLive} because that is
+   * what the dispatcher does with it: skip and move to the next one.
    */
   readonly claim: (
     input: LeaseRef
   ) => Effect.Effect<LeaseRecord, AlreadyLive | DispatchFailed>;
   /** Stamps the lease so another loop can see it is alive. Never fails. */
   readonly heartbeat: (input: LeaseRef) => Effect.Effect<LeaseState>;
-  /** The tasks this process is working on right now. */
-  readonly held: Effect.Effect<ReadonlySet<TaskId>>;
+  /** The subject keys this process is working on right now. */
+  readonly held: Effect.Effect<ReadonlySet<string>>;
   /** This loop's identity, and the `loopInstance` its audit rows carry. */
   readonly instanceId: string;
   /** Whether a lease found on disk still has a process behind it. */
@@ -205,8 +215,8 @@ export interface LeaseStoreInterface {
   /** Gives the task back. Idempotent, and never fails. */
   readonly release: (input: LeaseRef) => Effect.Effect<void>;
   /**
-   * Claims the task, heartbeats it for as long as the work runs, and gives it
-   * back on every exit path — a failure, a defect, and the interrupt a SIGINT
+   * Claims the subject, heartbeats it for as long as the work runs, and gives
+   * it back on every exit path — a failure, a defect, and the interrupt a SIGINT
    * turns into. The one form that cannot leak a claim.
    */
   readonly withLease: <A, E, R>(
@@ -237,14 +247,14 @@ const make = Effect.gen(function* () {
   // the crash for one it is holding now.
   const instanceId = yield* Effect.sync(() => crypto.randomUUID());
 
-  const claims = yield* Ref.make<ReadonlyMap<TaskId, LeaseRecord>>(new Map());
+  const claims = yield* Ref.make<ReadonlyMap<string, LeaseRecord>>(new Map());
 
   // Claiming is read-then-write against the filesystem, so two fibers reaching
   // it for one task would both find it free. One permit makes the whole
   // decision serial, which costs nothing next to a container start.
   const gate = yield* Semaphore.make(1);
 
-  const pathOf = (taskId: TaskId) => leasePathOf({ dataRoot, taskId });
+  const pathOf = (subject: RunSubject) => leasePathOf({ dataRoot, subject });
 
   const reclaimFailed = (detail: string) => (cause: unknown) =>
     new LeaseReclaimFailed({ cause, detail });
@@ -255,7 +265,7 @@ const make = Effect.gen(function* () {
    */
   const writeLease = (lease: LeaseRecord) =>
     Effect.gen(function* () {
-      const path = pathOf(lease.taskId);
+      const path = pathOf(lease.subject);
       yield* fs.makeDirectory(leasesDirOf(dataRoot), { recursive: true });
       const temp = `${path}.${crypto.randomUUID()}.tmp`;
       yield* fs.writeFileString(temp, encodeLease(lease));
@@ -264,11 +274,11 @@ const make = Effect.gen(function* () {
 
   const remember = (lease: LeaseRecord) =>
     Ref.update(claims, (current) =>
-      new Map(current).set(lease.taskId, lease)
+      new Map(current).set(subjectKeyOf(lease.subject), lease)
     ).pipe(Effect.as(lease));
 
   const readLease = (input: LeaseRef) =>
-    fs.readFileString(pathOf(input.taskId)).pipe(
+    fs.readFileString(pathOf(input.subject)).pipe(
       Effect.map((text) => Option.getOrNull(decodeLease(text))),
       Effect.orElseSucceed(() => null)
     );
@@ -291,16 +301,17 @@ const make = Effect.gen(function* () {
   });
 
   const claimExclusive = Effect.fnUntraced(function* (input: LeaseRef) {
-    const mine = (yield* Ref.get(claims)).get(input.taskId);
+    const key = subjectKeyOf(input.subject);
+    const mine = (yield* Ref.get(claims)).get(key);
     if (mine !== undefined) {
       return yield* Effect.fail(
-        new AlreadyLive({ runId: mine.runId, taskId: input.taskId })
+        new AlreadyLive({ runId: mine.runId, subject: input.subject })
       );
     }
     const found = yield* readLease(input);
     if (found !== null && (yield* isLive(found))) {
       return yield* Effect.fail(
-        new AlreadyLive({ runId: found.runId, taskId: input.taskId })
+        new AlreadyLive({ runId: found.runId, subject: input.subject })
       );
     }
     const nowMs = yield* Clock.currentTimeMillis;
@@ -310,7 +321,7 @@ const make = Effect.gen(function* () {
       instanceId,
       pid: process.pid,
       runId: null,
-      taskId: input.taskId,
+      subject: input.subject,
     };
     yield* writeLease(lease).pipe(
       Effect.mapError(
@@ -318,7 +329,7 @@ const make = Effect.gen(function* () {
           new DispatchFailed({
             cause,
             detail: "the lease file could not be written",
-            taskId: input.taskId,
+            subject: input.subject,
           })
       )
     );
@@ -332,7 +343,7 @@ const make = Effect.gen(function* () {
   const attach = Effect.fn("LeaseStore.attach")(function* (
     input: LeaseAttachInput
   ) {
-    const mine = (yield* Ref.get(claims)).get(input.taskId);
+    const mine = (yield* Ref.get(claims)).get(subjectKeyOf(input.subject));
     if (mine === undefined) {
       return null;
     }
@@ -343,7 +354,7 @@ const make = Effect.gen(function* () {
           new DispatchFailed({
             cause,
             detail: "the run could not be stamped onto the lease",
-            taskId: input.taskId,
+            subject: input.subject,
           })
       )
     );
@@ -353,7 +364,7 @@ const make = Effect.gen(function* () {
   const heartbeat = Effect.fn("LeaseStore.heartbeat")(function* (
     input: LeaseRef
   ) {
-    const mine = (yield* Ref.get(claims)).get(input.taskId);
+    const mine = (yield* Ref.get(claims)).get(subjectKeyOf(input.subject));
     if (mine === undefined) {
       return "lost" as const;
     }
@@ -378,11 +389,11 @@ const make = Effect.gen(function* () {
     // a slot this process never offers again.
     yield* Ref.update(claims, (current) => {
       const next = new Map(current);
-      next.delete(input.taskId);
+      next.delete(subjectKeyOf(input.subject));
       return next;
     });
     yield* fs
-      .remove(pathOf(input.taskId), { force: true })
+      .remove(pathOf(input.subject), { force: true })
       .pipe(bestEffort("lease file not removed"));
   });
 
@@ -426,10 +437,12 @@ const make = Effect.gen(function* () {
         continue;
       }
       yield* fs
-        .remove(pathOf(lease.taskId), { force: true })
+        .remove(pathOf(lease.subject), { force: true })
         .pipe(
           Effect.mapError(
-            reclaimFailed(`the stale lease for task ${lease.taskId} is stuck`)
+            reclaimFailed(
+              `the stale lease for ${subjectKeyOf(lease.subject)} is stuck`
+            )
           )
         );
       reclaimed.push(lease);
@@ -539,7 +552,7 @@ export const reconcileLostRuns = Effect.fn("Lease.reconcileLostRuns")(
 
     yield* leases.reclaimStale;
     const guarded = new Set(
-      (yield* leases.liveLeases).map((lease) => lease.taskId)
+      (yield* leases.liveLeases).map((lease) => subjectKeyOf(lease.subject))
     );
 
     // The reconcile is not about one run, so the actor names the loop and no
@@ -553,7 +566,10 @@ export const reconcileLostRuns = Effect.fn("Lease.reconcileLostRuns")(
     for (const run of yield* runs.listLive({
       workspaceId: input.workspaceId,
     })) {
-      if (guarded.has(run.taskId)) {
+      const subject = subjectOfRow(run);
+      // A run whose columns name nothing at all cannot be attributed, so it
+      // cannot be guarded either; closing it is still the right answer.
+      if (subject !== null && guarded.has(subjectKeyOf(subject))) {
         continue;
       }
       const terminus = lostTerminus({

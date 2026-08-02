@@ -29,7 +29,14 @@ import {
   WorkspaceRepo,
   withActor,
 } from "@workspace/db";
-import { Actor, newRunId, newTaskId, type TaskId } from "@workspace/domain";
+import {
+  Actor,
+  newRunId,
+  newTaskId,
+  newThreadId,
+  type RunSubject,
+  type TaskId,
+} from "@workspace/domain";
 import { hostRunLayout } from "@workspace/harness";
 import { ConfigProvider, Effect, Fiber, Latch, Layer, Schedule } from "effect";
 import type { FileSystem } from "effect/FileSystem";
@@ -41,6 +48,7 @@ import {
   PidAlive,
   reconcileLostRuns,
 } from "./lease";
+import { subjectKeyOf, subjectOfRow } from "./subject";
 
 /** Short enough that a doctored beat is plainly outside it, long enough to be a real window. */
 const STALE_MS = 400;
@@ -81,22 +89,25 @@ const leaseLayer = () =>
 const run = <A, E>(program: Effect.Effect<A, E, LeaseStore>) =>
   Effect.runPromise(program.pipe(Effect.provide(leaseLayer())));
 
-const leaseFileOf = (taskId: TaskId) => leasePathOf({ dataRoot, taskId });
+/** A task, as the thing a lease is on. Threads take the same shape. */
+const taskSubject = (id: TaskId): RunSubject => ({ id, kind: "task" });
+
+const leaseFileOf = (subject: RunSubject) => leasePathOf({ dataRoot, subject });
 
 /** A lease exactly where a previous process would have left one. */
 const writeLeaseFile = (record: LeaseRecord) => {
   mkdirSync(leasesDirOf(dataRoot), { recursive: true });
-  writeFileSync(leaseFileOf(record.taskId), JSON.stringify(record));
+  writeFileSync(leaseFileOf(record.subject), JSON.stringify(record));
 };
 
-const readLeaseFile = (taskId: TaskId) =>
-  JSON.parse(readFileSync(leaseFileOf(taskId), "utf8")) as LeaseRecord;
+const readLeaseFile = (subject: RunSubject) =>
+  JSON.parse(readFileSync(leaseFileOf(subject), "utf8")) as LeaseRecord;
 
 /** A lease held by somebody else, `agedMs` since its last beat. */
 const foreignLease = (input: {
   readonly agedMs: number;
   readonly runId?: LeaseRecord["runId"];
-  readonly taskId: TaskId;
+  readonly subject: RunSubject;
 }): LeaseRecord => {
   const now = Date.now();
   return {
@@ -105,97 +116,117 @@ const foreignLease = (input: {
     instanceId: "another-loop",
     pid: process.pid,
     runId: input.runId ?? null,
-    taskId: input.taskId,
+    subject: input.subject,
   };
 };
 
-describe("claiming a task", () => {
+describe("claiming a subject", () => {
   test("writes a lease naming this process", async () => {
-    const taskId = newTaskId();
+    const subject = taskSubject(newTaskId());
     const claimed = await run(
       Effect.gen(function* () {
         const leases = yield* LeaseStore;
-        return yield* leases.claim({ taskId });
+        return yield* leases.claim({ subject });
       })
     );
 
-    const onDisk = readLeaseFile(taskId);
-    expect(onDisk.taskId).toBe(taskId);
+    const onDisk = readLeaseFile(subject);
+    expect(onDisk.subject).toEqual(subject);
     expect(onDisk.pid).toBe(process.pid);
     expect(onDisk.instanceId).toBe(claimed.instanceId);
     expect(onDisk.runId).toBeNull();
   });
 
-  test("refuses a task this process is already on, and names the run", async () => {
-    const taskId = newTaskId();
-    const runId = newRunId();
-    const refusal = await run(
+  test("gives a conversation a durable claim of its own", async () => {
+    const subject: RunSubject = { id: newThreadId(), kind: "thread" };
+    const { held, refusal } = await run(
       Effect.gen(function* () {
         const leases = yield* LeaseStore;
-        yield* leases.claim({ taskId });
-        yield* leases.attach({ runId, taskId });
-        return yield* Effect.flip(leases.claim({ taskId }));
+        yield* leases.claim({ subject });
+        return {
+          held: yield* leases.held,
+          refusal: yield* Effect.flip(leases.claim({ subject })),
+        };
       })
     );
 
+    // The whole point of keying by subject: a chat turn is claimed exactly the
+    // way a worker run is, across processes and across a restart.
     expect(refusal._tag).toBe("Orchestrator.AlreadyLive");
-    expect(readLeaseFile(taskId).runId).toBe(runId);
+    expect(held.has(subjectKeyOf(subject))).toBe(true);
+    expect(readLeaseFile(subject).subject).toEqual(subject);
   });
 
-  test("refuses a task another loop is still heartbeating", async () => {
-    const taskId = newTaskId();
+  test("refuses a subject this process is already on, and names the run", async () => {
+    const subject = taskSubject(newTaskId());
     const runId = newRunId();
-    writeLeaseFile(foreignLease({ agedMs: 0, runId, taskId }));
-
     const refusal = await run(
       Effect.gen(function* () {
         const leases = yield* LeaseStore;
-        return yield* Effect.flip(leases.claim({ taskId }));
+        yield* leases.claim({ subject });
+        yield* leases.attach({ runId, subject });
+        return yield* Effect.flip(leases.claim({ subject }));
       })
     );
 
     expect(refusal._tag).toBe("Orchestrator.AlreadyLive");
-    // The refusal came off the file, so it can say which run is on the task.
+    expect(readLeaseFile(subject).runId).toBe(runId);
+  });
+
+  test("refuses a subject another loop is still heartbeating", async () => {
+    const subject = taskSubject(newTaskId());
+    const runId = newRunId();
+    writeLeaseFile(foreignLease({ agedMs: 0, runId, subject }));
+
+    const refusal = await run(
+      Effect.gen(function* () {
+        const leases = yield* LeaseStore;
+        return yield* Effect.flip(leases.claim({ subject }));
+      })
+    );
+
+    expect(refusal._tag).toBe("Orchestrator.AlreadyLive");
+    // The refusal came off the file, so it can say which run is on the subject.
     expect((refusal as { readonly runId: unknown }).runId).toBe(runId);
   });
 
-  test("gives the task back on release", async () => {
-    const taskId = newTaskId();
+  test("gives the subject back on release", async () => {
+    const subject = taskSubject(newTaskId());
     const held = await run(
       Effect.gen(function* () {
         const leases = yield* LeaseStore;
-        yield* leases.claim({ taskId });
-        yield* leases.release({ taskId });
-        yield* leases.claim({ taskId });
+        yield* leases.claim({ subject });
+        yield* leases.release({ subject });
+        yield* leases.claim({ subject });
         return yield* leases.held;
       })
     );
 
-    expect(held.has(taskId)).toBe(true);
-    expect(existsSync(leaseFileOf(taskId))).toBe(true);
+    expect(held.has(subjectKeyOf(subject))).toBe(true);
+    expect(existsSync(leaseFileOf(subject))).toBe(true);
   });
 });
 
 describe("reclaiming after a crash", () => {
   test("takes back a lease that stopped heartbeating", async () => {
-    const taskId = newTaskId();
-    writeLeaseFile(foreignLease({ agedMs: STALE_MS * 3, taskId }));
+    const subject = taskSubject(newTaskId());
+    writeLeaseFile(foreignLease({ agedMs: STALE_MS * 3, subject }));
 
     const { claimed, reclaimed } = await run(
       Effect.gen(function* () {
         const leases = yield* LeaseStore;
         const stale = yield* leases.reclaimStale;
-        return { claimed: yield* leases.claim({ taskId }), reclaimed: stale };
+        return { claimed: yield* leases.claim({ subject }), reclaimed: stale };
       })
     );
 
-    expect(reclaimed.map((lease) => lease.taskId)).toEqual([taskId]);
-    expect(claimed.taskId).toBe(taskId);
+    expect(reclaimed.map((lease) => lease.subject)).toEqual([subject]);
+    expect(claimed.subject).toEqual(subject);
   });
 
   test("takes back a fresh lease whose process is gone", async () => {
-    const taskId = newTaskId();
-    writeLeaseFile(foreignLease({ agedMs: 0, taskId }));
+    const subject = taskSubject(newTaskId());
+    writeLeaseFile(foreignLease({ agedMs: 0, subject }));
 
     const reclaimed = await run(
       Effect.gen(function* () {
@@ -204,13 +235,13 @@ describe("reclaiming after a crash", () => {
       }).pipe(Effect.provideService(PidAlive, () => false))
     );
 
-    expect(reclaimed.map((lease) => lease.taskId)).toEqual([taskId]);
-    expect(existsSync(leaseFileOf(taskId))).toBe(false);
+    expect(reclaimed.map((lease) => lease.subject)).toEqual([subject]);
+    expect(existsSync(leaseFileOf(subject))).toBe(false);
   });
 
   test("leaves a lease another live loop is holding", async () => {
-    const taskId = newTaskId();
-    writeLeaseFile(foreignLease({ agedMs: 0, taskId }));
+    const subject = taskSubject(newTaskId());
+    writeLeaseFile(foreignLease({ agedMs: 0, subject }));
 
     const { live, reclaimed } = await run(
       Effect.gen(function* () {
@@ -221,44 +252,44 @@ describe("reclaiming after a crash", () => {
     );
 
     expect(reclaimed).toEqual([]);
-    expect(live.map((lease) => lease.taskId)).toEqual([taskId]);
-    expect(existsSync(leaseFileOf(taskId))).toBe(true);
+    expect(live.map((lease) => lease.subject)).toEqual([subject]);
+    expect(existsSync(leaseFileOf(subject))).toBe(true);
   });
 
   test("ignores a half-written lease rather than believing it", async () => {
-    const taskId = newTaskId();
+    const subject = taskSubject(newTaskId());
     mkdirSync(leasesDirOf(dataRoot), { recursive: true });
-    writeFileSync(leaseFileOf(taskId), '{"taskId":"');
+    writeFileSync(leaseFileOf(subject), '{"subject":"');
 
     const { claimed, live } = await run(
       Effect.gen(function* () {
         const leases = yield* LeaseStore;
         const found = yield* leases.liveLeases;
-        return { claimed: yield* leases.claim({ taskId }), live: found };
+        return { claimed: yield* leases.claim({ subject }), live: found };
       })
     );
 
     expect(live).toEqual([]);
-    expect(claimed.taskId).toBe(taskId);
+    expect(claimed.subject).toEqual(subject);
   });
 });
 
 describe("heartbeating", () => {
   test("puts a lease that had drifted stale back inside the window", async () => {
-    const taskId = newTaskId();
+    const subject = taskSubject(newTaskId());
     const { afterBeat, beforeBeat, state } = await run(
       Effect.gen(function* () {
         const leases = yield* LeaseStore;
-        const claimed = yield* leases.claim({ taskId });
+        const claimed = yield* leases.claim({ subject });
         // Exactly what a loop that was starved for a minute leaves behind.
         writeLeaseFile({
           ...claimed,
           heartbeatAtMs: claimed.heartbeatAtMs - STALE_MS * 3,
         });
-        const stale = yield* leases.isLive(readLeaseFile(taskId));
-        const beat = yield* leases.heartbeat({ taskId });
+        const stale = yield* leases.isLive(readLeaseFile(subject));
+        const beat = yield* leases.heartbeat({ subject });
         return {
-          afterBeat: yield* leases.isLive(readLeaseFile(taskId)),
+          afterBeat: yield* leases.isLive(readLeaseFile(subject)),
           beforeBeat: stale,
           state: beat,
         };
@@ -271,13 +302,13 @@ describe("heartbeating", () => {
   });
 
   test("says the lease is lost once another loop has taken it", async () => {
-    const taskId = newTaskId();
+    const subject = taskSubject(newTaskId());
     const state = await run(
       Effect.gen(function* () {
         const leases = yield* LeaseStore;
-        yield* leases.claim({ taskId });
-        writeLeaseFile(foreignLease({ agedMs: 0, taskId }));
-        return yield* leases.heartbeat({ taskId });
+        yield* leases.claim({ subject });
+        writeLeaseFile(foreignLease({ agedMs: 0, subject }));
+        return yield* leases.heartbeat({ subject });
       })
     );
 
@@ -285,15 +316,15 @@ describe("heartbeating", () => {
   });
 
   test("keeps beating for as long as the work runs", async () => {
-    const taskId = newTaskId();
+    const subject = taskSubject(newTaskId());
     const beats = await run(
       Effect.gen(function* () {
         const leases = yield* LeaseStore;
-        return yield* leases.withLease({ taskId }, (lease) =>
+        return yield* leases.withLease({ subject }, (lease) =>
           // Polled on the lease's own interval rather than slept through, so a
           // heartbeat that never fires fails the test instead of passing it.
           Effect.suspend(() =>
-            Effect.succeed(readLeaseFile(taskId).heartbeatAtMs)
+            Effect.succeed(readLeaseFile(subject).heartbeatAtMs)
           ).pipe(
             Effect.filterOrFail((beat) => beat > lease.claimedAtMs),
             Effect.retry(Schedule.spaced(HEARTBEAT_MS))
@@ -308,7 +339,7 @@ describe("heartbeating", () => {
 
 describe("holding a lease around work", () => {
   test("releases the claim when the run is interrupted", async () => {
-    const taskId = newTaskId();
+    const subject = taskSubject(newTaskId());
     const { after, during } = await run(
       Effect.gen(function* () {
         const leases = yield* LeaseStore;
@@ -316,7 +347,7 @@ describe("holding a lease around work", () => {
         const never = yield* Latch.make(false);
 
         const fiber = yield* Effect.forkChild(
-          leases.withLease({ taskId }, () =>
+          leases.withLease({ subject }, () =>
             Effect.gen(function* () {
               yield* started.open;
               yield* never.await;
@@ -332,25 +363,25 @@ describe("holding a lease around work", () => {
       })
     );
 
-    expect(during.has(taskId)).toBe(true);
-    expect(after.has(taskId)).toBe(false);
-    expect(existsSync(leaseFileOf(taskId))).toBe(false);
+    expect(during.has(subjectKeyOf(subject))).toBe(true);
+    expect(after.has(subjectKeyOf(subject))).toBe(false);
+    expect(existsSync(leaseFileOf(subject))).toBe(false);
   });
 
   test("releases the claim when the work fails", async () => {
-    const taskId = newTaskId();
+    const subject = taskSubject(newTaskId());
     const held = await run(
       Effect.gen(function* () {
         const leases = yield* LeaseStore;
         yield* leases
-          .withLease({ taskId }, () => Effect.fail("the container died"))
+          .withLease({ subject }, () => Effect.fail("the container died"))
           .pipe(Effect.ignore);
         return yield* leases.held;
       })
     );
 
-    expect(held.has(taskId)).toBe(false);
-    expect(existsSync(leaseFileOf(taskId))).toBe(false);
+    expect(held.has(subjectKeyOf(subject))).toBe(false);
+    expect(existsSync(leaseFileOf(subject))).toBe(false);
   });
 });
 
@@ -410,15 +441,16 @@ describe.skipIf(databaseUrl === undefined)("reconciling lost runs", () => {
             title,
             workspaceId,
           });
+          const subject = taskSubject(task.id);
           const session = yield* sessions.open({
             provider: "claude",
-            taskId: task.id,
+            subject,
             workspaceId,
           });
           const attempt = yield* runs.create({
             agentSessionId: session.id,
             provider: "claude",
-            taskId: task.id,
+            subject,
             trigger: "status_change",
             workspaceId,
           });
@@ -444,8 +476,9 @@ describe.skipIf(databaseUrl === undefined)("reconciling lost runs", () => {
         // Every other live run in this workspace is somebody else's fixture, so
         // it is leased before the sweep and left exactly as it was found.
         for (const live of yield* runs.listLive({ workspaceId })) {
-          if (live.id !== abandoned.run.id) {
-            yield* leases.claim({ taskId: live.taskId });
+          const held = subjectOfRow(live);
+          if (live.id !== abandoned.run.id && held !== null) {
+            yield* leases.claim({ subject: held });
           }
         }
 

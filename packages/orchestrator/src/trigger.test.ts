@@ -32,6 +32,7 @@ import {
   Stream,
 } from "effect";
 import {
+  CHAT_CHANNEL,
   COMMAND_CHANNEL,
   commandSignals,
   DISPATCH_CHANNEL,
@@ -94,7 +95,7 @@ afterAll(async () => {
   await runtime.dispose();
 });
 
-test("both channels are the ones the migrations publish on", async () => {
+test("every channel this loop listens on is one the migrations publish on", async () => {
   const migrations = new Glob("*/migration.sql").scan({ cwd: MIGRATIONS_DIR });
 
   const bodies: string[] = [];
@@ -103,8 +104,12 @@ test("both channels are the ones the migrations publish on", async () => {
   }
 
   const sql = bodies.join("\n");
-  expect(sql).toContain(`pg_notify('${DISPATCH_CHANNEL}'`);
-  expect(sql).toContain(`pg_notify('${COMMAND_CHANNEL}'`);
+  // A channel spelled one way here and another way in a migration is a loop
+  // that listens forever and never wakes, which is why the constants are
+  // asserted against the SQL rather than against each other.
+  for (const channel of [DISPATCH_CHANNEL, COMMAND_CHANNEL, CHAT_CHANNEL]) {
+    expect(sql).toContain(`pg_notify('${channel}'`);
+  }
 });
 
 test("a card entering the column reaches the listener", async () => {

@@ -12,16 +12,16 @@ import {
   runOutcomeOfClass,
 } from "./errors";
 
-const taskId = newTaskId();
 const runId = newRunId();
+const subject = { id: newTaskId(), kind: "task" } as const;
 
 describe("classifyFailure", () => {
   test("names the loop's own failures", () => {
-    expect(classifyFailure(new AlreadyLive({ runId, taskId }))).toBe(
+    expect(classifyFailure(new AlreadyLive({ runId, subject }))).toBe(
       "AlreadyLive"
     );
     expect(
-      classifyFailure(new LeaseLost({ detail: "expired", runId, taskId }))
+      classifyFailure(new LeaseLost({ detail: "expired", runId, subject }))
     ).toBe("LeaseLost");
   });
 
@@ -78,7 +78,7 @@ describe("runOutcomeOfClass", () => {
 describe("describeFailure", () => {
   test("gives a crash comment its class, its message and its outcome", () => {
     expect(
-      describeFailure(new LeaseLost({ detail: "reclaimed", runId, taskId }))
+      describeFailure(new LeaseLost({ detail: "reclaimed", runId, subject }))
     ).toEqual({
       errorClass: "LeaseLost",
       errorMessage: "reclaimed",
@@ -100,7 +100,7 @@ describe("describeFailure", () => {
 
 describe("errorClassOf", () => {
   test("maps a typed failure to the name that lands on the row", () => {
-    expect(errorClassOf(new AlreadyLive({ runId: null, taskId }))).toBe(
+    expect(errorClassOf(new AlreadyLive({ runId: null, subject }))).toBe(
       "AlreadyLive"
     );
   });

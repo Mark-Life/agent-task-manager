@@ -58,6 +58,7 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import process from "node:process";
 
@@ -110,10 +111,24 @@ process.env.SANDBOX_MODE = CONTAINED ? "docker" : "local";
 process.env.ORCHESTRATOR_MAX_CONCURRENCY = "1";
 process.env.ORCHESTRATOR_POLL_INTERVAL_MS = "1000";
 process.env.ORCHESTRATOR_LEASE_HEARTBEAT_MS = "1000";
+// The host's system-owned login for each provider, pointed at this check's own
+// root rather than the operator's. Created here because nothing on the run path
+// creates one: an auto-made empty home boots a container that reports an auth
+// error nobody can tell from an expired token, so the loop refuses instead.
+for (const [variable, segment] of [
+  ["ATM_AGENT_HOME_DIR_CLAUDE", "claude"],
+  ["ATM_AGENT_HOME_DIR_CODEX", "codex"],
+] as const) {
+  const home = join(CHECK_ROOT, "agent-home", segment);
+  mkdirSync(home, { recursive: true });
+  process.env[variable] = home;
+}
 
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import {
   ArtifactRepo,
+  ChatMessageRepo,
+  ChatThreadRepo,
   CommentRepo,
   CurrentActor,
   RunEventRepo,
@@ -124,10 +139,12 @@ import {
 } from "@workspace/db";
 import {
   Actor,
+  type ChatThread,
   type Run,
   type SessionProvider,
   type Task,
   type TaskId,
+  type ThreadId,
   UserId,
   type WorkspaceId,
 } from "@workspace/domain";
@@ -282,6 +299,10 @@ const appLayer = (registry: RegistryMode) =>
 const runsFor = (input: { taskId: TaskId; workspaceId: WorkspaceId }) =>
   Effect.flatMap(RunRepo, (runs) => runs.listByTask(input));
 
+/** The turns this check's conversation produced, newest first. */
+const turnsFor = (input: { threadId: ThreadId; workspaceId: WorkspaceId }) =>
+  Effect.flatMap(RunRepo, (runs) => runs.listByThread(input));
+
 /** Reads the task back until it lands where it is expected, or gives up. */
 const awaitStatus = (input: {
   readonly status: Task["status"];
@@ -368,6 +389,102 @@ const fileTask = (input: { title: string; workspaceId: WorkspaceId }) =>
       })
     )
   );
+
+/**
+ * A conversation with one thing said in it and nothing said back.
+ *
+ * No Telegram chat id: a thread opened here is the same row a dashboard would
+ * open, which is the point — one conversation, reachable from either window.
+ */
+const openThread = (workspaceId: WorkspaceId) =>
+  Effect.gen(function* () {
+    const threads = yield* ChatThreadRepo;
+    const messages = yield* ChatMessageRepo;
+    const thread = yield* threads.open({
+      provider: "claude",
+      title: "loop:check — a message becomes a turn",
+      userId: CHECK_USER,
+      workspaceId,
+    });
+    yield* messages.append({
+      body: "What is left on the board this week?",
+      intakeKind: "api",
+      role: "user",
+      threadId: thread.id,
+      workspaceId,
+    });
+    return thread;
+  });
+
+/**
+ * The chat half: a message in a conversation is claimed, run and answered by
+ * the same loop, through the same lease, pool, quota gate and run row a task
+ * gets.
+ *
+ * The claims are deliberately the ones that are *not* about chat: a run row
+ * with a role on it, a lease, two `atm.run` rows. If a manager turn needed any
+ * of them written specially, this is where that would show.
+ */
+const chatPath = (input: {
+  readonly thread: ChatThread;
+  readonly workspaceId: WorkspaceId;
+}) =>
+  Effect.gen(function* () {
+    const ledger = yield* EventLog;
+    const messages = yield* ChatMessageRepo;
+    const { thread, workspaceId } = input;
+
+    const answered = yield* turnsFor({ threadId: thread.id, workspaceId }).pipe(
+      Effect.filterOrFail(
+        (turns) =>
+          turns[0]?.outcome !== undefined && turns[0]?.outcome !== null,
+        () => "not yet"
+      ),
+      Effect.retry(Schedule.spaced(POLL)),
+      Effect.timeoutOrElse({
+        duration: REVIEW_TIMEOUT,
+        orElse: () =>
+          Effect.fail(
+            new CheckFailed({
+              detail: "no turn on the thread ever closed",
+              step: "a message in a conversation becomes a run",
+            })
+          ),
+      })
+    );
+
+    const turn = answered[0] as Run;
+    yield* check({
+      detail: `the turn closed as ${turn.outcome}, role ${turn.role}, thread ${turn.threadId}`,
+      ok:
+        turn.outcome === "done" &&
+        turn.role === "manager" &&
+        turn.taskId === null &&
+        turn.threadId === thread.id,
+      step: "a message in a conversation becomes a manager run with no task",
+    });
+
+    const said = yield* messages.listForThread({
+      threadId: thread.id,
+      workspaceId,
+    });
+    const answer = said.find((message) => message.role === "manager");
+    yield* check({
+      detail: `the thread holds ${said.length} messages; the answer names run ${answer?.runId ?? "nothing"}`,
+      ok: answer !== undefined && answer.runId === turn.id,
+      step: "the answer is a row in the conversation, carrying the run that produced it",
+    });
+
+    const rows = runRows({ path: ledger.path, runId: turn.id });
+    yield* check({
+      detail: `found ${rows.filter((row) => row.phase === "start").length} start rows and ${rows.filter((row) => row.phase === "end").length} end rows, lane ${rows[0]?.lane}`,
+      ok:
+        rows.filter((row) => row.phase === "start").length === 1 &&
+        rows.filter((row) => row.phase === "end").length === 1 &&
+        rows.every((row) => row.role === "manager" && row.lane === "chat"),
+      step: "a chat turn leaves the same two atm.run rows a worker run does, in the chat lane",
+    });
+  });
 
 /**
  * The half of the check that is meant to die.
@@ -496,17 +613,18 @@ const happyPath = (workspaceId: WorkspaceId) =>
       detail: `${left.transcriptPath} holds ${left.transcript?.length ?? 0} characters`,
       // Same distinction: the stub's transcript carries a sentence this file
       // knows, while a real one carries the turn that happened. What is being
-      // proved either way is that the file outlived the agent home it was
-      // written in, so live asks that it is there and not empty.
+      // proved either way is that this run's own conversation was found in a
+      // shared tree every run on the host writes into, and copied where a
+      // re-ingest weeks later can still read it.
       ok: ANSWERED_LIVE
         ? (left.transcript?.length ?? 0) > 0
         : left.transcript?.includes(STUB_TRANSCRIPT_TEXT) === true,
-      step: "the transcript the provider wrote is in the run directory, after the agent home holding it is gone",
+      step: "the run's own transcript is copied out of the shared agent home into its run directory",
     });
     yield* check({
       detail: `the run directory holds ${left.entries.length} files: ${left.entries.join(", ")}`,
       ok: left.credentials.length === 0,
-      step: "no credential came out of the agent home with it",
+      step: "nothing of the operator's login came out of the shared home with it",
     });
 
     const rows = runRows({ path: ledger.path, runId: run.id });
@@ -628,6 +746,19 @@ const crashPath = (workspaceId: WorkspaceId) =>
     return task.id;
   }).pipe(Effect.scoped);
 
+/**
+ * Archives the conversation this check opened. Archived rather than deleted:
+ * the runs and the audit rows behind it point at the thread, which is exactly
+ * why the API has no delete for one either.
+ */
+const closeThread = (input: {
+  readonly threadId: ThreadId;
+  readonly workspaceId: WorkspaceId;
+}) =>
+  Effect.flatMap(ChatThreadRepo, (threads) =>
+    threads.archive({ id: input.threadId, workspaceId: input.workspaceId })
+  ).pipe(Effect.ignoreCause);
+
 /** Deletes the tasks this check filed. Everything hanging off them cascades. */
 const cleanUp = (input: {
   readonly taskIds: readonly TaskId[];
@@ -673,7 +804,21 @@ const loopCheck = Effect.gen(function* () {
   const { workspace } = yield* ensureWorkspace();
   const filed: TaskId[] = [];
 
-  const happy = yield* happyPath(workspace.id).pipe(Effect.scoped);
+  // Opened before the loop starts, so the sweep that answers the task finds
+  // this waiting too: the two lanes are what stop either from waiting on the
+  // other, and running them together is the only way to see that.
+  const thread = yield* openThread(workspace.id);
+
+  // Both halves inside one scope, because the loop is forked into it: the chat
+  // turn is claimed by the same running loop that just answered the task, which
+  // is the only way to see the two lanes not waiting on each other.
+  const happy = yield* Effect.scoped(
+    Effect.gen(function* () {
+      const dispatched = yield* happyPath(workspace.id);
+      yield* chatPath({ thread, workspaceId: workspace.id });
+      return dispatched;
+    })
+  );
   filed.push(happy);
 
   // Skipped in the contained mode, for the reason the module note gives: a
@@ -686,6 +831,7 @@ const loopCheck = Effect.gen(function* () {
   }
 
   yield* cleanUp({ taskIds: filed, workspaceId: workspace.id });
+  yield* closeThread({ threadId: thread.id, workspaceId: workspace.id });
   // The ledger sits under this check's own data root, so the viewer has to be
   // pointed at it — printing the exact command is what makes the two rows this
   // check just wrote readable by the operator rather than only by the check.

@@ -34,6 +34,7 @@ import { DateTime, Effect, Layer, ManagedRuntime, Schema } from "effect";
 import { attemptAfter, Dispatch, isParked, type Skipped } from "./dispatch";
 import { type DispatchContext, resumeSessionIdOf } from "./dispatch-context";
 import { openRun } from "./open-run";
+import { workerAttachment } from "./subject";
 
 /** Reported as `application_name`, so `pg_stat_activity` names this process. */
 const APPLICATION_NAME = "orchestrator-dispatch-test";
@@ -103,11 +104,19 @@ const fileTask = (title: string) =>
 const claim = (task: Task) =>
   Effect.gen(function* () {
     const dispatch = yield* Dispatch;
-    const decision = yield* dispatch.plan({ task });
+    const decision = yield* dispatch.plan({ attached: workerAttachment(task) });
     return decision.kind === "skipped"
       ? decision
       : yield* openRun(decision.claim);
   });
+
+/** The task a claimed context is attached to, which every case here is. */
+const taskOf = (context: DispatchContext) => {
+  if (context.attached.role !== "worker") {
+    throw new Error("this claim is a worker run");
+  }
+  return context.attached.task;
+};
 
 /** The context of a claim, or a failure naming the reason it was skipped. */
 const claimedOf = (decision: DispatchContext | Skipped) => {
@@ -197,7 +206,7 @@ describe("Dispatch.plan", () => {
     expect(result.decision).toEqual({
       kind: "skipped",
       reason: "parked",
-      taskId: result.taskId,
+      subject: { id: result.taskId, kind: "task" },
     });
     expect(result.queued).not.toContain(result.taskId);
   });
@@ -220,7 +229,7 @@ describe("Dispatch.plan", () => {
     expect(result.decision).toEqual({
       kind: "skipped",
       reason: "live_run",
-      taskId: result.taskId,
+      subject: { id: result.taskId, kind: "task" },
     });
     expect(result.queued).not.toContain(result.taskId);
   });
@@ -253,7 +262,11 @@ describe("Dispatch.plan", () => {
         const task = yield* fileTask("dispatch: pinned session");
 
         const opened = yield* asLoop(
-          sessions.open({ provider: "codex", taskId: task.id, workspaceId })
+          sessions.open({
+            provider: "codex",
+            subject: { id: task.id, kind: "task" },
+            workspaceId,
+          })
         );
         yield* asLoop(
           sessions.recordProviderSession({
@@ -286,7 +299,7 @@ describe("Dispatch.plan", () => {
     expect(result.claimed.session.session.id).toBe(result.sessionId);
     expect(resumeSessionIdOf(result.claimed)).toBe("codex-rollout-1");
     expect(result.claimed.provider).toBe("codex");
-    expect(result.claimed.task.nextSessionId).toBeNull();
+    expect(taskOf(result.claimed).nextSessionId).toBeNull();
     expect(result.stored.nextSessionId).toBeNull();
     expect(result.stored.nextSessionNew).toBe(false);
   });
@@ -299,7 +312,11 @@ describe("Dispatch.plan", () => {
         const task = yield* fileTask("dispatch: fresh session");
 
         const earlier = yield* asLoop(
-          sessions.open({ provider: "claude", taskId: task.id, workspaceId })
+          sessions.open({
+            provider: "claude",
+            subject: { id: task.id, kind: "task" },
+            workspaceId,
+          })
         );
         yield* asLoop(
           sessions.recordProviderSession({

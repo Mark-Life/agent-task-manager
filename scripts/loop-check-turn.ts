@@ -34,6 +34,7 @@ import { BunFileSystem, BunRuntime } from "@effect/platform-bun";
 import {
   makeProviderRegistry,
   ProviderRegistry,
+  type RunOptions,
   STOP_HOOK_FLAG,
   TURN_LEDGER_SERVICE,
 } from "@workspace/harness";
@@ -69,8 +70,13 @@ const teardown: Teardown = (exit, onExit) => {
   onExit(exit._tag === "Success" ? 0 : 1);
 };
 
-/** The one artifacts folder a contained run may write, from the mount set. */
-const artifactsDir = () => CONTAINER_ARTIFACT_DIR.task;
+/**
+ * The one artifacts folder a contained run may write, from the mount set — and
+ * null for a turn that has no task, which is mounted no such folder. Writing
+ * there anyway is a permission error the person reads as the model failing.
+ */
+const artifactsDir = (options: RunOptions) =>
+  options.taskId === null ? null : CONTAINER_ARTIFACT_DIR.task;
 
 const stubRegistry = makeProviderRegistry({
   claude: instrumented(stubProvider({ artifactsDir, id: "claude" })),

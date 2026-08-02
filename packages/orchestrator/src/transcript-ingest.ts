@@ -69,7 +69,7 @@ import { FileSystem } from "effect/FileSystem";
 import {
   type DispatchContext,
   sessionIdOf,
-  taskIdOf,
+  subjectOf,
   workspaceIdOf,
 } from "./dispatch-context";
 import { IngestFailed } from "./errors";
@@ -216,11 +216,19 @@ export const toTranscriptDrafts = (
 
 /** Which run's transcript, and which conversation to narrow the scan to. */
 export interface TranscriptIngestInput {
+  /**
+   * The host's shared login directory for this run's provider, which is where
+   * the vendor writes every conversation on the box.
+   */
+  readonly agentHomeDir: string;
   readonly context: DispatchContext;
   /**
-   * The id the run's terminus reported, when it reported one. Null takes the
-   * most recently written transcript under the run's directory, which is the
-   * right answer for a run with one session and a crash before it named itself.
+   * The id the run's terminus reported, or null where it never named one.
+   *
+   * Null means there is nothing to read, and that is the whole safety property:
+   * every run on the host writes into one shared tree, so a fallback to the
+   * newest file by mtime would hand this run a neighbour's conversation —
+   * silently, and onward into the durable per-run copy everything else reads.
    */
   readonly providerSessionId: string | null;
 }
@@ -249,12 +257,17 @@ const NOTHING_TO_PRESERVE: PreserveTranscriptReport = {
 };
 
 /**
- * Copies the run's transcript out of its agent home and into its run directory.
+ * Copies the run's transcript out of the shared agent home and into its run
+ * directory.
  *
- * Called while the run's scope is still open, because the agent home only
- * exists until it closes. One file and one file only: the home also holds the
- * copied credential that is the reason it is torn down, and a directory copy
- * would carry that out with the conversation.
+ * The home is not going anywhere — it is the host's own login, shared by every
+ * run — so this is no longer a rescue. It is what bounds how much of that
+ * shared tree has to be kept: the durable copy is the run's record, and it is
+ * what makes a re-ingest weeks later read exactly the bytes the first one did.
+ *
+ * One file and one file only, named by the session this run actually held. A
+ * directory copy would carry out every other run's conversation and the
+ * operator's own credential with it.
  *
  * Overwrites rather than skipping an existing copy. A second pass over the same
  * run reads the same provider file and writes the same bytes, so the operation
@@ -270,10 +283,14 @@ export const preserveTranscript = Effect.fn("Ingest.preserveTranscript")(
       runId: context.runId,
     });
 
+    const { providerSessionId } = input;
+    if (providerSessionId === null) {
+      return NOTHING_TO_PRESERVE;
+    }
     const source = yield* findTranscript({
-      layout: context.layout,
+      agentHomeDir: input.agentHomeDir,
       provider: context.provider,
-      providerSessionId: input.providerSessionId,
+      providerSessionId,
     }).pipe(
       Effect.catchTag("Harness.TranscriptNotFound", () => Effect.succeed(null)),
       failingRun(context)
@@ -307,13 +324,20 @@ const readRunTranscript = Effect.fnUntraced(function* (
   const preserved = yield* fs
     .exists(durable)
     .pipe(Effect.orElseSucceed(() => false));
-  return preserved
-    ? yield* readTranscriptAt(durable, context.provider)
-    : yield* readTranscript({
-        layout: context.layout,
-        provider: context.provider,
-        providerSessionId: input.providerSessionId,
-      });
+  if (preserved) {
+    return yield* readTranscriptAt(durable, context.provider);
+  }
+  // No copy and no session id is a run that ended before the provider named
+  // its conversation. There is nothing to read, and reading the newest file in
+  // a tree every run writes into would be reading somebody else's.
+  if (input.providerSessionId === null) {
+    return null;
+  }
+  return yield* readTranscript({
+    agentHomeDir: input.agentHomeDir,
+    provider: context.provider,
+    providerSessionId: input.providerSessionId,
+  });
 });
 
 /** What one pass over a run's transcript did. */
@@ -457,7 +481,7 @@ export const ingestTranscript = Effect.fn("Ingest.transcript")(function* (
         payload: draft.payload,
         runId: context.runId,
         seq: draft.seq,
-        taskId: taskIdOf(context),
+        subject: subjectOf(context),
         workspaceId: workspaceIdOf(context),
       }))
     )

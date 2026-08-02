@@ -145,10 +145,14 @@ export interface RateLimitNotice {
   readonly status: RateLimitStatus | null;
 }
 
-/** One task asking whether it has already been told about this pause. */
+/**
+ * One piece of work asking whether it has already been told about this pause.
+ * Keyed by `./subject`'s subject key rather than by a task id, because a chat
+ * turn is deferred by the same drained subscription and has no task to name.
+ */
 export interface AnnounceRequest {
   readonly provider: SessionProvider;
-  readonly taskId: string;
+  readonly subjectKey: string;
 }
 
 /**
@@ -556,8 +560,9 @@ const makeGate = (options: QuotaGateOptions) =>
     });
 
     /**
-     * True the first time a task is offered during the current pause episode, so
-     * the loud surface says it once per task per drain rather than once per pass.
+     * True the first time a subject is offered during the current pause
+     * episode, so the loud surface says it once per subject per drain rather
+     * than once per pass.
      */
     const announceOnce = (request: AnnounceRequest) => {
       const state = states.get(request.provider);
@@ -565,9 +570,9 @@ const makeGate = (options: QuotaGateOptions) =>
         return Effect.succeed(false);
       }
       return Ref.modify(state.announced, (seen) =>
-        seen.has(request.taskId)
+        seen.has(request.subjectKey)
           ? ([false, seen] as const)
-          : ([true, new Set([...seen, request.taskId])] as const)
+          : ([true, new Set([...seen, request.subjectKey])] as const)
       );
     };
 

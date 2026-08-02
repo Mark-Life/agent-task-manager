@@ -43,6 +43,7 @@ import {
   type RunProgress,
   withRunEvent,
 } from "./run-telemetry";
+import { workerAttachment } from "./subject";
 
 const SERVICE = "run-telemetry-test";
 
@@ -154,8 +155,6 @@ const task: Task = {
 };
 
 const session: AgentSession = {
-  commentWatermarkAt: null,
-  commentWatermarkId: null,
   createdAt: at,
   endedAt: null,
   errorMessage: null,
@@ -164,12 +163,16 @@ const session: AgentSession = {
   providerSessionId: "provider-sess-1",
   status: "finished",
   taskId,
+  threadId: null,
+  unreadWatermarkAt: null,
+  unreadWatermarkId: null,
   updatedAt: at,
   workspaceId,
 };
 
 const dispatch: DispatchContext = {
   actor: { kind: "orchestrator", loopInstance: "loop-1", runId },
+  attached: workerAttachment(task),
   attempt: 2,
   image: "atm.local/base:2026-08-01",
   layout: hostRunLayout({ dataRoot: ".data", runId }),
@@ -185,7 +188,6 @@ const dispatch: DispatchContext = {
     session,
   },
   spanId: "span-1",
-  task,
   traceId: "trace-1",
   traceparent: "00-trace-1-span-1-01",
   trigger: "status_change",
@@ -193,9 +195,11 @@ const dispatch: DispatchContext = {
 
 const settings: RunEventSettings = {
   maxAttempts: 5,
-  maxConcurrency: 2,
   sandboxKind: "docker",
 };
+
+/** The work lane's cap, which is what a worker run's row reports. */
+const WORK_CAPACITY = 2;
 
 const finished: RunFinished = {
   costUsd: CostUsd.make("0.420000"),
@@ -257,6 +261,8 @@ const oneRun = <A, E>(
     });
     const context: RunEventContext = {
       dispatch,
+      lane: "work",
+      laneCapacity: WORK_CAPACITY,
       poolDepth,
       progress,
       settings,
@@ -450,7 +456,14 @@ describe("withRunEvent", () => {
   });
 
   test("a dispatch the loop declined is skipped, not errored", async () => {
-    await run(oneRun([], Effect.fail(new AlreadyLive({ runId, taskId }))));
+    await run(
+      oneRun(
+        [],
+        Effect.fail(
+          new AlreadyLive({ runId, subject: { id: taskId, kind: "task" } })
+        )
+      )
+    );
 
     const end = endRow();
     expect(end.outcome).toBe("skipped");
@@ -466,7 +479,7 @@ describe("withRunEvent", () => {
           new DispatchFailed({
             cause: null,
             detail: "clone  failed: Authorization: Bearer abc.def-123",
-            taskId,
+            subject: { id: taskId, kind: "task" },
           })
         )
       )
@@ -483,7 +496,11 @@ describe("withRunEvent", () => {
       oneRun(
         [{ terminus: finished }],
         Effect.fail(
-          new DispatchFailed({ cause: null, detail: "ingest died", taskId })
+          new DispatchFailed({
+            cause: null,
+            detail: "ingest died",
+            subject: { id: taskId, kind: "task" },
+          })
         )
       )
     );
@@ -555,11 +572,16 @@ describe("the metrics derived from the run event", () => {
     expect(measured.delta).toBe(1);
     for (const keys of attributeKeys(measured.series)) {
       // pins the tag boundary: an unbounded tag added later fails here
-      expect(keys).toEqual(["kind", "outcome", "provider"]);
+      expect(keys).toEqual(["kind", "outcome", "provider", "role"]);
     }
     expect(
       measured.series.map((metric) => metric.attributes ?? {})
-    ).toContainEqual({ kind: "docker", outcome: "done", provider: "claude" });
+    ).toContainEqual({
+      kind: "docker",
+      outcome: "done",
+      provider: "claude",
+      role: "worker",
+    });
   });
 
   test("atm_retries_total counts the attempts that stamped a backoff", async () => {
@@ -589,7 +611,12 @@ describe("the metrics derived from the run event", () => {
   test("atm_quota_pause_total counts the dispatches an allowance refused", async () => {
     const measured = await measure(
       "atm_quota_pause_total",
-      oneRun([], Effect.fail(new AlreadyLive({ runId, taskId })))
+      oneRun(
+        [],
+        Effect.fail(
+          new AlreadyLive({ runId, subject: { id: taskId, kind: "task" } })
+        )
+      )
     );
 
     // a skip that was not about quota leaves this counter alone

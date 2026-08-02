@@ -36,25 +36,23 @@
  * always won, and the informative ending would never be the one recorded.
  */
 
-import process from "node:process";
 import {
   AgentEventRecord,
-  agentHomeOf,
   CONTAINER_ENTRYPOINT_COMMAND,
   containerEntrypointArgs,
   containerRunLayout,
-  entrypointBundlePathOf,
   TurnResult,
   TurnSpec,
   turnResultPathOf,
   turnSpecPathOf,
 } from "@workspace/harness";
 import {
+  CONTAINER_AGENT_HOME_DIR,
   CONTAINER_WORKSPACE_DIR,
   defaultHardening,
-  mountsFor,
+  hostUser,
+  type Mount,
   type OutputChunk,
-  type RunWorkspace,
   Sandbox,
   type SandboxSpec,
 } from "@workspace/sandbox";
@@ -91,22 +89,6 @@ const CAP_HEADROOM_DIVISOR = 10;
 export const innerCapMs = (capMs: number) =>
   capMs - Math.min(CAP_HEADROOM_MS, Math.ceil(capMs / CAP_HEADROOM_DIVISOR));
 
-/**
- * The user the container runs as, `uid:gid`.
- *
- * The host's own, not the image's `1000:1000`. A bind mount carries host
- * ownership straight through — the kernel compares numbers, not names — so the
- * container has to be whoever owns the data root, and that is by construction
- * the process that just created the run directory. On a host whose operator is
- * uid 1000 this is the image's own user; on every mac it is not, and the
- * alternative there is a container that boots fine and cannot write its own
- * agent home.
- */
-const hostUser = () =>
-  process.getuid === undefined || process.getgid === undefined
-    ? defaultHardening.user
-    : `${process.getuid()}:${process.getgid()}`;
-
 /** Encoder for the spec the container reads off the mount, built once. */
 const encodeSpec = Schema.encodeEffect(TurnSpec);
 
@@ -120,13 +102,20 @@ export interface ContainerRecord {
 /** What running one turn in a container needs. */
 export interface ContainerTurnInput<R> {
   readonly context: DispatchContext;
-  /** Where on-disk state lives; the entrypoint bundle is a sibling of the runs. */
-  readonly dataRoot: string;
   /**
    * Environment on top of the run's own ids, which the sandbox merges in and
    * which win. Never the host's OTLP token — the sandbox strips those anyway.
    */
   readonly env: Readonly<Record<string, string>>;
+  /**
+   * The exact directories this container sees, already decided.
+   *
+   * Handed in rather than built here, and that is the seam that keeps this file
+   * role-agnostic: what a run may reach is a property of what it is attached to
+   * — a task has a checkout and an artifacts folder, a conversation has neither
+   * — and deciding it here would be a role check inside the shared turn.
+   */
+  readonly mounts: readonly Mount[];
   /**
    * Called once per readable line of the event file, in file order, while the
    * container is still running. Total by contract: a recorder that could fail
@@ -138,7 +127,6 @@ export interface ContainerTurnInput<R> {
   readonly prompt: string;
   /** The loop's own deadline. The container's and the turn's are set below it. */
   readonly timeoutMs: number;
-  readonly workspace: RunWorkspace;
 }
 
 /** The spec one turn runs under, in the container's own view of the world. */
@@ -150,7 +138,7 @@ export const specFor = (input: {
   const { context } = input;
   const identity = runIdentityOf(context);
   return {
-    agentHomeDir: agentHomeOf(containerRunLayout, context.provider),
+    agentHomeDir: CONTAINER_AGENT_HOME_DIR,
     effort: null,
     eventLogPath: containerRunLayout.eventLogPath,
     identity: {
@@ -172,10 +160,9 @@ export const specFor = (input: {
 /** The container one turn runs in, over the directories the run was given. */
 export const sandboxSpecFor = (input: {
   readonly context: DispatchContext;
-  readonly dataRoot: string;
   readonly env: Readonly<Record<string, string>>;
+  readonly mounts: readonly Mount[];
   readonly timeoutMs: number;
-  readonly workspace: RunWorkspace;
 }): SandboxSpec => ({
   args: [...containerEntrypointArgs()],
   command: CONTAINER_ENTRYPOINT_COMMAND,
@@ -183,9 +170,7 @@ export const sandboxSpecFor = (input: {
   hardening: { ...defaultHardening, user: hostUser() },
   identity: runIdentityOf(input.context),
   image: input.context.image,
-  mounts: mountsFor(input.workspace, {
-    entrypointPath: entrypointBundlePathOf(input.dataRoot),
-  }),
+  mounts: input.mounts,
   timeoutMs: input.timeoutMs,
   workingDir: CONTAINER_WORKSPACE_DIR,
 });
@@ -369,10 +354,9 @@ export const containerTurn = <R>(input: ContainerTurnInput<R>) =>
           onOutput,
           spec: sandboxSpecFor({
             context,
-            dataRoot: input.dataRoot,
             env: input.env,
+            mounts: input.mounts,
             timeoutMs: containerCapMs,
-            workspace: input.workspace,
           }),
         });
       })

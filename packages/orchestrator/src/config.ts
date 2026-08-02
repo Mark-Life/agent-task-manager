@@ -17,7 +17,11 @@
  * the harness and the sandbox read back.
  */
 
-import { SessionProvider } from "@workspace/domain";
+import { SESSION_PROVIDERS, SessionProvider } from "@workspace/domain";
+import {
+  AGENT_HOME_DIR_ENV_VAR,
+  defaultAgentHomeDirOf,
+} from "@workspace/harness";
 import { sandboxKindConfig } from "@workspace/sandbox";
 import { Config, Effect } from "effect";
 
@@ -37,6 +41,20 @@ import { Config, Effect } from "effect";
  * container.
  */
 const DEFAULT_MAX_CONCURRENCY = 2;
+
+/**
+ * How many chat turns may hold a container at once, on top of the work lane.
+ *
+ * One. A person has one conversation in flight, and a second chat container
+ * buys latency nobody is waiting on. It is a lane of its own rather than a
+ * share of the work cap because the failure it exists to prevent is a chat
+ * starved behind two hour-long worker runs, and a reservation only guarantees
+ * that when the reserved count is a separate count.
+ *
+ * The box's cap is the sum: three containers of four cores, stated as one
+ * number in two parts.
+ */
+const DEFAULT_MAX_CHAT_CONCURRENCY = 1;
 
 /**
  * How often the dispatcher looks for work regardless of notifications.
@@ -90,6 +108,20 @@ const DEFAULT_PARK_MS = 86_400_000;
  */
 const DEFAULT_RUN_TIMEOUT_MS = 3_600_000;
 
+/**
+ * The wall-clock cap on one chat turn. Ten minutes: a person is waiting on it,
+ * and a conversation that has been silent that long has already failed as a
+ * conversation whatever the model is still doing.
+ */
+const DEFAULT_CHAT_TIMEOUT_MS = 600_000;
+
+/**
+ * How long a turn's board credential lives. Fifteen minutes — a turn is seconds
+ * to minutes, nothing can recall a token, and the defence is that it expires
+ * before it is worth stealing.
+ */
+const DEFAULT_AGENT_TOKEN_TTL_MS = 900_000;
+
 /** The provider a task takes when neither it nor a resumed session names one. */
 const DEFAULT_PROVIDER: SessionProvider = "claude";
 
@@ -141,6 +173,37 @@ export const orchestratorConfig = Effect.gen(function* () {
     Config.withDefault(DEFAULT_RUN_TIMEOUT_MS)
   );
 
+  const maxChatConcurrency = yield* Config.int(
+    "ORCHESTRATOR_MAX_CHAT_CONCURRENCY"
+  ).pipe(Config.withDefault(DEFAULT_MAX_CHAT_CONCURRENCY));
+
+  const chatTimeoutMs = yield* Config.int("ORCHESTRATOR_CHAT_TIMEOUT_MS").pipe(
+    Config.withDefault(DEFAULT_CHAT_TIMEOUT_MS)
+  );
+
+  const agentTokenTtlMs = yield* Config.int(
+    "ORCHESTRATOR_AGENT_TOKEN_TTL_MS"
+  ).pipe(Config.withDefault(DEFAULT_AGENT_TOKEN_TTL_MS));
+
+  // The gateway as a **container** sees it, which is rarely `localhost`. Absent
+  // is a legal install: every turn then runs with no board tools, which the
+  // banner says once at boot rather than every run discovering it.
+  const gatewayUrl = yield* Config.string("ORCHESTRATOR_GATEWAY_URL").pipe(
+    Config.withDefault(null)
+  );
+
+  // One system-owned login directory per provider, mounted read-write into
+  // every container and never copied. Read here and nowhere else, so the two
+  // spellings a vendor uses stay in `@workspace/harness`.
+  const agentHomeDirs = Object.fromEntries(
+    yield* Effect.forEach(SESSION_PROVIDERS, (provider) =>
+      Config.string(AGENT_HOME_DIR_ENV_VAR[provider]).pipe(
+        Config.withDefault(defaultAgentHomeDirOf(provider)),
+        Effect.map((dir) => [provider, dir] as const)
+      )
+    )
+  ) as Record<SessionProvider, string>;
+
   // Decoded through the domain's own union, so a typo is a startup failure
   // naming the legal values rather than a dispatch that picks a harness nobody
   // asked for.
@@ -156,11 +219,16 @@ export const orchestratorConfig = Effect.gen(function* () {
   const sandboxKind = yield* sandboxKindConfig;
 
   return {
+    agentHomeDirs,
+    agentTokenTtlMs,
+    chatTimeoutMs,
     dataRoot,
     defaultProvider,
+    gatewayUrl,
     leaseHeartbeatMs,
     leaseStaleMs,
     maxAttempts,
+    maxChatConcurrency,
     maxConcurrency,
     parkMs,
     pollIntervalMs,

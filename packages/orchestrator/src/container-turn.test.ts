@@ -40,9 +40,9 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -96,6 +96,7 @@ import { DateTime, Effect, Layer, Schedule, Schema, Stream } from "effect";
 import { ingestRunEvents, ingestTurnLedger } from "./ingest";
 import { openRun, type RunClaim } from "./open-run";
 import { performRun, runOpened } from "./run";
+import { workerAttachment } from "./subject";
 import { loadRootEnv } from "./testing/root-env";
 import {
   ingestTranscript,
@@ -196,6 +197,18 @@ const SILENT_EXIT_CODE = 4;
 const dataRoot = mkdtempSync(join(tmpdir(), "atm-container-test-"));
 process.env.DATA_ROOT = dataRoot;
 process.env.EVENT_LOG_DIR = join(dataRoot, "events");
+
+/**
+ * The host's system-owned login for the provider, mounted read-write into
+ * every container and never copied. Created here because nothing on the run
+ * path creates it: an auto-made empty home boots a container that reports an
+ * auth error nobody can tell from an expired token.
+ */
+const agentHomeDir = join(dataRoot, "agent-home", "claude");
+mkdirSync(agentHomeDir, { recursive: true });
+
+/** What a provider's config directory holds that must never reach a run directory. */
+const CREDENTIAL_NAMES = [".credentials.json", ".claude.json", "auth.json"];
 
 /** Whether there is a daemon holding the image these runs need. */
 const imageReady = () => {
@@ -519,6 +532,7 @@ const seedTask = (input: { readonly owner: UserId; readonly title: string }) =>
   });
 
 const claimOf = (task: Task): RunClaim => ({
+  attached: workerAttachment(task),
   attempt: 1,
   dataRoot,
   defaultProvider: "claude",
@@ -526,11 +540,19 @@ const claimOf = (task: Task): RunClaim => ({
   project: null,
   queueWaitMs: 0,
   spanId: null,
-  task,
   traceId: null,
   traceparent: null,
   trigger: "status_change",
 });
+
+/** What every run in this file is given beside its claim. */
+const RUN_SETTINGS = {
+  agentHomeDir,
+  // No gateway, so no board tools and no token: what is under test here is the
+  // container, and the credential has its own claims in `./agent-token`.
+  gatewayUrl: null,
+  tokenTtlMs: 900_000,
+} as const;
 
 /**
  * Waits until the container's first rows are in `run_events` with the run still
@@ -624,6 +646,7 @@ test.skipIf(!containerized)(
         const [outcome] = yield* Effect.all(
           [
             performRun({
+              ...RUN_SETTINGS,
               claim: claimOf(task),
               sandboxKind: "docker",
               timeoutMs: RUN_TIMEOUT_MS,
@@ -713,6 +736,7 @@ test.skipIf(!containerized)(
         const { owner } = yield* ensureWorkspace;
         const task = yield* seedTask({ owner, title: "silent container" });
         const outcome = yield* performRun({
+          ...RUN_SETTINGS,
           claim: claimOf(task),
           sandboxKind: "docker",
           timeoutMs: RUN_TIMEOUT_MS,
@@ -754,7 +778,7 @@ test.skipIf(!containerized)(
 );
 
 test.skipIf(!containerized)(
-  "the container is given the executor credentials and none of the host's export, and its transcript is read before the agent home goes",
+  "the container is given the executor credentials and none of the host's export, and its transcript is copied out of the shared home",
   async () => {
     writeStubEntrypoint({
       after: [],
@@ -764,7 +788,10 @@ test.skipIf(!containerized)(
       envReport: true,
       exitCode: 0,
       handshake: false,
-      result: null,
+      // The result file is the container's last word, and the only thing that
+      // names the conversation when the stream said nothing. Reading the id off
+      // it is what lets the transcript be found in a tree every run writes into.
+      result: { ...DONE_RESULT, providerSessionId: TRANSCRIPT_SESSION_ID },
       row: null,
       transcript: { lines: TRANSCRIPT_LINES, sessionId: TRANSCRIPT_SESSION_ID },
     });
@@ -777,6 +804,7 @@ test.skipIf(!containerized)(
         const ingested: TranscriptIngestReport[] = [];
 
         yield* runOpened({
+          ...RUN_SETTINGS,
           context,
           dataRoot,
           env: TURN_ENV,
@@ -785,6 +813,7 @@ test.skipIf(!containerized)(
           onClose: (closed) =>
             withActor(context.actor)(
               ingestTranscript({
+                agentHomeDir,
                 context,
                 providerSessionId: closed.terminus.providerSessionId,
               })
@@ -834,8 +863,8 @@ test.skipIf(!containerized)(
     expect(seen.envNames).toEqual([...WATCHED_ENV_NAMES].sort());
     expect(seen.envNames.some((name) => name.startsWith("OTEL_"))).toBe(false);
 
-    // The transcript the container wrote, read on the host through the mount
-    // while the agent home was still there.
+    // The transcript the container wrote into the host's shared login, read on
+    // the host through the mount.
     expect(seen.report?.found).toBe(true);
     expect(seen.report?.entries).toBe(2);
     expect(seen.report?.restored).toBe(true);
@@ -850,8 +879,16 @@ test.skipIf(!containerized)(
         ?.payload
     ).toMatchObject({ text: TRANSCRIPT_TEXT });
 
-    // And the copied credentials are gone with it.
-    expect(existsSync(seen.context.layout.agentHomeDir)).toBe(false);
+    // Nothing of the operator's login came out with it: one file was copied,
+    // named by the session this run held, out of a directory that also holds
+    // the credential and every other run's conversation.
+    expect(
+      readdirSync(seen.context.layout.runDir, { recursive: true })
+        .map(String)
+        .filter((entry) =>
+          CREDENTIAL_NAMES.some((name) => entry.includes(name))
+        )
+    ).toEqual([]);
   },
   RUN_TIMEOUT_MS
 );

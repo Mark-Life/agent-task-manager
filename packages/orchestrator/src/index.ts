@@ -2,11 +2,16 @@
  * What this package lets the rest of the system do, and — more to the point —
  * what it does not.
  *
- * The orchestrator is the loop: it watches the *in progress* column, decides
- * what may run, runs it, and writes down what happened. It has exactly one
- * consumer, `apps/loop`, and that app is deliberately thin — config, layers,
- * signals, shutdown — because everything it would otherwise contain is a
- * decision this package has already made and tested.
+ * The orchestrator is the loop: it watches the *in progress* column and the
+ * conversations with something unanswered, decides what may run, runs it, and
+ * writes down what happened. A worker on a card and the manager in a thread are
+ * one runtime under one role — same dispatch, same lease, same pool, same quota
+ * gate, same run row, same ingest — and the four things a role changes are the
+ * prompt, the tool credential's binding, the container image, and which table
+ * the run is attached to. It has exactly one consumer, `apps/loop`, and that
+ * app is deliberately thin — config, layers, signals, shutdown — because
+ * everything it would otherwise contain is a decision this package has already
+ * made and tested.
  *
  * Exported: the {@link Orchestrator} service and its layer, the settings a host
  * process resolves and prints, and the `atm.run` event a ledger query starts
@@ -24,10 +29,11 @@
  * path. A caller holding `Dispatch` could claim a task without a lease; a
  * caller holding the run lifecycle could start a second container on a task
  * that already has one. Both are the failures this package exists to prevent,
- * so the way to a run is a task in a column, not a function call.
+ * so the way to a run is a task in a column or a message in a thread, not a
+ * function call.
  *
  * **The pure decisions the stages are made of.** `decideRetry`, `attemptAfter`,
- * `isParked`, `buildPrompt`, `observeTurn`, `toRunEventPayload`, `foldTurnRows`
+ * `isParked`, `subjectKeyOf`, `observeTurn`, `toRunEventPayload`, `foldTurnRows`
  * and the classifiers are unit-tested here and stay here. They are how a stage
  * is built, not something to build with — and each of them answers a question
  * whose second answer, computed anywhere else, is the drift.

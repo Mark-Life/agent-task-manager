@@ -2,12 +2,17 @@
  * What this package lets the rest of the system do, and why it is a package at
  * all.
  *
- * A token is minted in two places and verified in one. The gateway verifies
- * every bearer it is handed and mints a run's task-bound credential at
- * dispatch; the bot mints the manager agent's credential once per chat turn.
- * Those are two processes, and an application may not import another
- * application's source — so the signer lives here, beside neither of them, and
- * both hold the same one definition of what a token is.
+ * A token is minted in three places and verified in one. The gateway verifies
+ * every bearer it is handed and mints one for a dashboard request; the loop
+ * mints an agent's credential once per turn, for a worker and a manager alike;
+ * the bot mints one for the board buttons a person taps. Those are three
+ * processes, and an application may not import another application's source —
+ * so the signer lives here, beside none of them, and all three hold the same
+ * one definition of what a token is.
+ *
+ * {@link mintAgentToken} is here for the same reason: "how a token for an agent
+ * is made" is one answer, and the difference between the two roles is a
+ * narrower binding of it rather than a second recipe.
  *
  * Nothing else is in this package on purpose. It knows the claim shape, the
  * signature and the ceiling each kind of actor may hold; it knows nothing about
@@ -16,6 +21,13 @@
  * at verify, rather than a rule each caller re-applies.
  */
 
+export type {
+  AgentBinding,
+  AgentTokenInput,
+  ManagerBinding,
+  WorkerRunBinding,
+} from "./actors";
+export { DEFAULT_AGENT_TOKEN_TTL_MS, mintAgentToken } from "./actors";
 export {
   type MintOptions,
   makeTokenSigner,

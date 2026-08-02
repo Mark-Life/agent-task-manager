@@ -35,7 +35,7 @@ import { FileSystem } from "effect/FileSystem";
 import {
   type DispatchContext,
   eventLogPathOf,
-  taskIdOf,
+  subjectOf,
   workspaceIdOf,
 } from "./dispatch-context";
 import { IngestFailed } from "./errors";
@@ -149,7 +149,7 @@ export const ingestRunEvents = Effect.fn("Ingest.runEvents")(function* (
         payload: draft.payload,
         runId: context.runId,
         seq: draft.seq,
-        taskId: taskIdOf(context),
+        subject: subjectOf(context),
         workspaceId: workspaceIdOf(context),
       }))
     )
