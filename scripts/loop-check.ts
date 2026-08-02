@@ -78,6 +78,14 @@ const LIVE = "--live";
 const CONTAINED = process.argv.includes(DOCKER);
 
 /**
+ * Whether a real provider answers this invocation. Read alongside
+ * {@link CONTAINED} because a handful of claims can only be made against one
+ * kind of answer: a stub says a known sentence, and a model says whatever it
+ * decided to say.
+ */
+const ANSWERED_LIVE = process.argv.includes(LIVE);
+
+/**
  * Every setting the loop reads, pinned before a layer is built.
  *
  * Written onto the process environment rather than passed through a
@@ -161,8 +169,18 @@ const SERVICE = "loop-check";
 /** Which loop instance the orchestrator actor claims to be. */
 const LOOP_INSTANCE = "loop-check";
 
-/** How long the happy path may take before the check gives up on it. */
-const REVIEW_TIMEOUT = "90 seconds";
+/**
+ * How long the happy path may take before the check gives up on it.
+ *
+ * A stubbed turn answers in milliseconds, so anything past a few seconds there
+ * means the loop is stuck rather than busy. A real one reads files, calls tools
+ * and thinks, and minutes of that is the work happening rather than a fault —
+ * giving up at ninety seconds would report a healthy run as a failure and kill
+ * the turn that was about to finish.
+ */
+const REVIEW_TIMEOUT = process.argv.includes("--live")
+  ? "15 minutes"
+  : "90 seconds";
 
 /** How long the child gets to claim its task and go quiet. */
 const LIVE_TIMEOUT = "60 seconds";
@@ -442,9 +460,18 @@ const happyPath = (workspaceId: WorkspaceId) =>
       detail: `the thread holds ${thread.length} comments, kinds ${thread
         .map((comment) => comment.kind)
         .join(", ")}`,
+      // A stub ends on a sentence this file knows, so the body is checked
+      // against it and the fallback is proved to carry the run's own last
+      // message rather than any text at all. A model ends on whatever it
+      // decided to say, so live can only ask that the message arrived and is
+      // not empty — pinning a phrase there would be a check on the model's
+      // prose, which is not what this claim is about.
       ok: thread.some(
         (comment) =>
-          comment.kind === "fallback" && comment.body.includes(STUB_FINAL_TEXT)
+          comment.kind === "fallback" &&
+          (ANSWERED_LIVE
+            ? comment.body.trim().length > 0
+            : comment.body.includes(STUB_FINAL_TEXT))
       ),
       step: "a run that posted no comment had its last message appended as one",
     });
@@ -455,14 +482,25 @@ const happyPath = (workspaceId: WorkspaceId) =>
     });
     yield* check({
       detail: `the index holds ${indexed.length} artifacts`,
-      ok: indexed.some((entry) => entry.path.endsWith(ARTIFACT_FILE)),
+      // The stub writes one file this script named, so its path is what is
+      // looked for. A model writes whatever the brief led it to write, and the
+      // claim is that the rescan found it — not that it chose a filename.
+      ok: ANSWERED_LIVE
+        ? indexed.length > 0
+        : indexed.some((entry) => entry.path.endsWith(ARTIFACT_FILE)),
       step: "the file the run wrote is in the artifact index",
     });
 
     const left = runDirEvidence({ dataRoot: CHECK_ROOT, runId: run.id });
     yield* check({
       detail: `${left.transcriptPath} holds ${left.transcript?.length ?? 0} characters`,
-      ok: left.transcript?.includes(STUB_TRANSCRIPT_TEXT) === true,
+      // Same distinction: the stub's transcript carries a sentence this file
+      // knows, while a real one carries the turn that happened. What is being
+      // proved either way is that the file outlived the agent home it was
+      // written in, so live asks that it is there and not empty.
+      ok: ANSWERED_LIVE
+        ? (left.transcript?.length ?? 0) > 0
+        : left.transcript?.includes(STUB_TRANSCRIPT_TEXT) === true,
       step: "the transcript the provider wrote is in the run directory, after the agent home holding it is gone",
     });
     yield* check({

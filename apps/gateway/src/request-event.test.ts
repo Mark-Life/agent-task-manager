@@ -193,18 +193,34 @@ const readRows = (): Row[] => {
 };
 
 /**
+ * How long a row is waited for before the ledger is read one last time and the
+ * assertion speaks for itself.
+ *
+ * Generous on purpose. The wait costs nothing on the happy path, since it
+ * returns the moment the row lands, and the whole suite runs beside thirteen
+ * others under one task runner — a budget tight enough to expire under that
+ * load turns a passing property into a test that fails on a busy machine and
+ * passes when run alone, which is worse than a slow test.
+ */
+const ROW_DEADLINE_MS = 10_000;
+
+/** How often the ledger is asked whether the finalizer has written yet. */
+const ROW_POLL_MS = 5;
+
+/**
  * The ledger, once it holds `count` rows. The row is written from a finalizer
  * on the request's scope, which the platform closes after the response has been
  * handed back — so the assertion has to wait for it rather than assume it.
  */
 const waitForRows = async (count: number) => {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  const deadline = Date.now() + ROW_DEADLINE_MS;
+  while (Date.now() < deadline) {
     const rows = readRows();
     if (rows.length >= count) {
       return rows;
     }
     // biome-ignore lint/performance/noAwaitInLoops: polling the file is the point
-    await sleep(5);
+    await sleep(ROW_POLL_MS);
   }
   return readRows();
 };
