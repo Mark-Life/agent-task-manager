@@ -1,5 +1,5 @@
 {
-  "name": "@workspace/harness",
+  "name": "@workspace/prompts",
   "version": "0.0.1",
   "type": "module",
   "private": true,
@@ -12,14 +12,11 @@
   },
   "dependencies": {
     "effect": "catalog:",
-    "@effect/platform-bun": "catalog:",
-    "@anthropic-ai/claude-agent-sdk": "catalog:",
-    "@openai/codex-sdk": "catalog:",
-    "@workspace/domain": "workspace:*",
-    "@workspace/telemetry": "workspace:*"
+    "@workspace/domain": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "catalog:",
+    "@workspace/agent-tools": "workspace:*",
     "@workspace/typescript-config": "workspace:*"
   }
 }

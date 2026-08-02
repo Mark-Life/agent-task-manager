@@ -14,13 +14,13 @@
     "@workspace/domain": "workspace:*",
     "@workspace/env": "workspace:*",
     "@workspace/harness": "workspace:*",
-    "@workspace/manager-tools": "workspace:*",
+    "@workspace/agent-tools": "workspace:*",
     "@workspace/orchestrator": "workspace:*",
     "@workspace/sandbox": "workspace:*",
     "@workspace/telemetry": "workspace:*",
     "@workspace/token": "workspace:*",
     "effect": "catalog:",
-    "grammy": "^1.45.1"
+    "grammy": "catalog:"
   },
   "devDependencies": {
     "@workspace/typescript-config": "workspace:*"

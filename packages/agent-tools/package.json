@@ -1,24 +1,25 @@
 {
-  "name": "bot",
+  "name": "@workspace/agent-tools",
   "version": "0.0.1",
   "type": "module",
   "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./main": "./src/main.ts",
+    "./server": "./src/server.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test --pass-with-no-tests"
   },
   "dependencies": {
-    "@effect/platform-bun": "catalog:",
-    "@effect/sql-pg": "catalog:",
-    "@workspace/api": "workspace:*",
-    "@workspace/db": "workspace:*",
-    "@workspace/domain": "workspace:*",
-    "@workspace/env": "workspace:*",
-    "@workspace/telemetry": "workspace:*",
-    "@workspace/token": "workspace:*",
     "effect": "catalog:",
-    "grammy": "catalog:",
-    "groq-sdk": "^1.5.0"
+    "@anthropic-ai/claude-agent-sdk": "catalog:",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@openai/codex-sdk": "catalog:",
+    "@workspace/api": "workspace:*",
+    "@workspace/domain": "workspace:*",
+    "@workspace/harness": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "catalog:",
