@@ -79,6 +79,7 @@ import {
 import {
   containerStopHookCommand,
   exitCodeOf,
+  mcpServersPathOf,
   TURN_SPEC_ENV_VAR,
   TURN_SPEC_FLAG,
   type TurnExitReason,
@@ -134,8 +135,10 @@ export const readTurnSpec = Effect.fn("Turn.readSpec")(function* (
  */
 const identityConfig = (identity: TurnSpecIdentity) => ({
   [TURN_ENV_VARS.runId]: identity.runId,
-  [TURN_ENV_VARS.taskId]: identity.taskId,
   [TURN_ENV_VARS.workspaceId]: identity.workspaceId,
+  ...(identity.taskId === null
+    ? {}
+    : { [TURN_ENV_VARS.taskId]: identity.taskId }),
   ...(identity.sessionId === null
     ? {}
     : { [TURN_ENV_VARS.sessionId]: identity.sessionId }),
@@ -159,14 +162,17 @@ const codexMcpToml = (servers: unknown) =>
     })
     .join("\n");
 
-/** The provider's own config file, merged rather than replaced where one exists. */
-const mergeJsonFile = (input: {
-  readonly patch: Readonly<Record<string, unknown>>;
-  readonly path: string;
-}) =>
+/**
+ * A JSON object off disk, or an empty one. Absent, unreadable and unparseable
+ * all answer the same way on purpose: this is only ever used to merge into a
+ * file the provider owns, and refusing to write because the vendor left
+ * something we cannot parse would cost the run its tools over a file we did not
+ * write.
+ */
+const readJsonObject = (path: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem;
-    const existing = yield* fs.readFileString(input.path).pipe(
+    return yield* fs.readFileString(path).pipe(
       Effect.flatMap((raw) =>
         Effect.try({
           catch: () => new Error("unparseable"),
@@ -175,9 +181,54 @@ const mergeJsonFile = (input: {
       ),
       Effect.orElseSucceed(() => ({}) as Record<string, unknown>)
     );
+  });
+
+/** The object at `key`, or an empty one where the file holds something else. */
+const objectAt = (source: Record<string, unknown>, key: string) => {
+  const value = source[key];
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : {};
+};
+
+/** The provider's own config file, merged rather than replaced where one exists. */
+const mergeJsonFile = (input: {
+  readonly patch: Readonly<Record<string, unknown>>;
+  readonly path: string;
+}) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem;
+    const existing = yield* readJsonObject(input.path);
     yield* fs.writeFileString(
       input.path,
       JSON.stringify({ ...existing, ...input.patch })
+    );
+  });
+
+/**
+ * More MCP servers into the same map, one level deeper than
+ * {@link mergeJsonFile} reaches.
+ *
+ * The top-level merge would replace `mcpServers` wholesale, which is how the
+ * Executor's entry and the host's extras end up cancelling each other out
+ * depending on which was written second. Merging the map itself is what lets
+ * both be present, and a name collision resolves in favour of the extras
+ * because they were decided per turn while the Executor's entry is the same on
+ * every run.
+ */
+const mergeMcpServers = (input: {
+  readonly path: string;
+  readonly servers: Readonly<Record<string, unknown>>;
+}) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem;
+    const existing = yield* readJsonObject(input.path);
+    yield* fs.writeFileString(
+      input.path,
+      JSON.stringify({
+        ...existing,
+        mcpServers: { ...objectAt(existing, "mcpServers"), ...input.servers },
+      })
     );
   });
 
@@ -222,6 +273,69 @@ const wireExecutor = Effect.fn("Turn.wireExecutor")(function* (input: {
     );
   }
 });
+
+/**
+ * The `mcpServers` map the host left on the run mount, or null where it left
+ * none.
+ *
+ * Absence is the ordinary case and is not an error, exactly as a missing
+ * Executor configuration is not: a worker turn has no extra servers, and a file
+ * this build cannot parse costs the turn those tools rather than the turn
+ * itself.
+ */
+const readExtraMcpServers = Effect.fnUntraced(function* (path: string) {
+  const fs = yield* FileSystem;
+  const present = yield* fs
+    .exists(path)
+    .pipe(Effect.orElseSucceed(() => false));
+  if (!present) {
+    return null;
+  }
+  const file = yield* readJsonObject(path);
+  const servers = objectAt(file, "mcpServers");
+  return Object.keys(servers).length === 0 ? null : servers;
+});
+
+/**
+ * MCP servers the host decided on, wired into the provider about to run.
+ *
+ * This is how the manager agent gets its board tools: the bot writes one stdio
+ * server entry into the run directory before the container starts and deletes
+ * it after, so the bearer token it carries is on a mount the container already
+ * has rather than in an environment `docker inspect` prints. The file is read
+ * here and the entry is merged into the same map the Executor's own goes in.
+ *
+ * Only Claude. `codexMcpToml` renders a server's string fields alone, so an
+ * `args` array would be dropped and the server would launch with nothing to
+ * run — a silently toolless agent, which is worse than a warning that says so.
+ */
+const wireExtraMcpServers = Effect.fn("Turn.wireExtraMcpServers")(
+  function* (input: {
+    readonly agentHomeDir: string;
+    readonly path: string;
+    readonly provider: TurnSpec["provider"];
+  }) {
+    const servers = yield* readExtraMcpServers(input.path);
+    if (servers === null) {
+      return;
+    }
+    if (input.provider !== "claude") {
+      yield* Effect.logWarning(
+        "extra mcp servers ignored: this provider's configuration renderer cannot express them",
+        { names: Object.keys(servers), provider: input.provider }
+      );
+      return;
+    }
+    const fs = yield* FileSystem;
+    yield* fs.makeDirectory(input.agentHomeDir, { recursive: true });
+    // Merged, because `prepareAgentHome` seeded this file with the account
+    // identity and `wireExecutor` may already have put a server beside it.
+    yield* mergeMcpServers({
+      path: join(input.agentHomeDir, ".claude.json"),
+      servers,
+    });
+  }
+);
 
 /**
  * The environment the provider's subprocess is started with, on top of what the
@@ -457,6 +571,18 @@ const runSpec = (input: {
     }).pipe(
       Effect.tapError((cause) =>
         Effect.logWarning("executor mcp not wired", { cause })
+      ),
+      Effect.ignore
+    );
+    // The host's own servers, if it left any. Same tolerance, same reason: a
+    // turn with fewer tools is a smaller agent and not a broken one.
+    yield* wireExtraMcpServers({
+      agentHomeDir: spec.agentHomeDir,
+      path: mcpServersPathOf(containerRunLayout),
+      provider: spec.provider,
+    }).pipe(
+      Effect.tapError((cause) =>
+        Effect.logWarning("extra mcp servers not wired", { cause })
       ),
       Effect.ignore
     );

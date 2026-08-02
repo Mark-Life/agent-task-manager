@@ -321,10 +321,13 @@ const sandboxCheck = Effect.gen(function* () {
   const sandbox = yield* Sandbox;
   const workspace = yield* Workspace;
 
+  // Named, because materialization is told which task's artifacts folder to
+  // work against separately from the identity the container is started with.
+  const taskId = newTaskId();
   const identity: RunIdentity = {
     runId: newRunId(),
     sessionId: newAgentSessionId(),
-    taskId: newTaskId(),
+    taskId,
     traceparent: null,
     workspaceId: WorkspaceId.make("sandbox-check"),
   };
@@ -375,6 +378,7 @@ const sandboxCheck = Effect.gen(function* () {
         // read-only claim has both promoted folders to be made against.
         projectId: CHECK_PROJECT_ID,
         repo: null,
+        taskId,
       });
       yield* Effect.logInfo(`dir   ${made.runDir}`);
 

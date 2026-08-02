@@ -80,7 +80,13 @@ export interface RunIdentity {
   readonly runId: RunId;
   /** Null on the first run of a session, before the provider has named one. */
   readonly sessionId: AgentSessionId | null;
-  readonly taskId: TaskId;
+  /**
+   * Null for a turn that is about no task at all — the manager agent answering
+   * a chat message, which reads and writes the board over HTTP and belongs to a
+   * conversation rather than to a card. Every dispatched worker run has one, so
+   * a null here is what tells the two apart on a row that carries both.
+   */
+  readonly taskId: TaskId | null;
   /** W3C `traceparent` of the span that started this run, or null outside a trace. */
   readonly traceparent: string | null;
   readonly workspaceId: WorkspaceId;
@@ -101,8 +107,10 @@ export const identityEnv = (
   identity: RunIdentity
 ): Readonly<Record<string, string>> => ({
   [TURN_ENV_VARS.runId]: identity.runId,
-  [TURN_ENV_VARS.taskId]: identity.taskId,
   [TURN_ENV_VARS.workspaceId]: identity.workspaceId,
+  ...(identity.taskId === null
+    ? {}
+    : { [TURN_ENV_VARS.taskId]: identity.taskId }),
   ...(identity.sessionId === null
     ? {}
     : { [TURN_ENV_VARS.sessionId]: identity.sessionId }),
@@ -269,6 +277,14 @@ export interface MaterializeInput {
   readonly projectId: ProjectId | null;
   /** Null for a task with no repo — a scratch directory, and the same machinery otherwise. */
   readonly repo: RepoSource | null;
+  /**
+   * Whose artifacts folder the checkout is materialized against. Carried here
+   * rather than read off {@link RunIdentity} because materializing a checkout
+   * is task work: the identity is now nullable for turns that are about no
+   * task, and those turns do not materialize a workspace at all. The input
+   * already carries `projectId` separately for the same reason.
+   */
+  readonly taskId: TaskId;
 }
 
 /**

@@ -197,6 +197,8 @@ export {
   ENTRYPOINT_SEGMENT,
   entrypointBundlePathOf,
   exitCodeOf,
+  MCP_SERVERS_FILE,
+  mcpServersPathOf,
   STOP_HOOK_FLAG,
   TURN_EXIT_CODE,
   TURN_EXIT_REASONS,

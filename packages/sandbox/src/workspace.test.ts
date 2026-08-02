@@ -38,10 +38,12 @@ let root: string;
 let dataRoot: string;
 let originDir: string;
 
+const taskId = newTaskId();
+
 const identity = {
   runId: newRunId(),
   sessionId: null,
-  taskId: newTaskId(),
+  taskId,
   traceparent: null,
   workspaceId: WorkspaceId.make("ws-test"),
 };
@@ -110,7 +112,7 @@ const refusingClone: CloneIntoWorkspace = (input) =>
   );
 
 const materializeInput = (repo: RepoSource | null, projectId = null) =>
-  ({ dataRoot, identity, projectId, repo }) as MaterializeInput;
+  ({ dataRoot, identity, projectId, repo, taskId }) as MaterializeInput;
 
 /** Runs one materialization and hands the result to the assertions, inside the scope. */
 const withWorkspace = <A>(options: {
@@ -195,9 +197,7 @@ describe("materialize", () => {
       return;
     }
     expect(exit.value.materialized.projectArtifactsDir).toBe(null);
-    expect(
-      existsSync(taskArtifactsDirOf({ dataRoot, taskId: identity.taskId }))
-    ).toBe(true);
+    expect(existsSync(taskArtifactsDirOf({ dataRoot, taskId }))).toBe(true);
     expect(existsSync(globalArtifactsDirOf(dataRoot))).toBe(true);
   });
 

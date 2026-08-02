@@ -167,6 +167,7 @@ export const executeRun = (input: ExecuteRunInput) =>
         repoUrl: context.repoUrl,
         taskId,
       }),
+      taskId,
     });
     yield* Ref.update(progress, (current) => ({
       ...current,

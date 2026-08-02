@@ -64,6 +64,27 @@ export const turnResultPathOf = (layout: RunLayout) =>
   join(layout.runDir, TURN_RESULT_FILE);
 
 /**
+ * MCP servers the host wants this turn's provider to have, beyond the ones the
+ * container configures for itself.
+ *
+ * A file on the run mount rather than an environment variable, for the reason
+ * the spec is one: a server entry carries the bearer token it authenticates
+ * with, and `docker inspect` prints an environment to anyone who can reach the
+ * daemon. It is a separate file from the spec because it is written and deleted
+ * around a single container's lifetime while the spec is the record of the
+ * work, and because absence is an ordinary case — a turn with no extra servers
+ * simply has no file.
+ *
+ * Its content is `{ "mcpServers": { … } }`, the same shape the provider's own
+ * configuration uses, so the entrypoint merges rather than translates.
+ */
+export const MCP_SERVERS_FILE = "mcp-servers.json";
+
+/** The extra-servers file, under whichever root is looking. */
+export const mcpServersPathOf = (layout: RunLayout) =>
+  join(layout.runDir, MCP_SERVERS_FILE);
+
+/**
  * Where the bundled entrypoint is mounted inside the container.
  *
  * Under `/opt` rather than `/usr/local/bin`, because it is not part of the
@@ -144,7 +165,12 @@ export const TurnSpecIdentity = Schema.Struct({
   runId: RunId,
   /** Null on the first run of a session, before the provider has named one. */
   sessionId: Schema.NullOr(AgentSessionId),
-  taskId: TaskId,
+  /**
+   * Null for a turn that is about no task — the manager agent answering a chat
+   * message. Every dispatched worker turn has one, so a null here is what tells
+   * the two apart on the `atm.turn` row both write.
+   */
+  taskId: Schema.NullOr(TaskId),
   /** W3C `traceparent` of the host's span, so the turn's spans hang under it. */
   traceparent: Schema.NullOr(Schema.String),
   workspaceId: WorkspaceId,

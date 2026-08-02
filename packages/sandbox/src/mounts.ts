@@ -46,6 +46,12 @@
  * Nothing else either — no host home directory, no `~/.ssh`, no data root. The
  * container reaches the network for everything it is allowed to reach, and the
  * filesystem only for what is listed here.
+ *
+ * There is a second, smaller set. A turn that belongs to a conversation rather
+ * than to a task — the manager agent answering a chat message — has no task
+ * folder to write and no repo to check out, and it reaches the board over HTTP
+ * instead. {@link managerMountsFor} is that set, built here beside the other so
+ * both are decided in one file and reviewed together.
  */
 
 import { join } from "node:path";
@@ -223,6 +229,69 @@ export const mountsFor = (
     purpose: "global_artifacts",
     readOnly: true,
   });
+  if (extras.entrypointPath !== null) {
+    mounts.push({
+      containerPath: CONTAINER_ENTRYPOINT_PATH,
+      hostPath: extras.entrypointPath,
+      purpose: "entrypoint",
+      readOnly: true,
+    });
+  }
+  return mounts;
+};
+
+/**
+ * The subset of {@link MountSources} a turn that is about no task can supply.
+ *
+ * Derived rather than restated, so a field renamed on the full record is a
+ * compile error here rather than a mount that quietly stops being produced.
+ */
+export type ManagerMountSources = Pick<
+  MountSources,
+  "globalArtifactsDir" | "runDir" | "workspaceDir"
+>;
+
+/**
+ * The mount set for a turn that belongs to a conversation rather than to a
+ * task: its own run directory, an empty workspace, and the global promoted
+ * folder read-only.
+ *
+ * A function beside {@link mountsFor} rather than a nullable field on it. The
+ * two sets differ in what they are allowed to reach, not in a detail — this one
+ * has no task folder to write and no repo to read, so making the task folder
+ * optional would let a worker run dispatched with a missing path fall through
+ * to this shape silently. Separate functions mean the caller names which kind
+ * of turn it is starting, and both remain closed by construction.
+ *
+ * The workspace is still mounted, and it is still read-write. The manager works
+ * over HTTP and needs no checkout, but a scratch directory is where a CLI puts
+ * its temporary files, and a container whose working directory does not exist
+ * fails to start.
+ */
+export const managerMountsFor = (
+  sources: ManagerMountSources,
+  extras: MountExtras = NO_MOUNT_EXTRAS
+): readonly Mount[] => {
+  const mounts: Mount[] = [
+    {
+      containerPath: CONTAINER_RUN_DIR,
+      hostPath: sources.runDir,
+      purpose: "run",
+      readOnly: false,
+    },
+    {
+      containerPath: CONTAINER_WORKSPACE_DIR,
+      hostPath: sources.workspaceDir,
+      purpose: "workspace",
+      readOnly: false,
+    },
+    {
+      containerPath: CONTAINER_ARTIFACT_DIR.global,
+      hostPath: sources.globalArtifactsDir,
+      purpose: "global_artifacts",
+      readOnly: true,
+    },
+  ];
   if (extras.entrypointPath !== null) {
     mounts.push({
       containerPath: CONTAINER_ENTRYPOINT_PATH,

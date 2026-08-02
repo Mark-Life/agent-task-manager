@@ -174,7 +174,7 @@ export const makeLocalWorkspace = Effect.fnUntraced(function* (
   const materialize = Effect.fn("Workspace.materialize")(function* (
     input: MaterializeInput
   ) {
-    const { dataRoot, identity, projectId, repo } = input;
+    const { dataRoot, identity, projectId, repo, taskId } = input;
     yield* Effect.annotateCurrentSpan({
       hasProject: projectId !== null,
       hasRepo: repo !== null,
@@ -201,7 +201,7 @@ export const makeLocalWorkspace = Effect.fnUntraced(function* (
     });
     const taskArtifactsDir = yield* ensureArtifacts({
       dataRoot,
-      location: { scope: "task", taskId: identity.taskId },
+      location: { scope: "task", taskId },
       purpose: "task_artifacts",
     });
     // A task with no project has no promoted folder to show, and mounting the

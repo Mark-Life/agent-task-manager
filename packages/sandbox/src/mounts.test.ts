@@ -15,8 +15,10 @@ import {
   CONTAINER_ARTIFACT_DIR,
   CONTAINER_EVENT_LOG_DIR,
   CONTAINER_WORKSPACE_DIR,
+  type ManagerMountSources,
   type Mount,
   type MountSources,
+  managerMountsFor,
   mountArg,
   mountArgs,
   mountsFor,
@@ -113,6 +115,57 @@ describe("the container's run directory", () => {
     // The harness writes `events.jsonl` in the run directory; the ledger is a
     // directory beside it. Same parent, different names, one mount.
     expect(CONTAINER_EVENT_LOG_DIR).not.toBe(containerRunLayout.eventLogPath);
+  });
+});
+
+describe("managerMountsFor", () => {
+  const managerSources: ManagerMountSources = {
+    globalArtifactsDir: "/data/artifacts/global",
+    runDir: "/data/threads/th1/run",
+    workspaceDir: "/data/threads/th1/workspace",
+  };
+
+  test("mounts exactly the three directories a conversation may see", () => {
+    const purposes = managerMountsFor(managerSources).map(
+      (mount) => mount.purpose
+    );
+    expect(purposes).toEqual(["run", "workspace", "global_artifacts"]);
+  });
+
+  test("reaches no task's artifacts and no project's, whatever it is handed", () => {
+    // The type forbids naming them; this is the claim that no other code path
+    // reintroduces one, which is what a reviewer of the security boundary asks.
+    const purposes = managerMountsFor(managerSources, {
+      entrypointPath: "/data/bin/turn.js",
+    }).map((mount) => mount.purpose);
+    expect(purposes).not.toContain("task_artifacts");
+    expect(purposes).not.toContain("project_artifacts");
+  });
+
+  test("the global folder is read-only and the conversation's own directories are not", () => {
+    const mounts = managerMountsFor(managerSources);
+    expect(byPurpose(mounts, "global_artifacts")?.readOnly).toBe(true);
+    expect(byPurpose(mounts, "run")?.readOnly).toBe(false);
+    expect(byPurpose(mounts, "workspace")?.readOnly).toBe(false);
+  });
+
+  test("the entrypoint is mounted read-only where the harness looks for it", () => {
+    const mounts = managerMountsFor(managerSources, {
+      entrypointPath: "/data/bin/turn.js",
+    });
+    const entrypoint = byPurpose(mounts, "entrypoint");
+    expect(entrypoint?.containerPath).toBe(CONTAINER_ENTRYPOINT_PATH);
+    expect(entrypoint?.readOnly).toBe(true);
+  });
+
+  test("the container sees its run and workspace where every other turn does", () => {
+    const mounts = managerMountsFor(managerSources);
+    expect(byPurpose(mounts, "run")?.containerPath).toBe(
+      containerRunLayout.runDir
+    );
+    expect(byPurpose(mounts, "workspace")?.containerPath).toBe(
+      CONTAINER_WORKSPACE_DIR
+    );
   });
 });
 
