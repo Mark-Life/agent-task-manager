@@ -115,13 +115,21 @@ process.env.ORCHESTRATOR_LEASE_HEARTBEAT_MS = "1000";
 // root rather than the operator's. Created here because nothing on the run path
 // creates one: an auto-made empty home boots a container that reports an auth
 // error nobody can tell from an expired token, so the loop refuses instead.
-for (const [variable, segment] of [
-  ["ATM_AGENT_HOME_DIR_CLAUDE", "claude"],
-  ["ATM_AGENT_HOME_DIR_CODEX", "codex"],
-] as const) {
-  const home = join(CHECK_ROOT, "agent-home", segment);
-  mkdirSync(home, { recursive: true });
-  process.env[variable] = home;
+//
+// Not in `--live`, where the operator's own home is the whole point: a real
+// provider asked to log in from a directory this check invented has no login to
+// find, and answers "please run /login" — which is indistinguishable from the
+// credential problem this check exists to catch. Only the stub is content with
+// a fabricated home, so only the stub gets one.
+if (!process.argv.includes(LIVE)) {
+  for (const [variable, segment] of [
+    ["ATM_AGENT_HOME_DIR_CLAUDE", "claude"],
+    ["ATM_AGENT_HOME_DIR_CODEX", "codex"],
+  ] as const) {
+    const home = join(CHECK_ROOT, "agent-home", segment);
+    mkdirSync(home, { recursive: true });
+    process.env[variable] = home;
+  }
 }
 
 import { BunRuntime, BunServices } from "@effect/platform-bun";
