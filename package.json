@@ -17,6 +17,7 @@
     "typecheck": "turbo typecheck",
     "test": "turbo test",
     "logs": "bun run scripts/logs.ts",
+    "openapi": "bun run scripts/openapi.ts",
     "loop:dev": "bun run --watch apps/loop/src/main.ts",
     "loop:start": "bun run apps/loop/src/main.ts",
     "format": "bun run fix",
@@ -31,6 +32,10 @@
     "harness:check": "bun run scripts/harness-check.ts",
     "sandbox:check": "bun run scripts/sandbox-check.ts",
     "loop:check": "bun run scripts/loop-check.ts",
+    "gateway:dev": "bun run --watch apps/gateway/src/main.ts",
+    "gateway:start": "bun run apps/gateway/src/main.ts",
+    "gateway:token": "bun run apps/gateway/src/auth/mint.ts",
+    "gateway:check": "bun run scripts/gateway-check.ts",
     "images:build": "bun run scripts/build-images.ts",
     "entrypoint:build": "bun run scripts/build-entrypoint.ts"
   },

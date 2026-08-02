@@ -43,6 +43,13 @@
  * Exported, it would be a second door into starting and stopping containers,
  * and the whole point of the run-command queue is that there is one.
  *
+ * The one exception to all of that is a path. A run's transcript is copied out
+ * of its agent home into its run directory, and no column holds the text — so
+ * anything that wants the full conversation needs to be able to name the file.
+ * {@link durableTranscriptPathOf} is that name, and it is exported for the same
+ * reason the artifact layout is: the file is the record and the database is
+ * only the index into it.
+ *
  * The three env variables that change behaviour rather than tuning it —
  * `SANDBOX_MODE`, `DATABASE_URL`, `DATA_ROOT` — belong to `@workspace/sandbox`,
  * `@workspace/db` and the whole system respectively, and are read there. This
@@ -61,3 +68,7 @@ export {
   type OrchestratorInterface,
   type RecoveryReport,
 } from "./runtime";
+export {
+  durableTranscriptPathOf,
+  TRANSCRIPT_FILE,
+} from "./transcript-ingest";

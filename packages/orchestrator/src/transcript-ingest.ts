@@ -3,14 +3,27 @@
  * persisted.
  *
  * **There is no table for transcript messages, and this does not invent one.**
- * The Phase 1 schema has `agent_session` for the conversation and `run_event`
- * for what happened in it, and those are the two mechanisms used here: the
- * provider's own session id lands on the session row, which is what a resume is
- * pointed at, and the conversation itself lands as run events. The file itself
- * does not outlive the run: the provider writes it inside the run's agent home,
- * which is removed with its credential copy as the run's scope closes. That is
- * why this pass runs inside that scope, and why whatever it does not store here
- * — the full, unclipped text above all — is gone.
+ * The schema has `agent_session` for the conversation and `run_event` for what
+ * happened in it, and those are the two mechanisms used here: the provider's
+ * own session id lands on the session row, which is what a resume is pointed
+ * at, and the conversation itself lands as run events. The unclipped text has
+ * no column anywhere, so it is kept the way an artifact is kept: the file is
+ * the record, and the database holds the index into it.
+ *
+ * **The file is copied out of the agent home before that home is deleted.**
+ * A provider writes its transcript inside the run's private config directory,
+ * and that directory holds a copy of a live subscription credential, which is
+ * why it is removed as the run's scope closes — so a transcript left there dies
+ * with it. {@link preserveTranscript} copies exactly one file, the transcript
+ * and nothing beside it, into the run directory: that directory survives
+ * teardown, it is already where the run's event file and result file live, and
+ * the credentials stay behind in the home and go with it.
+ *
+ * So after a run, durable in Postgres are the provider session id on the
+ * session row and the timeline in `run_events` — clipped, and restored from the
+ * transcript only when the stream left nothing. Durable on disk, and nowhere
+ * else, is the whole conversation at full length in the run directory: no query
+ * returns it, and removing the run directory removes it.
  *
  * **The timeline is written from the transcript only when the event stream left
  * none.** A run that streamed normally already has its timeline: those rows are
@@ -34,6 +47,7 @@
  * goes through the telemetry sanitizer rather than a plain clip.
  */
 
+import { join } from "node:path";
 import { AgentSessionRepo, RunEventRepo } from "@workspace/db";
 import {
   RUN_EVENT_SUMMARY_BUDGET_BYTES,
@@ -42,12 +56,16 @@ import {
   type Timestamp,
 } from "@workspace/domain";
 import {
+  findTranscript,
+  type RunLayout,
   readTranscript,
+  readTranscriptAt,
   type TranscriptEntry,
   transcriptChars,
 } from "@workspace/harness";
 import { clipError } from "@workspace/telemetry";
 import { DateTime, Effect, Option, Schema } from "effect";
+import { FileSystem } from "effect/FileSystem";
 import {
   type DispatchContext,
   sessionIdOf,
@@ -70,6 +88,34 @@ export const TRANSCRIPT_SEQ_BASE = 1_000_000;
 
 /** Whether a run event row came from the transcript rather than from the stream. */
 export const isRestoredSeq = (seq: number) => seq >= TRANSCRIPT_SEQ_BASE;
+
+/**
+ * What the preserved transcript is called in the run directory.
+ *
+ * One name for every provider, because the vendor's own naming is a fact about
+ * the directory it was copied out of — Claude names the file after the session
+ * and Codex after the rollout — and a run directory holds one run. Both
+ * vendors write JSONL and both parsers read the session id out of the content
+ * rather than the filename, so nothing is lost by renaming it.
+ */
+export const TRANSCRIPT_FILE = "transcript.jsonl";
+
+/**
+ * The run's transcript where it outlives the run: beside the event file, in the
+ * directory that survives the container and the agent home.
+ *
+ * Over a {@link RunLayout} rather than a dispatch context, because a reader
+ * showing a finished run has a run id and a data root and none of the rest of
+ * one — `hostRunLayout` turns those two into the directory this then names.
+ *
+ * Derived here rather than in the harness's layout because that layout is the
+ * contract three parties share — the sandbox mounts it, the provider inside the
+ * container is pointed at it, the orchestrator reads it back — and this file is
+ * written and read by the orchestrator alone. Nothing inside a container ever
+ * sees it.
+ */
+export const durableTranscriptPathOf = (layout: RunLayout) =>
+  join(layout.runDir, TRANSCRIPT_FILE);
 
 const decodeInstant = Schema.decodeUnknownOption(Schema.DateTimeUtcFromString);
 
@@ -179,6 +225,97 @@ export interface TranscriptIngestInput {
   readonly providerSessionId: string | null;
 }
 
+/** Names the run a transcript failure was about, so a log line says which one. */
+const failingRun = (context: DispatchContext) =>
+  Effect.mapError(
+    (cause: unknown) =>
+      new IngestFailed({ cause, runId: context.runId, source: "transcript" })
+  );
+
+/** Where a run's transcript ended up, and where it was copied from. */
+export interface PreserveTranscriptReport {
+  /** False when the provider wrote no transcript, which is a crash before the first turn. */
+  readonly copied: boolean;
+  /** The durable copy, in the run directory. Null when there was nothing to copy. */
+  readonly path: string | null;
+  /** The provider's own file inside the agent home, which is about to be deleted. */
+  readonly source: string | null;
+}
+
+const NOTHING_TO_PRESERVE: PreserveTranscriptReport = {
+  copied: false,
+  path: null,
+  source: null,
+};
+
+/**
+ * Copies the run's transcript out of its agent home and into its run directory.
+ *
+ * Called while the run's scope is still open, because the agent home only
+ * exists until it closes. One file and one file only: the home also holds the
+ * copied credential that is the reason it is torn down, and a directory copy
+ * would carry that out with the conversation.
+ *
+ * Overwrites rather than skipping an existing copy. A second pass over the same
+ * run reads the same provider file and writes the same bytes, so the operation
+ * is repeatable — and a first pass interrupted mid-write leaves a partial file
+ * that the second one is expected to replace.
+ */
+export const preserveTranscript = Effect.fn("Ingest.preserveTranscript")(
+  function* (input: TranscriptIngestInput) {
+    const { context } = input;
+    const fs = yield* FileSystem;
+    yield* Effect.annotateCurrentSpan({
+      provider: context.provider,
+      runId: context.runId,
+    });
+
+    const source = yield* findTranscript({
+      layout: context.layout,
+      provider: context.provider,
+      providerSessionId: input.providerSessionId,
+    }).pipe(
+      Effect.catchTag("Harness.TranscriptNotFound", () => Effect.succeed(null)),
+      failingRun(context)
+    );
+    if (source === null) {
+      return NOTHING_TO_PRESERVE;
+    }
+
+    const path = durableTranscriptPathOf(context.layout);
+    yield* fs.copyFile(source, path).pipe(failingRun(context));
+    return { copied: true, path, source } satisfies PreserveTranscriptReport;
+  }
+);
+
+/**
+ * The run's transcript, preferring the durable copy over the provider's own
+ * file.
+ *
+ * The copy is the record after the run: it is what is left once the agent home
+ * is gone, so a re-ingest weeks later reads exactly the bytes the first ingest
+ * read. The scan of the agent home stays as the fallback for the one window
+ * where the copy does not exist yet — a caller ingesting inside the run's own
+ * scope — and for a run whose copy failed while its home was still there.
+ */
+const readRunTranscript = Effect.fnUntraced(function* (
+  input: TranscriptIngestInput
+) {
+  const { context } = input;
+  const fs = yield* FileSystem;
+  const durable = durableTranscriptPathOf(context.layout);
+  const preserved = yield* fs
+    .exists(durable)
+    .pipe(Effect.orElseSucceed(() => false));
+  return preserved
+    ? yield* readTranscriptAt(durable, context.provider)
+    : yield* readTranscript({
+        layout: context.layout,
+        provider: context.provider,
+        providerSessionId: input.providerSessionId,
+      });
+});
+
 /** What one pass over a run's transcript did. */
 export interface TranscriptIngestReport {
   /** Rows this pass inserted. Zero when the stream already covered the run, and on a re-ingest. */
@@ -258,6 +395,11 @@ const recordProviderSession = Effect.fnUntraced(function* (input: {
  * before the provider started wrote no file, and the run still has to close
  * out — an ingest that failed there would turn "the run crashed early" into
  * "the loop crashed reading about it".
+ *
+ * Idempotent on every pass: the rows collide on `(runId, seq)`, the session
+ * write happens only on a difference, and the file it reads is the durable copy
+ * — so a re-ingest of a run whose container and agent home are long gone
+ * reports the same numbers the first one did.
  */
 export const ingestTranscript = Effect.fn("Ingest.transcript")(function* (
   input: TranscriptIngestInput
@@ -268,16 +410,9 @@ export const ingestTranscript = Effect.fn("Ingest.transcript")(function* (
     runId: context.runId,
   });
 
-  const transcript = yield* readTranscript({
-    layout: context.layout,
-    provider: context.provider,
-    providerSessionId: input.providerSessionId,
-  }).pipe(
+  const transcript = yield* readRunTranscript(input).pipe(
     Effect.catchTag("Harness.TranscriptNotFound", () => Effect.succeed(null)),
-    Effect.mapError(
-      (cause) =>
-        new IngestFailed({ cause, runId: context.runId, source: "transcript" })
-    )
+    failingRun(context)
   );
   if (transcript === null) {
     return NOT_FOUND;
@@ -287,22 +422,12 @@ export const ingestTranscript = Effect.fn("Ingest.transcript")(function* (
     transcript.providerSessionId ?? input.providerSessionId;
   if (providerSessionId !== null) {
     yield* recordProviderSession({ context, providerSessionId }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new IngestFailed({
-            cause,
-            runId: context.runId,
-            source: "transcript",
-          })
-      )
+      failingRun(context)
     );
   }
 
   const streamed = yield* hasStreamedTimeline(context).pipe(
-    Effect.mapError(
-      (cause) =>
-        new IngestFailed({ cause, runId: context.runId, source: "transcript" })
-    )
+    failingRun(context)
   );
 
   const base = {
@@ -336,16 +461,7 @@ export const ingestTranscript = Effect.fn("Ingest.transcript")(function* (
         workspaceId: workspaceIdOf(context),
       }))
     )
-    .pipe(
-      Effect.mapError(
-        (cause) =>
-          new IngestFailed({
-            cause,
-            runId: context.runId,
-            source: "transcript",
-          })
-      )
-    );
+    .pipe(failingRun(context));
 
   return { ...base, appended: written.length, restored: true };
 });

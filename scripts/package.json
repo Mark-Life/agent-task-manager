@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@effect/platform-bun": "catalog:",
+    "@workspace/api": "workspace:*",
     "@workspace/db": "workspace:*",
     "@workspace/domain": "workspace:*",
     "@workspace/harness": "workspace:*",

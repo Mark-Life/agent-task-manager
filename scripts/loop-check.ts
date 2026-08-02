@@ -19,9 +19,11 @@
  * claim: a task moved into *in progress* is claimed, run and landed in review;
  * the run row closes as `done`; the normalized events reach `run_events`; a run
  * that posted no comment has its last message appended as one; the file the run
- * wrote is in the artifact index; the run leaves exactly one `atm.run` start
- * row and one terminus row; and a loop killed with the run in flight is
- * recovered on restart with the killed run recorded as `lost`.
+ * wrote is in the artifact index; the transcript written inside the run's agent
+ * home is in the run directory once that home has been torn down, and no
+ * credential came out with it; the run leaves exactly one `atm.run` start row
+ * and one terminus row; and a loop killed with the run in flight is recovered
+ * on restart with the killed run recorded as `lost`.
  *
  * `bun run loop:check --docker` makes every claim on that list except the kill
  * and the recovery, with the turn served by a real container on
@@ -34,11 +36,13 @@
  * allowance on a real turn. It proves the one thing a stub cannot: that a
  * dispatched task reaches an actual model and comes back.
  *
- * **What no mode here proves.** That a PR is opened, or that the transcript
- * ingest reads a real provider's file — the stub writes none. That the quota
- * gate defers, which needs a drained subscription. And, in `--docker`, that a
- * vendor CLI boots inside the image: that is the one substitution the contained
- * mode makes, and `bun run harness:check --live` is where it is asked.
+ * **What no mode here proves.** That a PR is opened. That a real vendor's
+ * transcript parses — the stub writes one in the vendor's own layout and
+ * dialect, so the rescue and the read are proved, but the dialect itself is
+ * asked of fixtures in `packages/harness`. That the quota gate defers, which
+ * needs a drained subscription. And, in `--docker`, that a vendor CLI boots
+ * inside the image: that is the one substitution the contained mode makes, and
+ * `bun run harness:check --live` is where it is asked.
  *
  * **The kill half always runs on a host process.** Where the turn was running
  * changes nothing about the lease, the orphaned run row or the terminus the
@@ -133,13 +137,19 @@ import {
 } from "@workspace/sandbox";
 import { EventLog, telemetryLayer } from "@workspace/telemetry";
 import { type Duration, Effect, Layer, Schedule, Schema } from "effect";
-import { CheckFailed, check, runRows } from "./loop-check-claims";
+import {
+  CheckFailed,
+  check,
+  runDirEvidence,
+  runRows,
+} from "./loop-check-claims";
 import { containedClaims, prepareContainer } from "./loop-check-container";
 import {
   ARTIFACT_FILE,
   forbiddenProvider,
   hangingProvider,
   STUB_FINAL_TEXT,
+  STUB_TRANSCRIPT_TEXT,
   stubProvider,
 } from "./loop-check-stub";
 import { ensureWorkspace } from "./store/workspace";
@@ -409,6 +419,18 @@ const happyPath = (workspaceId: WorkspaceId) =>
       detail: `the index holds ${indexed.length} artifacts`,
       ok: indexed.some((entry) => entry.path.endsWith(ARTIFACT_FILE)),
       step: "the file the run wrote is in the artifact index",
+    });
+
+    const left = runDirEvidence({ dataRoot: CHECK_ROOT, runId: run.id });
+    yield* check({
+      detail: `${left.transcriptPath} holds ${left.transcript?.length ?? 0} characters`,
+      ok: left.transcript?.includes(STUB_TRANSCRIPT_TEXT) === true,
+      step: "the transcript the provider wrote is in the run directory, after the agent home holding it is gone",
+    });
+    yield* check({
+      detail: `the run directory holds ${left.entries.length} files: ${left.entries.join(", ")}`,
+      ok: left.credentials.length === 0,
+      step: "no credential came out of the agent home with it",
     });
 
     const rows = runRows({ path: ledger.path, runId: run.id });

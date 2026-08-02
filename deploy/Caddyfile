@@ -1,0 +1,89 @@
+# Caddy in front of the gateway.
+#
+# Caddy owns the domain, the certificate and the browser's side of the
+# conversation; the gateway owns everything behind it and binds loopback only,
+# so the only way in is through this file.
+#
+# Every value comes from the environment, because a Caddyfile with a hostname in
+# it is a Caddyfile that cannot be copied to a second host. Systemd gives Caddy
+# its environment the same way it gives the gateway one — see README.md.
+#
+#   ATM_DOMAIN             api.example.com — the site address, required
+#   ATM_ACME_EMAIL         where Let's Encrypt sends expiry warnings, required
+#   ATM_GATEWAY_ORIGIN     127.0.0.1:3100 — where the gateway listens
+#   ATM_DASHBOARD_ORIGIN   https://dash.example.com — the SPA's exact origin
+#
+# Validated with `caddy validate`; never deployed. Nothing below has answered a
+# real request.
+{
+	email {$ATM_ACME_EMAIL}
+}
+
+{$ATM_DOMAIN} {
+	log {
+		output file /var/log/caddy/atm.log
+		format json
+	}
+
+	# Compression by content type rather than by default. `encode` with no
+	# matcher will happily gzip a `text/event-stream`, and a compressed SSE
+	# stream is one that arrives in whatever chunks the compressor felt like —
+	# which looks exactly like a run that has gone quiet.
+	encode zstd gzip {
+		match {
+			header Content-Type application/json*
+			header Content-Type text/html*
+			header Content-Type text/plain*
+		}
+	}
+
+	# The dashboard is served from Cloudflare Pages and the gateway from here,
+	# so every call the SPA makes is cross-origin and carries a session cookie.
+	# `Allow-Origin` is one exact origin, never `*`: a wildcard and
+	# `Allow-Credentials` together are refused by every browser, and the refusal
+	# reads as an unexplained network error.
+	@dashboard header Origin {$ATM_DASHBOARD_ORIGIN}
+	header @dashboard {
+		Access-Control-Allow-Origin {$ATM_DASHBOARD_ORIGIN}
+		Access-Control-Allow-Credentials true
+		Vary Origin
+	}
+
+	# Preflight is answered here because the API has no OPTIONS routes at all —
+	# an `OPTIONS /projects` against the gateway is a 404 (checked), and a 404
+	# preflight fails the request the browser was about to make.
+	@preflight {
+		method OPTIONS
+		header Origin {$ATM_DASHBOARD_ORIGIN}
+	}
+	handle @preflight {
+		header {
+			Access-Control-Allow-Origin {$ATM_DASHBOARD_ORIGIN}
+			Access-Control-Allow-Credentials true
+			Access-Control-Allow-Methods "GET, POST, PATCH, PUT, DELETE, OPTIONS"
+			Access-Control-Allow-Headers "Authorization, Content-Type"
+			Access-Control-Max-Age 86400
+			Vary Origin
+		}
+		respond 204
+	}
+
+	# Run events. Caddy already stops buffering when it sees
+	# `text/event-stream`, and this says so out loud anyway: the route is named,
+	# so nobody has to infer that one path in this API behaves differently from
+	# the other thirty-one. `-1` flushes every write straight through.
+	@runEvents path_regexp ^/tasks/[^/]+/runs/[^/]+/events/stream$
+	handle @runEvents {
+		reverse_proxy {$ATM_GATEWAY_ORIGIN} {
+			flush_interval -1
+		}
+	}
+
+	# Everything else, including the spec at /openapi.json and the reference UI
+	# at /docs. Both are public on purpose: a connector configures itself from
+	# the document, and the operations it describes still refuse an unauthorized
+	# caller. Put an `@internal` matcher here if that ever stops being true.
+	handle {
+		reverse_proxy {$ATM_GATEWAY_ORIGIN}
+	}
+}

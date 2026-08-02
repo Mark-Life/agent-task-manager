@@ -1,0 +1,60 @@
+# The HTTP gateway, as a service.
+#
+# Not deployed from here: install it as described in README.md. Verified only by
+# `systemd-analyze verify`.
+
+[Unit]
+Description=Agent Task Manager gateway
+Documentation=file:/opt/agent-task-manager/deploy/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+# Postgres runs in a Compose container on this host, so the daemon is a hard
+# dependency rather than an ordering hint. The gateway fails its layer build
+# when the database is unreachable, which is a crash loop, not a wait.
+Requires=docker.service
+
+[Service]
+Type=simple
+User=atm
+Group=atm
+WorkingDirectory=/opt/agent-task-manager
+
+# Configuration is files, never lines in this unit. A unit is world-readable and
+# lives in the same directory as everyone else's, so a DATABASE_URL in it is a
+# password in `systemctl cat`. These two are 0640 root:atm. The `-` on the
+# second means a host that has nothing gateway-specific to say need not create
+# an empty file to boot.
+EnvironmentFile=/etc/agent-task-manager/common.env
+EnvironmentFile=-/etc/agent-task-manager/gateway.env
+
+ExecStart=/usr/local/bin/bun run apps/gateway/src/main.ts
+
+Restart=always
+RestartSec=2s
+
+# Longer than GATEWAY_SHUTDOWN_GRACE_MS, so the process's own watchdog is what
+# ends a stuck shutdown and says why. If systemd wins this race the log says
+# only that it sent SIGKILL.
+TimeoutStopSec=25s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=atm-gateway
+
+# The gateway reads a repository it never writes and writes one directory it
+# owns: the artifact tree and the JSONL event ledger under DATA_ROOT. Everything
+# else on the filesystem is read-only to it.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/agent-task-manager
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

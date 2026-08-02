@@ -14,16 +14,21 @@
  * a bind mount. An in-memory sink would prove neither.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RunId } from "@workspace/domain";
 import {
+  hostRunLayout,
   runDirOf,
   TURN_EVENT_MARKER,
   TURN_LEDGER_SERVICE,
   TurnEvent,
 } from "@workspace/harness";
-import { RUN_EVENT_MARKER, RunEvent } from "@workspace/orchestrator";
+import {
+  durableTranscriptPathOf,
+  RUN_EVENT_MARKER,
+  RunEvent,
+} from "@workspace/orchestrator";
 import {
   eventLogDirOf,
   SANDBOX_EVENT_MARKER,
@@ -133,3 +138,46 @@ export const turnRows = (input: {
     path: join(eventLogDirOf(runDirOf(input)), `${TURN_LEDGER_SERVICE}.jsonl`),
     runId: input.runId,
   });
+
+/** What a provider's config directory holds that must never survive the run. */
+const CREDENTIAL_NAMES = [".credentials.json", ".claude.json", "auth.json"];
+
+/** What is left in a run's directory once its container and its agent home are gone. */
+export interface RunDirEvidence {
+  /** Files carrying a provider login. Empty is the only answer that passes. */
+  readonly credentials: readonly string[];
+  /** Everything still in the run directory, relative to it. */
+  readonly entries: readonly string[];
+  /** The preserved transcript, or null where no file was copied out. */
+  readonly transcript: string | null;
+  readonly transcriptPath: string;
+}
+
+/**
+ * Reads a finished run's directory back.
+ *
+ * The two claims it answers are about absence and presence in the same place:
+ * the conversation the provider wrote is still there, and the credential it sat
+ * beside is not. Both are read off the disk after the run, because both are
+ * about what a teardown left rather than what the loop said it did.
+ */
+export const runDirEvidence = (input: {
+  readonly dataRoot: string;
+  readonly runId: RunId;
+}): RunDirEvidence => {
+  const runDir = runDirOf(input);
+  const transcriptPath = durableTranscriptPathOf(hostRunLayout(input));
+  const entries = existsSync(runDir)
+    ? readdirSync(runDir, { recursive: true }).map(String)
+    : [];
+  return {
+    credentials: entries.filter((entry) =>
+      CREDENTIAL_NAMES.some((name) => entry.includes(name))
+    ),
+    entries,
+    transcript: existsSync(transcriptPath)
+      ? readFileSync(transcriptPath, "utf8")
+      : null,
+    transcriptPath,
+  };
+};

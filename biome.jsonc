@@ -9,6 +9,10 @@
       "packages/**/*.tsx",
       "!node_modules/**/*",
       "!dist/**/*",
+      // Derived from packages/api by `bun run openapi`, never hand-edited, so
+      // the formatter has no say: reflowing it would only make every
+      // regeneration a diff.
+      "!openapi.json",
       "!packages/ui/src/components/**/*",
       "!packages/ui/src/hooks/**/*",
       "!packages/ui/src/lib/**/*"

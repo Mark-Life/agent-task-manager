@@ -27,6 +27,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -72,10 +73,18 @@ import { openRun, type RunClaim } from "./open-run";
 import { performRun, runOpened } from "./run";
 import { loadRootEnv } from "./testing/root-env";
 import {
+  durableTranscriptPathOf,
   ingestTranscript,
+  TRANSCRIPT_FILE,
   TRANSCRIPT_SEQ_BASE,
   type TranscriptIngestReport,
 } from "./transcript-ingest";
+
+/**
+ * What a run home holds besides what the provider writes, by name. Nothing
+ * carrying one of these may be left in a run directory once the run is over.
+ */
+const CREDENTIAL_NAMES = [".credentials.json", ".claude.json", "auth.json"];
 
 /** What the scripted clean turn reports it cost. Trusted construction. */
 const COST_USD = CostUsd.make("0.1234");
@@ -645,4 +654,20 @@ test("the close hook reads the transcript before the agent home is removed", asy
   // And the credentials the transcript sat beside are gone: the agent home is
   // released as the close hook returns, not before it and not never.
   expect(existsSync(seen.context.layout.agentHomeDir)).toBe(false);
+
+  // The conversation outlives both, at full length, in the run directory — and
+  // the ingest above read it there rather than in the home that is now gone.
+  const durable = durableTranscriptPathOf(seen.context.layout);
+  expect(seen.report?.path).toBe(durable);
+  expect(readFileSync(durable, "utf8")).toContain(TRANSCRIPT_TEXT);
+
+  // One file came out, and it is the transcript: a copy that took the directory
+  // rather than the file would have brought the login with it.
+  const left = readdirSync(seen.context.layout.runDir, { recursive: true });
+  expect(left).toContain(TRANSCRIPT_FILE);
+  expect(
+    left.filter((entry) =>
+      CREDENTIAL_NAMES.some((name) => entry.includes(name))
+    )
+  ).toEqual([]);
 });

@@ -1,0 +1,5535 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Agent Task Manager",
+    "version": "0.0.1",
+    "description": "Task board, agent runs and their artifacts. Every operation is scoped to the workspace its credential belongs to."
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "operationId": "health.check",
+        "parameters": [],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "HealthStatus",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "projects.list",
+        "parameters": [],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Project"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List projects"
+      },
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "projects.create",
+        "parameters": [],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create a project",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectCreate"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/projects/{projectId}": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "projects.get",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get a project"
+      },
+      "patch": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "projects.patch",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Update a project",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectPatch"
+              }
+            }
+          },
+          "required": true
+        }
+      },
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "projects.delete",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "<No Content>"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Delete a project"
+      }
+    },
+    "/tasks": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "tasks.list",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ideas",
+                "backlog",
+                "in_progress",
+                "review",
+                "done"
+              ]
+            },
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Task"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List tasks, optionally by status or project"
+      },
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "tasks.create",
+        "parameters": [],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "IllegalInitialStatus",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IllegalInitialStatusJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create a task",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskCreate"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/tasks/board": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "tasks.board",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BoardColumn"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The board, column by column"
+      }
+    },
+    "/tasks/{taskId}": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "tasks.get",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "TaskDetail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get a task with its project and live run"
+      },
+      "patch": {
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "tasks.patch",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Update a task",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskPatch"
+              }
+            }
+          },
+          "required": true
+        }
+      },
+      "delete": {
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "tasks.delete",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "<No Content>"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Delete a task"
+      }
+    },
+    "/tasks/{taskId}/status": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "tasks.transition",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "IllegalTransition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IllegalTransitionJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Move a task to another status",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskTransition"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/tasks/{taskId}/place": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "tasks.place",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Reorder a task within its column",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskPlacement"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/tasks/{taskId}/next-session": {
+      "put": {
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "tasks.selectNextSession",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Choose the session the next run uses",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NextSession"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/tasks/{taskId}/comments": {
+      "get": {
+        "tags": [
+          "comments"
+        ],
+        "operationId": "comments.list",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Comment"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read a task's thread"
+      },
+      "post": {
+        "tags": [
+          "comments"
+        ],
+        "operationId": "comments.append",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Comment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Comment"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Post a comment on a task",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommentAppend"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/tasks/{taskId}/sessions": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "operationId": "sessions.list",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AgentSession"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List a task's agent sessions"
+      }
+    },
+    "/tasks/{taskId}/sessions/{sessionId}": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "operationId": "sessions.get",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          },
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "AgentSession",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get an agent session"
+      }
+    },
+    "/tasks/{taskId}/sessions/{sessionId}/transcript": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "operationId": "sessions.transcript",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          },
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transcript",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Transcript"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read a session's transcript"
+      }
+    },
+    "/tasks/{taskId}/runs": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "operationId": "runs.list",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Run"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List a task's runs"
+      }
+    },
+    "/tasks/{taskId}/runs/{runId}": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "operationId": "runs.get",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          },
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Run"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get a run"
+      }
+    },
+    "/tasks/{taskId}/runs/{runId}/events": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "operationId": "runs.events",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          },
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          },
+          {
+            "name": "afterSeq",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^[+-]?\\d*\\.?\\d+(?:[Ee][+-]?\\d+)?$"
+                }
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^[+-]?\\d*\\.?\\d+(?:[Ee][+-]?\\d+)?$"
+                }
+              ]
+            },
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "RunEventPage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunEventPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read a page of a run's events"
+      }
+    },
+    "/tasks/{taskId}/runs/{runId}/events/stream": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "operationId": "runs.stream",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          },
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          },
+          {
+            "name": "afterSeq",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^[+-]?\\d*\\.?\\d+(?:[Ee][+-]?\\d+)?$"
+                }
+              ]
+            },
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "event": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "$ref": "#/components/schemas/RunEventJsonEncoding"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "event",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                },
+                "x-effect-stream": {
+                  "encoding": "sse",
+                  "causeSchema": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "_tag": {
+                              "type": "string",
+                              "enum": [
+                                "Fail"
+                              ]
+                            },
+                            "error": {
+                              "not": {}
+                            }
+                          },
+                          "required": [
+                            "_tag",
+                            "error"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "_tag": {
+                              "type": "string",
+                              "enum": [
+                                "Die"
+                              ]
+                            },
+                            "defect": {}
+                          },
+                          "required": [
+                            "_tag",
+                            "defect"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "_tag": {
+                              "type": "string",
+                              "enum": [
+                                "Interrupt"
+                              ]
+                            },
+                            "fiberId": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "_tag",
+                            "fiberId"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "errorSchema": {
+                    "not": {}
+                  },
+                  "failureEvent": "effect/httpapi/stream/failure"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Stream a run's events as they happen"
+      }
+    },
+    "/tasks/{taskId}/commands": {
+      "get": {
+        "tags": [
+          "runCommands"
+        ],
+        "operationId": "runCommands.list",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RunCommand"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List the intents queued on a task"
+      }
+    },
+    "/tasks/{taskId}/commands/stop": {
+      "post": {
+        "tags": [
+          "runCommands"
+        ],
+        "operationId": "runCommands.stop",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "RunCommand",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunCommand"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Ask the orchestrator to stop a run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunTarget"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/tasks/{taskId}/commands/rerun": {
+      "post": {
+        "tags": [
+          "runCommands"
+        ],
+        "operationId": "runCommands.rerun",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "RunCommand",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunCommand"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Ask the orchestrator to rerun a task",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunTarget"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/tasks/{taskId}/commands/start-session": {
+      "post": {
+        "tags": [
+          "runCommands"
+        ],
+        "operationId": "runCommands.startSession",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "RunCommand",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunCommand"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Ask the orchestrator to start a session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartSessionRequest"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/tasks/{taskId}/artifacts": {
+      "get": {
+        "tags": [
+          "artifacts"
+        ],
+        "operationId": "artifacts.list",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Artifact"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List a task's artifacts"
+      },
+      "post": {
+        "tags": [
+          "artifacts"
+        ],
+        "operationId": "artifacts.upload",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Artifact"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "PayloadTooLarge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadTooLargeJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Upload an artifact into a task's folder",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "path": {
+                    "type": "string",
+                    "allOf": [
+                      {
+                        "minLength": 1
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "file",
+                  "path"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/tasks/{taskId}/artifacts/{artifactId}/content": {
+      "get": {
+        "tags": [
+          "artifacts"
+        ],
+        "operationId": "artifacts.read",
+        "parameters": [
+          {
+            "name": "artifactId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          },
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                },
+                "x-effect-stream": {
+                  "encoding": "uint8array"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Download an artifact"
+      }
+    },
+    "/tasks/{taskId}/artifacts/{artifactId}/promote": {
+      "post": {
+        "tags": [
+          "artifacts"
+        ],
+        "operationId": "artifacts.promote",
+        "parameters": [
+          {
+            "name": "artifactId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          },
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Artifact"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ArtifactAlreadyPromoted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactAlreadyPromotedJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Promote an artifact to the project or globally",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactPromotion"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HealthStatus": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ]
+          },
+          "timestamp": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "timestamp"
+        ],
+        "additionalProperties": false
+      },
+      "Project": {
+        "type": "object",
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "repoDefaultBranch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "repoUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "createdAt",
+          "workspaceId",
+          "updatedAt",
+          "description",
+          "id",
+          "name",
+          "repoDefaultBranch",
+          "repoUrl"
+        ],
+        "additionalProperties": false
+      },
+      "UnauthorizedJsonEncoding": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": [
+              "Unauthorized"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "_tag",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "ForbiddenJsonEncoding": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": [
+              "Forbidden"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "required": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "_tag",
+          "reason",
+          "required"
+        ],
+        "additionalProperties": false
+      },
+      "NotFoundJsonEncoding": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": [
+              "NotFound"
+            ]
+          },
+          "entity": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "_tag",
+          "entity",
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "ProjectCreate": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "repoDefaultBranch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "repoUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "InvalidInputJsonEncoding": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": [
+              "InvalidInput"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "entity": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "_tag",
+          "detail",
+          "entity"
+        ],
+        "additionalProperties": false
+      },
+      "ProjectPatch": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "repoDefaultBranch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "repoUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "Task": {
+        "type": "object",
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "acceptance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "brief": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "nextSessionId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "nextSessionNew": {
+            "type": "boolean"
+          },
+          "parentTaskId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parkedUntil": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "projectId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          },
+          "repoUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sandboxImage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ideas",
+              "backlog",
+              "in_progress",
+              "review",
+              "done"
+            ]
+          },
+          "statusChangedAt": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          }
+        },
+        "required": [
+          "createdAt",
+          "workspaceId",
+          "updatedAt",
+          "acceptance",
+          "brief",
+          "id",
+          "metadata",
+          "nextSessionId",
+          "nextSessionNew",
+          "parentTaskId",
+          "parkedUntil",
+          "projectId",
+          "prUrl",
+          "rank",
+          "repoUrl",
+          "sandboxImage",
+          "status",
+          "statusChangedAt",
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "BoardColumn": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ideas",
+              "backlog",
+              "in_progress",
+              "review",
+              "done"
+            ]
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Task"
+            }
+          }
+        },
+        "required": [
+          "status",
+          "tasks"
+        ],
+        "additionalProperties": false
+      },
+      "TaskDetail": {
+        "type": "object",
+        "properties": {
+          "liveRunId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "project": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Project"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "task": {
+            "$ref": "#/components/schemas/Task"
+          }
+        },
+        "required": [
+          "liveRunId",
+          "project",
+          "task"
+        ],
+        "additionalProperties": false
+      },
+      "TaskCreate": {
+        "type": "object",
+        "properties": {
+          "acceptance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "brief": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "parentTaskId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "projectId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "repoUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sandboxImage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ideas",
+              "backlog",
+              "in_progress",
+              "review",
+              "done"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "IllegalInitialStatusJsonEncoding": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": [
+              "IllegalInitialStatus"
+            ]
+          },
+          "actorKind": {
+            "type": "string",
+            "enum": [
+              "human",
+              "manager",
+              "worker_run",
+              "orchestrator",
+              "system"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ideas",
+              "backlog",
+              "in_progress",
+              "review",
+              "done"
+            ]
+          }
+        },
+        "required": [
+          "_tag",
+          "actorKind",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "TaskPatch": {
+        "type": "object",
+        "properties": {
+          "acceptance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "brief": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "parentTaskId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "projectId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "repoUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sandboxImage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "TaskTransition": {
+        "type": "object",
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to": {
+            "type": "string",
+            "enum": [
+              "ideas",
+              "backlog",
+              "in_progress",
+              "review",
+              "done"
+            ]
+          }
+        },
+        "required": [
+          "to"
+        ],
+        "additionalProperties": false
+      },
+      "IllegalTransitionJsonEncoding": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": [
+              "IllegalTransition"
+            ]
+          },
+          "actorKind": {
+            "type": "string",
+            "enum": [
+              "human",
+              "manager",
+              "worker_run",
+              "orchestrator",
+              "system"
+            ]
+          },
+          "from": {
+            "type": "string",
+            "enum": [
+              "ideas",
+              "backlog",
+              "in_progress",
+              "review",
+              "done"
+            ]
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string",
+            "enum": [
+              "ideas",
+              "backlog",
+              "in_progress",
+              "review",
+              "done"
+            ]
+          }
+        },
+        "required": [
+          "_tag",
+          "actorKind",
+          "from",
+          "taskId",
+          "to"
+        ],
+        "additionalProperties": false
+      },
+      "TaskPlacement": {
+        "type": "object",
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "enum": [
+                      "Infinity",
+                      "-Infinity",
+                      "NaN"
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "after"
+        ],
+        "additionalProperties": false
+      },
+      "NextSession": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "latest"
+                ]
+              }
+            },
+            "required": [
+              "mode"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "new"
+                ]
+              }
+            },
+            "required": [
+              "mode"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "specific"
+                ]
+              },
+              "sessionId": {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "mode",
+              "sessionId"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "Comment": {
+        "type": "object",
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "agentSessionId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "authorKind": {
+            "type": "string",
+            "enum": [
+              "human",
+              "manager",
+              "agent",
+              "orchestrator"
+            ]
+          },
+          "authorUserId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "minLength": 1
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "message",
+              "fallback",
+              "run_error"
+            ]
+          },
+          "runId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "taskId": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          }
+        },
+        "required": [
+          "createdAt",
+          "workspaceId",
+          "updatedAt",
+          "agentSessionId",
+          "authorKind",
+          "authorUserId",
+          "body",
+          "id",
+          "kind",
+          "runId",
+          "taskId"
+        ],
+        "additionalProperties": false
+      },
+      "CommentAppend": {
+        "type": "object",
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "message",
+              "fallback",
+              "run_error"
+            ]
+          }
+        },
+        "required": [
+          "body"
+        ],
+        "additionalProperties": false
+      },
+      "AgentSession": {
+        "type": "object",
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "commentWatermarkAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "commentWatermarkId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "endedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errorMessage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "providerSessionId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "finished",
+              "failed"
+            ]
+          },
+          "taskId": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          }
+        },
+        "required": [
+          "createdAt",
+          "workspaceId",
+          "updatedAt",
+          "commentWatermarkAt",
+          "commentWatermarkId",
+          "endedAt",
+          "errorMessage",
+          "id",
+          "provider",
+          "providerSessionId",
+          "status",
+          "taskId"
+        ],
+        "additionalProperties": false
+      },
+      "TranscriptEntry": {
+        "type": "object",
+        "properties": {
+          "callId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "chars": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "line": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "occurredAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "assistant",
+              "reasoning",
+              "system",
+              "tool_call",
+              "tool_result",
+              "user"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "toolName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "callId",
+          "chars",
+          "line",
+          "occurredAt",
+          "ok",
+          "role",
+          "text",
+          "toolName"
+        ],
+        "additionalProperties": false
+      },
+      "Transcript": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TranscriptEntry"
+            }
+          },
+          "providerSessionId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "entries",
+          "providerSessionId"
+        ],
+        "additionalProperties": false
+      },
+      "Run": {
+        "type": "object",
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "agentHomePath": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "agentSessionId": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "attempt": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "containerId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "costUsd": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^-?\\d+(\\.\\d+)?$"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "durationMs": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errorClass": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errorMessage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exitCode": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "done",
+                  "errored",
+                  "interrupted",
+                  "timeout",
+                  "lost"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "sandboxImage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "finished",
+              "failed",
+              "interrupted"
+            ]
+          },
+          "taskId": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "totalTokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "traceId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "status_change",
+              "rerun",
+              "research",
+              "manual"
+            ]
+          },
+          "turns": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "createdAt",
+          "workspaceId",
+          "updatedAt",
+          "agentHomePath",
+          "agentSessionId",
+          "attempt",
+          "branch",
+          "containerId",
+          "costUsd",
+          "durationMs",
+          "errorClass",
+          "errorMessage",
+          "exitCode",
+          "finishedAt",
+          "id",
+          "model",
+          "outcome",
+          "provider",
+          "sandboxImage",
+          "startedAt",
+          "status",
+          "taskId",
+          "totalTokens",
+          "traceId",
+          "trigger",
+          "turns"
+        ],
+        "additionalProperties": false
+      },
+      "RunEvent": {
+        "type": "object",
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "occurredAt": {
+            "type": "string"
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "started"
+                    ]
+                  },
+                  "model": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "promptChars": {
+                    "type": "integer",
+                    "allOf": [
+                      {
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "claude",
+                      "codex"
+                    ]
+                  },
+                  "sandboxImage": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "model",
+                  "promptChars",
+                  "provider",
+                  "sandboxImage"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "chars": {
+                    "type": "integer",
+                    "allOf": [
+                      {
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "assistant_message"
+                    ]
+                  },
+                  "originalChars": {
+                    "type": "integer",
+                    "allOf": [
+                      {
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "chars",
+                  "kind",
+                  "text"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "chars": {
+                    "type": "integer",
+                    "allOf": [
+                      {
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "reasoning"
+                    ]
+                  }
+                },
+                "required": [
+                  "chars",
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "callId": {
+                    "type": "string"
+                  },
+                  "inputChars": {
+                    "type": "integer",
+                    "allOf": [
+                      {
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "tool_call"
+                    ]
+                  },
+                  "summary": {
+                    "type": "string"
+                  },
+                  "toolName": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "callId",
+                  "inputChars",
+                  "kind",
+                  "summary",
+                  "toolName"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "callId": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "tool_result"
+                    ]
+                  },
+                  "ok": {
+                    "type": "boolean"
+                  },
+                  "outputChars": {
+                    "type": "integer",
+                    "allOf": [
+                      {
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "callId",
+                  "kind",
+                  "ok",
+                  "outputChars",
+                  "summary"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "costUsd": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "allOf": [
+                          {
+                            "pattern": "^-?\\d+(\\.\\d+)?$"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "inputTokens": {
+                    "type": "integer",
+                    "allOf": [
+                      {
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "usage"
+                    ]
+                  },
+                  "outputTokens": {
+                    "type": "integer",
+                    "allOf": [
+                      {
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "rateLimitPct": {
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string",
+                            "enum": [
+                              "Infinity",
+                              "-Infinity",
+                              "NaN"
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "turns": {
+                    "type": "integer",
+                    "allOf": [
+                      {
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "costUsd",
+                  "inputTokens",
+                  "kind",
+                  "outputTokens",
+                  "rateLimitPct",
+                  "turns"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "log"
+                    ]
+                  },
+                  "level": {
+                    "type": "string",
+                    "enum": [
+                      "debug",
+                      "info",
+                      "warn",
+                      "error"
+                    ]
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "level",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "errorClass": {
+                    "type": "string"
+                  },
+                  "errorMessage": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "error"
+                    ]
+                  }
+                },
+                "required": [
+                  "errorClass",
+                  "errorMessage",
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "costUsd": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "allOf": [
+                          {
+                            "pattern": "^-?\\d+(\\.\\d+)?$"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "durationMs": {
+                    "type": "integer",
+                    "allOf": [
+                      {
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "finished"
+                    ]
+                  },
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "done",
+                      "errored",
+                      "interrupted",
+                      "timeout",
+                      "lost"
+                    ]
+                  },
+                  "totalTokens": {
+                    "type": "integer",
+                    "allOf": [
+                      {
+                        "minimum": 0
+                      }
+                    ]
+                  },
+                  "turns": {
+                    "type": "integer",
+                    "allOf": [
+                      {
+                        "minimum": 0
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "costUsd",
+                  "durationMs",
+                  "kind",
+                  "outcome",
+                  "totalTokens",
+                  "turns"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "errorClass": {
+                    "type": "string"
+                  },
+                  "errorMessage": {
+                    "type": "string"
+                  },
+                  "exitCode": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "failed"
+                    ]
+                  }
+                },
+                "required": [
+                  "errorClass",
+                  "errorMessage",
+                  "exitCode",
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "commandId": {
+                    "type": "string",
+                    "allOf": [
+                      {
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                        "format": "uuid"
+                      }
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "stopped"
+                    ]
+                  },
+                  "requestedByKind": {
+                    "type": "string",
+                    "enum": [
+                      "human",
+                      "manager",
+                      "worker_run",
+                      "orchestrator",
+                      "system"
+                    ]
+                  },
+                  "requestedByUserId": {
+                    "type": "string",
+                    "allOf": [
+                      {
+                        "minLength": 1
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "commandId",
+                  "kind",
+                  "requestedByKind"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "runId": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "seq": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "taskId": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          }
+        },
+        "required": [
+          "createdAt",
+          "workspaceId",
+          "id",
+          "occurredAt",
+          "payload",
+          "runId",
+          "seq",
+          "taskId"
+        ],
+        "additionalProperties": false
+      },
+      "RunEventPage": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunEvent"
+            }
+          },
+          "nextSeq": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "events",
+          "nextSeq"
+        ],
+        "additionalProperties": false
+      },
+      "RunEventJsonEncoding": {
+        "type": "string",
+        "contentMediaType": "application/json"
+      },
+      "RunCommand": {
+        "type": "object",
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "actorKind": {
+            "type": "string",
+            "enum": [
+              "human",
+              "manager",
+              "worker_run",
+              "orchestrator",
+              "system"
+            ]
+          },
+          "actorRunId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "actorSessionId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "actorUserId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "minLength": 1
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "consumedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "stop"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "rerun"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "start_session"
+                    ]
+                  },
+                  "trigger": {
+                    "type": "string",
+                    "enum": [
+                      "status_change",
+                      "rerun",
+                      "research",
+                      "manual"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "trigger"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "rejectedReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "consumed",
+              "rejected"
+            ]
+          },
+          "taskId": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          }
+        },
+        "required": [
+          "createdAt",
+          "workspaceId",
+          "updatedAt",
+          "actorKind",
+          "actorRunId",
+          "actorSessionId",
+          "actorUserId",
+          "consumedAt",
+          "id",
+          "payload",
+          "rejectedReason",
+          "runId",
+          "status",
+          "taskId"
+        ],
+        "additionalProperties": false
+      },
+      "RunTarget": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "StartSessionRequest": {
+        "type": "object",
+        "properties": {
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "status_change",
+              "rerun",
+              "research",
+              "manual"
+            ]
+          }
+        },
+        "required": [
+          "trigger"
+        ],
+        "additionalProperties": false
+      },
+      "Artifact": {
+        "type": "object",
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "ext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "modifiedAt": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "contentHash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "lastRunId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "projectId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "promotedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "task",
+              "project",
+              "global"
+            ]
+          },
+          "sourceArtifactId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "taskId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "createdAt",
+          "workspaceId",
+          "updatedAt",
+          "bytes",
+          "ext",
+          "modifiedAt",
+          "path",
+          "contentHash",
+          "id",
+          "lastRunId",
+          "projectId",
+          "promotedAt",
+          "scope",
+          "sourceArtifactId",
+          "taskId"
+        ],
+        "additionalProperties": false
+      },
+      "PayloadTooLargeJsonEncoding": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": [
+              "PayloadTooLarge"
+            ]
+          },
+          "bytes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "_tag",
+          "bytes",
+          "limit"
+        ],
+        "additionalProperties": false
+      },
+      "ArtifactPromotion": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "project",
+              "global"
+            ]
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "additionalProperties": false
+      },
+      "ArtifactAlreadyPromotedJsonEncoding": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": [
+              "ArtifactAlreadyPromoted"
+            ]
+          },
+          "artifactId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "_tag",
+          "artifactId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "readToken": {
+        "description": "Bearer token scoped to reads. Every GET in this API accepts it.",
+        "type": "http",
+        "scheme": "Bearer",
+        "bearerFormat": "opaque"
+      },
+      "sessionCookie": {
+        "description": "Better Auth browser session. The dashboard's credential; machines use a bearer token.",
+        "type": "apiKey",
+        "name": "better-auth.session_token",
+        "in": "cookie"
+      },
+      "taskWriteToken": {
+        "description": "Bearer token scoped to writes. A run's token is bound to its own task and is refused on any other.",
+        "type": "http",
+        "scheme": "Bearer",
+        "bearerFormat": "opaque"
+      },
+      "adminToken": {
+        "description": "Bearer token scoped to destructive operations — deleting a project or a task.",
+        "type": "http",
+        "scheme": "Bearer",
+        "bearerFormat": "opaque"
+      }
+    }
+  },
+  "security": [],
+  "tags": [
+    {
+      "name": "health",
+      "description": "Liveness probe."
+    },
+    {
+      "name": "projects",
+      "description": "Projects: repositories, and areas of life."
+    },
+    {
+      "name": "tasks",
+      "description": "Tasks: the board, and the moves a card can make on it."
+    },
+    {
+      "name": "comments",
+      "description": "Comments: the task's conversation, across every session on it."
+    },
+    {
+      "name": "sessions",
+      "description": "Agent sessions: one conversation each, and the transcript it left."
+    },
+    {
+      "name": "runs",
+      "description": "Runs: one attempt each, and the events they emit."
+    },
+    {
+      "name": "runCommands",
+      "description": "Run commands: stop, rerun and start-session, queued for the orchestrator."
+    },
+    {
+      "name": "artifacts",
+      "description": "Artifacts: files a run kept, and the promotion that shares them."
+    }
+  ]
+}

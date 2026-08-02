@@ -19,6 +19,10 @@
  * host writes into `${DATA_ROOT}/artifacts/tasks/<id>`; the container writes
  * into `/artifacts/task`, which is that same directory seen through a bind
  * mount. So the folder is asked for rather than computed here.
+ *
+ * The stub also writes a transcript, because one of the claims is about a file
+ * the loop has to rescue before the agent home holding it is deleted — and a
+ * provider that wrote nothing would let that claim pass for the wrong reason.
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -29,6 +33,10 @@ import { Effect, Stream } from "effect";
 
 /** What the stub writes into the task's artifacts directory. */
 export const ARTIFACT_FILE = "stub-run-output.md";
+
+/** The line of the stubbed transcript a preserved copy is recognized by. */
+export const STUB_TRANSCRIPT_TEXT =
+  "Written into the run's own agent home, the way a provider writes its transcript.";
 
 /** The stub's answer, which becomes the run's fallback comment. */
 export const STUB_FINAL_TEXT =
@@ -90,6 +98,97 @@ export const writeStubArtifact = (input: {
 };
 
 /**
+ * The conversation a stubbed turn leaves in its agent home, in the vendor's own
+ * layout and dialect.
+ *
+ * Spelled out here rather than derived from the harness, because imitating the
+ * vendor is the whole job of a stub: the nesting, the file name and the JSONL
+ * dialect are what the transcript reader scans for, and a stub that asked the
+ * reader where to write would prove only that one function agrees with itself.
+ * Claude nests `projects/<workspace>/<session>.jsonl` and Codex
+ * `sessions/<y>/<m>/<d>/rollout-<session>.jsonl`.
+ */
+const transcriptFile = (input: {
+  readonly agentHomeDir: string;
+  readonly provider: SessionProvider;
+  readonly providerSessionId: string;
+}) => {
+  if (input.provider === "claude") {
+    return {
+      directory: join(input.agentHomeDir, "projects", "-workspace"),
+      lines: [
+        {
+          message: { content: "the brief", role: "user" },
+          sessionId: input.providerSessionId,
+          timestamp: new Date().toISOString(),
+          type: "user",
+        },
+        {
+          message: {
+            content: [{ text: STUB_TRANSCRIPT_TEXT, type: "text" }],
+            role: "assistant",
+          },
+          sessionId: input.providerSessionId,
+          timestamp: new Date().toISOString(),
+          type: "assistant",
+        },
+      ],
+      name: `${input.providerSessionId}.jsonl`,
+    };
+  }
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return {
+    directory: join(
+      input.agentHomeDir,
+      "sessions",
+      String(now.getUTCFullYear()),
+      pad(now.getUTCMonth() + 1),
+      pad(now.getUTCDate())
+    ),
+    lines: [
+      {
+        payload: {
+          id: input.providerSessionId,
+          session_id: input.providerSessionId,
+        },
+        timestamp: now.toISOString(),
+        type: "session_meta",
+      },
+      {
+        payload: {
+          content: [{ text: STUB_TRANSCRIPT_TEXT, type: "output_text" }],
+          role: "assistant",
+          type: "message",
+        },
+        timestamp: now.toISOString(),
+        type: "response_item",
+      },
+    ],
+    name: `rollout-${input.providerSessionId}.jsonl`,
+  };
+};
+
+/**
+ * Writes that conversation where the provider would have written it: inside the
+ * run's private config directory, which is deleted with its credential copy
+ * when the run's scope closes. What the check then looks for is the copy the
+ * loop made of it before that happened.
+ */
+export const writeStubTranscript = (input: {
+  readonly agentHomeDir: string;
+  readonly provider: SessionProvider;
+  readonly providerSessionId: string;
+}) => {
+  const file = transcriptFile(input);
+  mkdirSync(file.directory, { recursive: true });
+  writeFileSync(
+    join(file.directory, file.name),
+    `${file.lines.map((line) => JSON.stringify(line)).join("\n")}\n`
+  );
+};
+
+/**
  * What a provider declares about itself. The same for all three stubs below:
  * none of them is asked a capability question, and answering differently would
  * only invite one.
@@ -142,11 +241,14 @@ export const stubProvider = (input: StubProviderInput): AgentProvider => ({
             runId: options.runId,
           });
         }
+        const providerSessionId = stubSessionId(options.runId);
+        writeStubTranscript({
+          agentHomeDir: options.agentHomeDir,
+          provider: input.id,
+          providerSessionId,
+        });
         return Stream.fromIterable(
-          stubEvents({
-            provider: input.id,
-            providerSessionId: stubSessionId(options.runId),
-          })
+          stubEvents({ provider: input.id, providerSessionId })
         );
       })
     ),

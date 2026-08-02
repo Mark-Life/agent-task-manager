@@ -16,7 +16,13 @@
  */
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunFileSystem } from "@effect/platform-bun";
@@ -46,7 +52,12 @@ import { rescanTaskArtifacts } from "./artifacts";
 import type { DispatchContext } from "./dispatch-context";
 import { lostTerminus } from "./dispatch-context";
 import { ingestRunEvents, ingestTurnLedger } from "./ingest";
-import { ingestTranscript, TRANSCRIPT_SEQ_BASE } from "./transcript-ingest";
+import {
+  durableTranscriptPathOf,
+  ingestTranscript,
+  preserveTranscript,
+  TRANSCRIPT_SEQ_BASE,
+} from "./transcript-ingest";
 import { runEconomicsOf } from "./turn-rollup";
 
 /** Reported as `application_name`, so `pg_stat_activity` names this process. */
@@ -546,4 +557,45 @@ test("a tool call's arguments are redacted before they reach a row", async () =>
 
   expect(summaries.length).toBeGreaterThan(0);
   expect(summaries.every((summary) => summary.length <= 240)).toBe(true);
+});
+
+test("the transcript survives the agent home, and is what a later ingest reads", async () => {
+  const preserved = await runtime.runPromise(
+    preserveTranscript({ context: restored, providerSessionId: null })
+  );
+  const durable = durableTranscriptPathOf(restored.layout);
+
+  expect(preserved.copied).toBe(true);
+  expect(preserved.path).toBe(durable);
+  // The provider's own file and the copy hold the same bytes: nothing is
+  // clipped, summarized or re-encoded on the way out.
+  expect(readFileSync(durable, "utf8")).toBe(
+    readFileSync(preserved.source ?? "", "utf8")
+  );
+
+  // What the run's scope does to the agent home, and the credential copy in it.
+  rmSync(restored.layout.agentHomeDir, { force: true, recursive: true });
+
+  const again = await runtime.runPromise(
+    Effect.gen(function* () {
+      const report = yield* ingestTranscript({
+        context: restored,
+        providerSessionId: PROVIDER_SESSION,
+      });
+      const events = yield* RunEventRepo;
+      const rows = yield* events.listByRun({
+        runId: restored.runId,
+        workspaceId,
+      });
+      return { report, rows };
+    })
+  );
+
+  // Read out of the run directory rather than out of a directory that is no
+  // longer there — and the same conversation, at the same length, as before.
+  expect(again.report.path).toBe(durable);
+  expect(again.report.found).toBe(true);
+  expect(again.report.entries).toBeGreaterThan(TRANSCRIPT_LINES.length);
+  expect(again.report.appended).toBe(0);
+  expect(again.rows.length).toBe(again.report.entries);
 });

@@ -73,6 +73,7 @@ import {
   markCommentPosted,
   type TerminalReport,
 } from "./terminal";
+import { preserveTranscript } from "./transcript-ingest";
 import {
   EMPTY_TURN_PROGRESS,
   observeTurn,
@@ -125,12 +126,13 @@ export interface ExecuteRunInput {
  *
  * **The scope is the caller's, not this function's.** The checkout and the
  * seeded agent home are acquired into whichever scope this is run in, and
- * released when *that* closes — which is what lets {@link runOpened} read the
+ * released when *that* closes — which is what lets {@link runOpened} copy the
  * transcript out of the agent home before the credentials in it are removed.
  * Everything acquired here is released on every path including an interrupt,
  * because that is what a scope does; the only thing this file decides is how
  * far the scope reaches. What survives it is what should — the run directory
- * with its event file, and the artifacts folder, which is the point.
+ * with its event file and the transcript copied into it, and the artifacts
+ * folder, which is the point.
  *
  * A failure of the turn itself is an answer rather than an error: it becomes a
  * failed terminus, because a crashed run is still a run that has to close out
@@ -428,8 +430,9 @@ export interface RunOpenedInput<R = never> {
    * the path where there is no value.
    *
    * It runs inside the run's own scope, so everything the turn was given is
-   * still on disk — the checkout, and the agent home holding the transcript the
-   * provider wrote. Both are removed as this returns.
+   * still on disk — the checkout, and the agent home the provider wrote its
+   * transcript into. Both are removed as this returns, and the transcript has
+   * already been copied into the run directory by then.
    *
    * Total by contract. A hook that could fail would be a run that closed and
    * then failed to close.
@@ -464,6 +467,26 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
     /** Closes the run from whatever the turn ended as, including a cause. */
     const closeFrom = (ending: RunTerminus) =>
       Effect.gen(function* () {
+        // First, because everything after it can take time and the file it
+        // rescues is deleted the moment this scope closes: the provider writes
+        // its transcript inside the run's agent home, and the home goes with
+        // its copy of a live credential. One file is copied into the run
+        // directory, which survives; the credentials stay behind and are torn
+        // down as they always were. A failed copy is a warning rather than an
+        // ending — the run is over, and losing its transcript must not turn
+        // that into a run that failed to close.
+        yield* preserveTranscript({
+          context,
+          providerSessionId: ending.providerSessionId,
+        }).pipe(
+          Effect.tapError((cause) =>
+            Effect.logWarning("transcript not copied out of the agent home", {
+              cause,
+            })
+          ),
+          Effect.ignore
+        );
+
         const state = yield* Ref.get(progress);
         // Two authors for one fact: the loop watching the stream, and a
         // provider that wires the comment tool in-process and creates the
@@ -487,11 +510,11 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
       });
 
     // The scope is opened here and not inside the turn, and the ordering that
-    // buys is the whole reason: turn, then close, then release. The close hook
-    // reads the run's directory back — the transcript above all, which the
-    // provider writes *inside* the run's agent home — and the release is what
-    // deletes that agent home. Released first, the ingest reads a directory
-    // that is no longer there and every run's conversation is lost.
+    // buys is the whole reason: turn, then close, then release. The close
+    // copies the transcript the provider wrote *inside* the run's agent home
+    // into the run directory, and then reads the run's directory back; the
+    // release is what deletes that agent home. Released first, there is
+    // nothing left to copy and every run's conversation is lost.
     //
     // It is this way round rather than by keeping the agent home alive longer:
     // the directory holds a copy of a live subscription credential, which is

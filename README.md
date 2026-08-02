@@ -20,13 +20,15 @@ imports nothing of ours.
 | `packages/env` | Env parsing. | — |
 | `packages/ui` | Shared shadcn/ui components. | — |
 | `packages/typescript-config` | Shared TypeScript configs. | — |
-| `apps/gateway` | HttpApi server, SSE, auth, artifact serving. | `api` `db` `domain` |
+| `apps/gateway` | HttpApi server, SSE, auth, artifact serving. | `api` `db` `domain` `sandbox` |
 | `apps/loop` | Runtime host for the orchestrator. | `orchestrator` |
 | `apps/telegram` | Bot + manager agent. | `api` `harness` |
 | `apps/dashboard` | Vite SPA. | `api` `ui` |
 | `apps/web` | Next.js marketing app. | — |
 
-Most of these are scaffolds today: they carry their wiring and nothing else.
+`domain`, `db`, `harness`, `sandbox`, `orchestrator`, `api`, `telemetry`, `apps/loop` and
+`apps/gateway` are built. `apps/telegram` and `apps/dashboard` are scaffolds: they carry their
+wiring and nothing else.
 
 ## Stack
 
@@ -88,6 +90,10 @@ The `upgrade` command updates Next.js, refreshes all shadcn/ui components, updat
 | `bun run entrypoint:build` | Bundle the container's turn entrypoint to `${DATA_ROOT}/bin/turn.js` (`--check` reports without building) |
 | `bun run loop:start` / `loop:dev` | Run the orchestrator loop (watch mode for `dev`) |
 | `bun run loop:check` | Check the loop end to end on a stub provider (add `--docker` for a real container, `--live` for real model calls) |
+| `bun run gateway:start` / `gateway:dev` | Run the HTTP gateway (watch mode for `dev`) |
+| `bun run gateway:token` | Mint a scoped bearer token (`--scope read\|task-write\|admin --user <id> [--ttl-days N]`) |
+| `bun run gateway:check` | Drive a whole task lifecycle over HTTP against a real gateway and audit the rows it left |
+| `bun run openapi` | Write `openapi.json` from the contract (`--check` fails when it has drifted) |
 | `bun run upgrade` | Upgrade Next.js, shadcn/ui, and all deps |
 
 The libraries are consumed as source through tsconfig paths and have no build step, so
@@ -125,6 +131,9 @@ Read from `.env` / `.env.local` at the repo root (see `packages/env`). Telemetry
 | `SERVICE_VERSION` / `GIT_SHA` | — | stamped on every event's environment fields |
 | `DATABASE_URL` | required; `.env.example` ships `postgres://user:password@localhost:5432/agent_task_manager` | Postgres connection string |
 | `SANDBOX_MODE` | `docker` | `docker` or `local`; `local` runs a host process with no isolation at all |
+| `BETTER_AUTH_SECRET` | required by the gateway | signs session cookies, and derives the key that signs bearer tokens |
+| `GATEWAY_PORT` | `3100` | what the server binds |
+| `GATEWAY_PUBLIC_URL` | `http://localhost:${GATEWAY_PORT}` | the origin written into the served spec's `servers` |
 
 ## Agent harness (`bun run harness:check`)
 
@@ -288,6 +297,79 @@ loop and needs no container.
 Knobs: `ORCHESTRATOR_MAX_CONCURRENCY` (default 2, sized for a 4-core box),
 `ORCHESTRATOR_POLL_INTERVAL_MS`, `ORCHESTRATOR_LEASE_STALE_MS`, `ORCHESTRATOR_MAX_ATTEMPTS`,
 `ORCHESTRATOR_RUN_TIMEOUT_MS`, `ORCHESTRATOR_DEFAULT_PROVIDER`, `LOOP_SHUTDOWN_GRACE_MS`.
+
+## Gateway (`bun run gateway:start`, `bun run gateway:check`)
+
+**One typed contract, four consumers.** `packages/api` declares every operation — projects,
+tasks, comments, sessions, runs, run commands, artifacts — as an Effect `HttpApi` and holds no
+handlers at all. `apps/gateway` implements it group by group over the repositories, and
+`openapi.json` falls out of the same value. That derivation is the whole reason this is HttpApi
+rather than RPC: an external agent reaching the board through [Executor](https://executor.sh)
+needs to see each operation to hold it as a tool, and RPC over HTTP is one opaque endpoint.
+
+**The workspace is never addressed.** It is not a path segment and not a body field; it comes
+off the credential, so no caller can name a workspace it cannot read and no handler can forget
+to scope a query. Everything a task owns nests under `/tasks/:taskId`, which is what lets a
+run's task-bound token be checked once, in the access middleware, against the path.
+
+**Two doors, one answer.** A browser sends a Better Auth session cookie; a machine sends a
+signed, scoped, expiring bearer token. Both resolve to the same three facts — the actor every
+write is attributed to, the scope the credential is good for, and the one workspace it can see.
+Scopes are floors, not exact matches: `read` is every GET, `task-write` is ordinary work,
+`admin` is the deletes. Tokens are signed rather than stored, so verifying one is arithmetic on
+the request thread and there is no revocation short of rotating `BETTER_AUTH_SECRET` — which is
+why they are short-lived and why a run's token is bound to its own task.
+
+```bash
+bun run gateway:start                                        # serve on GATEWAY_PORT (3100)
+bun run gateway:token --scope admin --user me --ttl-days 30  # a bearer token, printed and nothing else
+curl -H "Authorization: Bearer $TOKEN" localhost:3100/tasks/board
+open http://localhost:3100/docs                              # Scalar, over the derived spec
+```
+
+`/openapi.json` and `/docs` carry no credential: the spec describes the door, it does not open
+it, and publishing it is how a connector configures itself. `components.securitySchemes` names
+the three bearer scopes and the session cookie, one scheme per scope, because OpenAPI has
+nowhere else to put a scope on a bearer token.
+
+**Run events stream as SSE over Postgres `NOTIFY`.** One `LISTEN atm_run_event` per process,
+multicast to every open stream, so a hundred dashboard tabs cost one connection. A notification
+carries ids and never a payload, so every wake-up runs the same cursor query — which makes a
+duplicate notice free, a dropped notice recoverable, and replay from an arbitrary `afterSeq` the
+same code path as the live tail. A slow tick runs beside the channel for the notification
+delivered to nobody.
+
+**Artifacts are metadata in Postgres and bytes on disk.** `list` is a query, `read` is a stream
+straight off local disk, and every path is resolved against the task's own folder and refused —
+twice, once before `realPath` and once after — unless it stays inside. Promotion copies into the
+project's or the global folder, which are read-only mounts everywhere else.
+
+**`atm.request`, one row per request, on every exit path.** Route *pattern* rather than path,
+method, status, `durationMs`, workspace, actor kind and id, token scope, bytes out, whether it
+held an event stream and for how long, outcome and `errorClass`. `traceId` comes off the
+caller's `traceparent` when there is one. A refused credential is `outcome: "rejected"` on that
+same row with the reason on it — never a 401 that vanished. Three metrics project the same row
+through a bounded vocabulary: `atm_requests_total`, `atm_request_duration_ms`, and an
+`atm_sse_connections` gauge.
+
+```bash
+bun run gateway:check   # own data root and port, seconds, no model calls
+```
+
+`gateway:check` starts the gateway as a child process, drives a whole task lifecycle over a real
+socket — file a project, file a task, comment, walk it `ideas → backlog → in progress → review →
+done`, list its runs, queue a run command, upload and read an artifact, stream a run's timeline —
+then stops it with `SIGTERM` and audits the ledger it flushed: every request left exactly one
+row, no row carries a path where a pattern belongs, and each of the four refusals left a row
+saying why. Each call mints its own `traceparent`, which is what makes both halves of that
+provable at once.
+
+**One thing on the Phase 5 list is not wired, and the check says so out loud.** The `traceId` of
+a task-create request reaches the audit row that request wrote, but it does not reach the
+`atm.run` row of the run that follows: nothing the gateway writes can carry a trace to the loop —
+`run_command` has no trace column, `task` has none either, and `RunRepo.create`'s only caller is
+the orchestrator passing its own claim span. `gateway:check` prints it as a `GAP` line on every
+run rather than asserting something weaker.
 
 ## Event ledger (`bun run logs`)
 

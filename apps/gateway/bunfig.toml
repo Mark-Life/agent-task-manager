@@ -1,0 +1,7 @@
+# The handler tests here run against a real Postgres, and the URL lives in the
+# root `.env`. Bun only reads a `.env` next to its working directory, which
+# under turbo is this package — so the preload puts the root file in the
+# environment before the first test module, and before the first `Config` read
+# freezes what Effect can see. See src/testing/root-env.ts.
+[test]
+preload = ["./src/testing/root-env.ts"]

@@ -1,3 +1,93 @@
+/**
+ * What this package is, and what it deliberately is not.
+ *
+ * It is the contract: every operation the system exposes, its request and
+ * response shapes, the failures it answers with, and the credential each one
+ * needs. Types only — there is not a handler in it, and there must not be. A
+ * server implements it group by group and a client derives from the same value,
+ * so the two cannot drift; the OpenAPI document falls out of it, which is how
+ * everything the backend can do reaches an external agent as tools.
+ *
+ * The entity schemas are the domain's, annotated with a name so the generated
+ * document carries one component per entity instead of the same object inlined
+ * at every operation. The request shapes are picks off those, so a field the
+ * store calls nullable is nullable here by construction rather than by
+ * agreement.
+ */
+
 export { Api, makeOpenApiSpec } from "./api";
+export {
+  AgentSessionEnded,
+  ArtifactAlreadyPromoted,
+  Forbidden,
+  IllegalInitialStatus,
+  IllegalTransition,
+  InvalidInput,
+  NotFound,
+  PayloadTooLarge,
+  RunAlreadyLive,
+  RunNotLive,
+  Unauthorized,
+} from "./errors";
+export { ArtifactsGroup } from "./groups/artifacts";
+export { CommentsGroup } from "./groups/comments";
 export { HealthGroup } from "./groups/health";
+export { ProjectsGroup } from "./groups/projects";
+export { RunCommandsGroup } from "./groups/run-commands";
+export { RunsGroup } from "./groups/runs";
+export { SessionsGroup } from "./groups/sessions";
+export { TasksGroup } from "./groups/tasks";
+export {
+  Artifact,
+  ArtifactPromotion,
+  ArtifactUpload,
+  PROMOTION_SCOPES,
+  PromotionScope,
+} from "./schemas/artifact";
+export { Comment, CommentAppend } from "./schemas/comment";
 export { HealthStatus } from "./schemas/health";
+export { Project, ProjectCreate, ProjectPatch } from "./schemas/project";
+export {
+  DEFAULT_EVENT_PAGE,
+  Run,
+  RunEvent,
+  RunEventCursor,
+  RunEventPage,
+} from "./schemas/run";
+export {
+  RunCommand,
+  RunTarget,
+  StartSessionRequest,
+} from "./schemas/run-command";
+export {
+  AgentSession,
+  TRANSCRIPT_ROLES,
+  Transcript,
+  TranscriptEntry,
+  TranscriptRole,
+} from "./schemas/session";
+export {
+  BoardColumn,
+  NextSession,
+  Task,
+  TaskCreate,
+  TaskDetail,
+  TaskPatch,
+  TaskPlacement,
+  TaskTransition,
+} from "./schemas/task";
+export {
+  AdminAccess,
+  AdminToken,
+  API_SCOPES,
+  ApiScope,
+  boundTaskId,
+  Principal,
+  type PrincipalShape,
+  ReadAccess,
+  ReadToken,
+  SessionCookie,
+  scopeReaches,
+  TaskWriteAccess,
+  TaskWriteToken,
+} from "./security";
