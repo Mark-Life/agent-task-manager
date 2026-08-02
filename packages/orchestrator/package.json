@@ -12,12 +12,16 @@
   },
   "dependencies": {
     "effect": "catalog:",
+    "@effect/platform-bun": "catalog:",
+    "@effect/sql-pg": "catalog:",
     "@workspace/domain": "workspace:*",
     "@workspace/db": "workspace:*",
     "@workspace/harness": "workspace:*",
-    "@workspace/sandbox": "workspace:*"
+    "@workspace/sandbox": "workspace:*",
+    "@workspace/telemetry": "workspace:*"
   },
   "devDependencies": {
+    "@types/bun": "^1.3.14",
     "@workspace/typescript-config": "workspace:*"
   }
 }

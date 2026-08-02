@@ -17,6 +17,8 @@
     "typecheck": "turbo typecheck",
     "test": "turbo test",
     "logs": "bun run scripts/logs.ts",
+    "loop:dev": "bun run --watch apps/loop/src/main.ts",
+    "loop:start": "bun run apps/loop/src/main.ts",
     "format": "bun run fix",
     "check": "bunx --bun ultracite check",
     "fix": "bunx --bun ultracite fix",
@@ -28,6 +30,7 @@
     "db:store-check": "bun run scripts/store-check.ts",
     "harness:check": "bun run scripts/harness-check.ts",
     "sandbox:check": "bun run scripts/sandbox-check.ts",
+    "loop:check": "bun run scripts/loop-check.ts",
     "images:build": "bun run scripts/build-images.ts"
   },
   "version": "0.0.1",

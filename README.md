@@ -85,6 +85,8 @@ The `upgrade` command updates Next.js, refreshes all shadcn/ui components, updat
 | `bun run harness:check` | Check the agent harness end to end (add `--live` for real model calls) |
 | `bun run sandbox:check` | Check the sandbox end to end against a real container (add `--agent` for the built image) |
 | `bun run images:build` | Build the two arm64 sandbox images (`--base`, `--browser`, `--check`) |
+| `bun run loop:start` / `loop:dev` | Run the orchestrator loop (watch mode for `dev`) |
+| `bun run loop:check` | Check the loop end to end on a stub provider (add `--live` for real model calls) |
 | `bun run upgrade` | Upgrade Next.js, shadcn/ui, and all deps |
 
 The libraries are consumed as source through tsconfig paths and have no build step, so
@@ -193,6 +195,75 @@ bun run sandbox:check --image X  # against any image by name
 The check runs the container as the operator's own uid rather than the image's `1000:1000`,
 because a bind mount carries host ownership straight through; everything else in the default
 confinement is untouched. See `docker/README.md` for the two images and the rebuild cadence.
+
+## Orchestrator loop (`bun run loop:start`, `bun run loop:check`)
+
+**Moving a card into *in progress* is the trigger, every time.** A Postgres trigger notifies
+`atm_task_dispatch` and a slow poll runs beside it as the safety net for a notification
+delivered to nobody; either wakes one sweep, and the sweep reads the column in rank order.
+There is no queue anywhere but the board.
+
+Each task goes through the same sequence, and the order is the design:
+
+```
+signal → drain run commands → read the column → plan → quota → pool → lease →
+open run → turn → close → ingest → artifact rescan → retry
+```
+
+**Nothing is written before the loop has committed.** A plan only reads: status, park stamp,
+live run, project, attempt, provider. The quota gate, the concurrency cap and the durable lease
+each get to refuse over that plan with nothing to undo — so a drained subscription costs a
+skipped sweep, not a run row and a trip through *review* to say "not now".
+
+**Every ending lands the task in *review*, failures included.** A crashed run posts its error
+into the thread as a comment, marks its session failed, and moves the card to the human gate;
+there is no failed column and no auto-retry. The backoff ladder and the park stamp
+(`task.parked_until`) apply to the two failures that leave the card in the column, where the
+next sweep would otherwise try again forever: a dispatch that never became a run, and a run
+that ended but whose move to *review* was refused. The second one is stamped from inside the
+run's own close, so the `atm.run` row reports the rung it earned.
+
+**A run that goes quiet is closed, not waited on.** A stream that ends with no result is
+`lost`; one that never ends at all is torn down at `ORCHESTRATOR_RUN_TIMEOUT_MS` (an hour by
+default) and closed as `timeout`, so a wedged provider costs one slot for one hour rather than
+one slot forever.
+
+**A run that posted no comment gets its last message appended as one**, flagged
+`fallback` so the UI can collapse it. After the turn the loop reads the run's directory back:
+the normalized event file into `run_events` (idempotently — `seq` is the file's line ordinal),
+the transcript into the session, and the task's artifacts folder into the artifact index.
+
+**Stop and rerun are rows.** Anyone may write a `run_command`; only the loop acts on one.
+Writing one notifies `atm_run_command`, which wakes a sweep the same way a card does — the
+queue is drained before the column is read, so a stop lands even with every slot busy. A stop
+interrupts the fiber holding the run, which is the whole of a teardown, and a refused command
+is rejected with its reason on the row rather than consumed in silence.
+
+**Kill it and it recovers.** A lease file per claimed task is heartbeated under
+`${DATA_ROOT}/leases`; at boot the loop reclaims every lease whose holder is gone and closes
+every run row still marked live behind it as `lost` — posting the comment, ending the session,
+moving the task, and writing the terminus row the killed process could not. A run leaves two
+`atm.run` rows sharing one `runId`: a `start` when it is claimed and a terminus on every exit
+path, so a start with no end is a countable `lost` run rather than silence.
+
+```bash
+bun run loop:start   # the loop, against DATABASE_URL; Ctrl-C for a graceful stop
+bun run loop:check   # stub provider, own data root, seconds, free
+bun run loop:check --live   # the same, on the real provider — this one costs money
+```
+
+`loop:check` files a task, watches the loop run it into *review*, then kills a second loop
+mid-run with `SIGKILL` and proves the restart closes the killed run as `lost`. Knobs:
+`ORCHESTRATOR_MAX_CONCURRENCY` (default 2, sized for a 4-core box),
+`ORCHESTRATOR_POLL_INTERVAL_MS`, `ORCHESTRATOR_LEASE_STALE_MS`, `ORCHESTRATOR_MAX_ATTEMPTS`,
+`ORCHESTRATOR_RUN_TIMEOUT_MS`, `ORCHESTRATOR_DEFAULT_PROVIDER`, `LOOP_SHUTDOWN_GRACE_MS`.
+
+**Not wired yet:** the turn is served as a host process whichever mode `SANDBOX_MODE` names.
+`packages/sandbox` works and is checked by `bun run sandbox:check`, but running the harness
+inside a container needs an entrypoint in the image that speaks the harness's event contract,
+and that does not exist — so the loop warns at startup when the configured mode is `docker` and
+writes `kind: "local"` on the row, because a row claiming isolation it did not have is the one
+lie that field exists to prevent.
 
 ## Event ledger (`bun run logs`)
 
