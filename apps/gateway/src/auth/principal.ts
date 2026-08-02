@@ -35,6 +35,7 @@ import {
 } from "@workspace/api";
 import type { Auth } from "@workspace/db";
 import { Actor, UserId, WorkspaceId } from "@workspace/domain";
+import type { TokenSigner } from "@workspace/token";
 import { type Context, Effect } from "effect";
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import {
@@ -43,7 +44,6 @@ import {
   type AuthScheme,
   recordAuth,
 } from "./record";
-import type { TokenSigner } from "./tokens";
 
 /**
  * The cookie the dashboard sends. Spelled here exactly as

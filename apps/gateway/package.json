@@ -16,6 +16,7 @@
     "@workspace/env": "workspace:*",
     "@workspace/sandbox": "workspace:*",
     "@workspace/telemetry": "workspace:*",
+    "@workspace/token": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

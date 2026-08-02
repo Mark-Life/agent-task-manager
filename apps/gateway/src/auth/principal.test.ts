@@ -33,6 +33,7 @@ import {
   UserId,
   type WorkspaceId,
 } from "@workspace/domain";
+import { tokenSignerFrom } from "@workspace/token";
 import {
   Effect,
   Layer,
@@ -48,7 +49,6 @@ import {
 } from "effect/unstable/http";
 import { makePrincipalResolver } from "./principal";
 import { type AuthRecord, makeRequestAuth, RequestAuth } from "./record";
-import { tokenSignerFrom } from "./tokens";
 
 /** Reported as `application_name`, so `pg_stat_activity` names this process. */
 const APPLICATION_NAME = "gateway-auth-test";

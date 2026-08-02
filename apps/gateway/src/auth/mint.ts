@@ -19,9 +19,9 @@ import { BunRuntime } from "@effect/platform-bun";
 import { API_SCOPES, type ApiScope } from "@workspace/api";
 import { storeLayer, WorkspaceRepo } from "@workspace/db";
 import { Actor, UserId, WorkspaceId } from "@workspace/domain";
+import { makeTokenSigner } from "@workspace/token";
 import { Duration, Effect, Schema } from "effect";
 import { SERVICE_NAME } from "../identity";
-import { makeTokenSigner } from "./tokens";
 
 /** Long enough to configure a connector with, short enough to be worth rotating. */
 const DEFAULT_TTL_DAYS = 30;

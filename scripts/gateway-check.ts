@@ -79,8 +79,8 @@ import {
 } from "@workspace/db";
 import type { TaskId, WorkspaceId } from "@workspace/domain";
 import { Actor, parseTraceparent, UserId } from "@workspace/domain";
+import { makeTokenSigner } from "@workspace/token";
 import { DateTime, Effect } from "effect";
-import { makeTokenSigner } from "../apps/gateway/src/auth/tokens";
 import { SERVICE_NAME } from "../apps/gateway/src/identity";
 import {
   artifactClaims,

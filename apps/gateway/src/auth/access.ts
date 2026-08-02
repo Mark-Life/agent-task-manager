@@ -30,6 +30,7 @@ import {
   TaskWriteAccess,
 } from "@workspace/api";
 import { Auth } from "@workspace/db";
+import { makeTokenSigner } from "@workspace/token";
 import { Context, Effect, Layer } from "effect";
 import {
   HttpRouter,
@@ -37,7 +38,6 @@ import {
   HttpServerResponse,
 } from "effect/unstable/http";
 import { makePrincipalResolver, type PrincipalResolver } from "./principal";
-import { makeTokenSigner } from "./tokens";
 
 /**
  * Where the auth library answers. Better Auth's own default, spelled out

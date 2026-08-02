@@ -12,11 +12,15 @@
     "@workspace/api": "workspace:*",
     "@workspace/db": "workspace:*",
     "@workspace/domain": "workspace:*",
+    "@workspace/env": "workspace:*",
     "@workspace/harness": "workspace:*",
+    "@workspace/manager-tools": "workspace:*",
     "@workspace/orchestrator": "workspace:*",
     "@workspace/sandbox": "workspace:*",
     "@workspace/telemetry": "workspace:*",
-    "effect": "catalog:"
+    "@workspace/token": "workspace:*",
+    "effect": "catalog:",
+    "grammy": "^1.45.1"
   },
   "devDependencies": {
     "@workspace/typescript-config": "workspace:*"
