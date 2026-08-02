@@ -23,7 +23,7 @@ Target shape inside the existing monorepo. One-way dependencies, top to bottom.
 | `packages/ui` | Shared components. Exists in template. | — |
 | `apps/gateway` | HttpApi server, SSE, auth, static artifact serving. | `api` `db` `domain` |
 | `apps/loop` | Runtime host for the orchestrator. | `orchestrator` |
-| `apps/telegram` | Bot + manager agent. | `api` `harness` |
+| `apps/bot` | Bot + manager agent. | `api` `harness` |
 | `apps/dashboard` | Vite SPA. | `api` `ui` |
 | `apps/web` | Existing Next.js. Untouched. | — |
 
@@ -54,7 +54,7 @@ would count, average, or group by is a field.
 | Container lifecycle | `sandbox` | `atm.sandbox` | 3 |
 | Run (start row + terminus) | `apps/loop` | `atm.run` | 4 |
 | HTTP request | `apps/gateway` | `atm.request` | 5 |
-| Bot message / manager turn | `apps/telegram` | `atm.chat` | 6 |
+| Bot message / manager turn | `apps/bot` | `atm.chat` | 6 |
 
 **Sinks, in this order.** (1) One JSON line appended per event to
 `${DATA_ROOT}/events/<service>.jsonl` — always on, the load-bearing ledger, rotation policy
@@ -134,7 +134,7 @@ network call.
 **Shipped**, deviations from the above:
 
 - Effect pinned at `4.0.0-beta.102`, the latest beta, not the beta.81 floor.
-- `apps/gateway`, `apps/loop` and `apps/telegram` not created — they belong to their own
+- `apps/gateway`, `apps/loop` and `apps/bot` not created — they belong to their own
   phases. Only the `packages/*` rows and `apps/dashboard` exist.
 - `bun run build` covers `dashboard` and `web` only; the packages are consumed as source
   through path aliases and have no build step, so the exit clause passes vacuously for them.

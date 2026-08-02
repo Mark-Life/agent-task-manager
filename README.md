@@ -22,13 +22,15 @@ imports nothing of ours.
 | `packages/typescript-config` | Shared TypeScript configs. | — |
 | `apps/gateway` | HttpApi server, SSE, auth, artifact serving. | `api` `db` `domain` `sandbox` |
 | `apps/loop` | Runtime host for the orchestrator. | `orchestrator` |
-| `apps/telegram` | Bot + manager agent. | `api` `harness` |
+| `packages/token` | The scoped bearer token: mint, verify, actor ceiling. | `domain` |
+| `packages/manager-tools` | The manager's fourteen board tools, as a stdio MCP server. | `api` `domain` `harness` |
+| `apps/bot` | Telegram bot + manager agent. | `api` `db` `domain` `env` `harness` `sandbox` `token` `manager-tools` |
 | `apps/dashboard` | Vite SPA. | `api` `ui` |
 | `apps/web` | Next.js marketing app. | — |
 
-`domain`, `db`, `harness`, `sandbox`, `orchestrator`, `api`, `telemetry`, `apps/loop` and
-`apps/gateway` are built. `apps/telegram` and `apps/dashboard` are scaffolds: they carry their
-wiring and nothing else.
+`domain`, `db`, `harness`, `sandbox`, `orchestrator`, `api`, `telemetry`, `token`,
+`manager-tools`, `apps/loop`, `apps/gateway` and `apps/bot` are built. `apps/dashboard` is a
+scaffold: it carries its wiring and nothing else.
 
 ## Stack
 
@@ -93,6 +95,9 @@ The `upgrade` command updates Next.js, refreshes all shadcn/ui components, updat
 | `bun run gateway:start` / `gateway:dev` | Run the HTTP gateway (watch mode for `dev`) |
 | `bun run gateway:token` | Mint a scoped bearer token (`--scope read\|task-write\|admin --user <id> [--ttl-days N]`) |
 | `bun run gateway:check` | Drive a whole task lifecycle over HTTP against a real gateway and audit the rows it left |
+| `bun run bot:start` / `bot:dev` | Run the Telegram bot and its manager agent (watch mode for `dev`) |
+| `bun run bot:check` | Drive the bot's own handlers with synthetic updates — no token, no Telegram call, no container |
+| `bun run manager-mcp:build` | Bundle the manager's board tools to `${DATA_ROOT}/bin/manager-mcp.js` |
 | `bun run openapi` | Write `openapi.json` from the contract (`--check` fails when it has drifted) |
 | `bun run upgrade` | Upgrade Next.js, shadcn/ui, and all deps |
 
@@ -133,7 +138,16 @@ Read from `.env` / `.env.local` at the repo root (see `packages/env`). Telemetry
 | `SANDBOX_MODE` | `docker` | `docker` or `local`; `local` runs a host process with no isolation at all |
 | `BETTER_AUTH_SECRET` | required by the gateway | signs session cookies, and derives the key that signs bearer tokens |
 | `GATEWAY_PORT` | `3100` | what the server binds |
-| `GATEWAY_PUBLIC_URL` | `http://localhost:${GATEWAY_PORT}` | the origin written into the served spec's `servers` |
+| `GATEWAY_PUBLIC_URL` | `http://localhost:${GATEWAY_PORT}` | the origin written into the served spec's `servers`, and the link on a notification |
+| `TELEGRAM_BOT_TOKEN` | required by the bot | token from @BotFather |
+| `TELEGRAM_ALLOWLIST` | required by the bot | `telegramUserId:workspaceId:userId`, comma separated |
+| `GROQ_API_KEY` | unset | voice-note transcription; unset means voice notes are refused and text still works |
+| `BOT_GATEWAY_URL` | `http://localhost:3100` | the gateway as the bot process reaches it |
+| `MANAGER_GATEWAY_URL` | `http://localhost:3100` | the gateway as the manager's **container** resolves it |
+
+`.env.example` carries the rest of the bot's knobs — the manager's provider, model, timeout and
+token TTL, the renderer's split and draft interval, the notification retry window and the four
+stuck-run thresholds — each commented out at its default.
 
 ## Agent harness (`bun run harness:check`)
 
@@ -370,6 +384,50 @@ a task-create request reaches the audit row that request wrote, but it does not 
 `run_command` has no trace column, `task` has none either, and `RunRepo.create`'s only caller is
 the orchestrator passing its own claim span. `gateway:check` prints it as a `GAP` line on every
 run rather than asserting something weaker.
+
+## Telegram bot and manager agent (`bun run bot:start`, `bun run bot:check`)
+
+`apps/bot` is the conversational way in. One inbound message becomes one manager turn: a
+container running the same agent CLI a worker run uses, with no repo, no task folder and
+exactly one set of tools — the board, over the gateway's own HTTP contract as a stdio MCP
+server. The manager files and moves tasks; the loop runs them.
+
+**The boundary.** The bot owns the conversation and the gateway owns the board. `chat_thread`,
+`chat_message` and `chat_notification` are read and written directly, on the bot's own pool.
+Every project, task, comment and run command — whether a tapped button or a manager tool call —
+goes over the gateway with a freshly minted `manager` token carrying the conversation that
+caused it, so `actor_thread_id` lands on the audit row and a later notice about that task comes
+back to the same chat. There is no third path, and it is a compile error rather than a rule:
+the bot's store provides no `CurrentActor`, so a board write from this app names the missing
+service.
+
+**Who it answers.** `TELEGRAM_ALLOWLIST`, as `telegramUserId:workspaceId:userId` entries
+separated by commas. There is no link-code flow. A malformed entry fails the boot rather than
+dropping one person's messages silently, and an account that is not on the list gets one
+sentence and one `atm.chat` row saying `not_allowed`.
+
+**What it says without being asked.** A run that finishes, fails or lands in review wakes the
+listener on `atm_run_event` — the same channel the loop publishes on, not a second poller — and
+the notice goes into the conversation that asked for the work, with *Start* / *Approve* /
+*Comment* buttons. `chat_notification` is a claim ledger keyed on
+`${kind}:${taskId}:${runId}`, so a restart between claim and send re-sends rather than losing
+it, and a duplicate is the failure it chooses. Beside it, a scan looks at live runs every
+minute for a run repeating the same tool calls with no file edit — surfaced, never acted on.
+
+**Before the first turn**, `bun run manager-mcp:build` has to have bundled the board tools to
+`${DATA_ROOT}/bin/manager-mcp.js`. A missing bundle is a readable failure, not a manager that
+answers confidently with no board access. `MANAGER_GATEWAY_URL` is the gateway **as the
+container resolves it** (`http://host.docker.internal:3100` on macOS); `BOT_GATEWAY_URL` is the
+same server as the bot process reaches it.
+
+`bun run bot:check` proves the wiring without a token and without one call to Telegram: the real
+handlers, registered in the real order on a real grammy `Bot`, driven with synthetic updates
+through `bot.handleUpdate`, against a real Postgres. Every Telegram API call is answered by a
+transformer on `bot.api`, and the manager turn is a layer that answers without a container. It
+asserts that a refused account leaves a row with no identity on it, that a text message opens a
+conversation and stores the message, that `/new` and a *Switch* button move the current thread,
+that a run-finished notice renders, and that the stuck rule fires on a repeating window and
+holds off on one that edited a file.
 
 ## Event ledger (`bun run logs`)
 

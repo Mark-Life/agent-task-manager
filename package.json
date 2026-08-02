@@ -20,6 +20,8 @@
     "openapi": "bun run scripts/openapi.ts",
     "loop:dev": "bun run --watch apps/loop/src/main.ts",
     "loop:start": "bun run apps/loop/src/main.ts",
+    "bot:dev": "bun run --watch apps/bot/src/main.ts",
+    "bot:start": "bun run apps/bot/src/main.ts",
     "format": "bun run fix",
     "check": "bunx --bun ultracite check",
     "fix": "bunx --bun ultracite fix",
@@ -36,8 +38,10 @@
     "gateway:start": "bun run apps/gateway/src/main.ts",
     "gateway:token": "bun run apps/gateway/src/auth/mint.ts",
     "gateway:check": "bun run scripts/gateway-check.ts",
+    "bot:check": "bun run scripts/bot-check.ts",
     "images:build": "bun run scripts/build-images.ts",
-    "entrypoint:build": "bun run scripts/build-entrypoint.ts"
+    "entrypoint:build": "bun run scripts/build-entrypoint.ts",
+    "manager-mcp:build": "bun run scripts/build-manager-mcp.ts"
   },
   "version": "0.0.1",
   "workspaces": {

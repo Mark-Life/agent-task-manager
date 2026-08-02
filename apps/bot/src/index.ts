@@ -1,0 +1,244 @@
+/**
+ * The composition point: what is registered on the bot, in what order, and what
+ * runs beside it. No handler logic lives here.
+ *
+ * **The order is the design.** The wide-event middleware is first, so a rejected
+ * sender, a crashed handler and an interrupted turn each leave exactly one
+ * `atm.chat` row. The access gate is second, so nothing below it runs for an
+ * account nobody allow-listed and everything below it can read `ctx.identity`.
+ * The commands are third, because the intake handler claims every message a
+ * command did not — registered the other way round, `/tasks` reaches the manager
+ * as the word "tasks".
+ *
+ * **The update is handled in a fiber grammy does not wait for.** grammy's
+ * built-in poller runs updates one at a time (`for (const update of updates)
+ * await this.handleUpdate(update)`), so awaiting a five-minute manager turn here
+ * would make the bot deaf to the `/stop` that ends it. Forking is what makes the
+ * queue in `dispatch.ts`, and `/stop` itself, reachable at all. The fibers live
+ * in a set the program's scope owns, so a `SIGTERM` interrupts them and their
+ * containers rather than leaving them behind.
+ *
+ * **Two long-lived fibers run beside the poller.** The notification listener
+ * hears `atm_run_event` on the store's own connection and repairs undelivered
+ * claims on a tick; the stuck watch scans live runs for a run repeating itself.
+ * Both are forked into the same scope and interrupted with it.
+ */
+
+import type { Telemetry } from "@workspace/telemetry";
+import { Effect, FiberSet, type Ref } from "effect";
+import type { FileSystem } from "effect/FileSystem";
+import type { ChatProgress, ChatUpdateKind } from "./chat-event";
+import {
+  CurrentChatProgress,
+  makeChatProgress,
+  observeChat,
+  withChatEvent,
+} from "./chat-event";
+import type { BotWiring } from "./layers";
+import { ManagerTurn } from "./manager/turn";
+import { runNotifyListener } from "./notify";
+import { StuckScan } from "./stuck/scan";
+import { registerAccess } from "./telegram/access";
+import { Allowlist, type AllowlistOps } from "./telegram/allowlist";
+import { BotService } from "./telegram/bot-service";
+import { registerCallbacks } from "./telegram/callbacks";
+import { publishBotCommands, registerCommands } from "./telegram/commands";
+import type { BotContext } from "./telegram/context";
+import {
+  makeDispatcher,
+  makePendingComments,
+  type RunManagerTurn,
+} from "./telegram/dispatch";
+import { registerIntake } from "./telegram/intake";
+
+/**
+ * What the raw update looks like before a handler classifies it.
+ *
+ * A guess, and it says so: the handler that really knows — the intake
+ * classifier, the command wrapper, the callback handler — folds the answer in
+ * with `observeChat` and wins. What this covers is the row written because no
+ * handler ever ran, which is precisely the row of a refused sender.
+ */
+const guessUpdateKind = (ctx: BotContext): ChatUpdateKind => {
+  if (ctx.callbackQuery !== undefined) {
+    return "callback";
+  }
+  const { message } = ctx;
+  if (message === undefined) {
+    return "text";
+  }
+  if (message.voice !== undefined) {
+    return "voice";
+  }
+  if (message.forward_origin !== undefined) {
+    return "forward";
+  }
+  return message.text?.startsWith("/") === true ? "command" : "text";
+};
+
+/**
+ * The immutable half of the row, read before any handler runs.
+ *
+ * The allow-list is consulted here as well as in the gate below, on purpose: the
+ * row has to name the person even on the paths where nothing else does, and a
+ * second lookup in an in-memory map is cheaper than two owners of the answer.
+ */
+const chatContextOf = (options: {
+  readonly allowlist: AllowlistOps;
+  readonly ctx: BotContext;
+  readonly progress: Ref.Ref<ChatProgress>;
+}) => {
+  const { allowlist, ctx } = options;
+  const telegramUserId = ctx.from?.id ?? 0;
+  const entry = allowlist.lookup(telegramUserId);
+  return {
+    chatId: String(ctx.chat?.id ?? telegramUserId),
+    progress: options.progress,
+    telegramUserId: String(telegramUserId),
+    updateKind: guessUpdateKind(ctx),
+    userId: entry?.userId ?? null,
+    workspaceId: entry?.workspaceId ?? null,
+  };
+};
+
+/** What the update-handling fibers and the background fibers need. */
+type UpdateServices = FileSystem | ManagerTurn | Telemetry;
+
+/**
+ * Registers every handler on the bot, in the order the module note gives.
+ *
+ * Separate from {@link runBot} because registration and *running* are different
+ * things: this one is complete without a network, which is what lets
+ * `bun run bot:check` drive the real handlers with synthetic updates and no
+ * token. Scoped — the router's fiber map and the update fiber set belong to the
+ * caller's scope, so closing it interrupts a turn and its container rather than
+ * orphaning them.
+ */
+export const registerHandlers = Effect.fnUntraced(function* (
+  wiring: BotWiring
+) {
+  const allowlist = yield* Allowlist;
+  const manager = yield* ManagerTurn;
+  const telegram = yield* BotService;
+  const { bot } = telegram;
+
+  const runUpdate = yield* FiberSet.makeRuntimePromise<UpdateServices>();
+
+  // Every update funnels through this one wrap, which is what makes "one row per
+  // update" a property of the process instead of something eight files
+  // remembered. It returns before the work finishes; see the module note.
+  bot.use((ctx, next) => {
+    const handled = runUpdate(
+      Effect.gen(function* () {
+        const progress = yield* makeChatProgress;
+        ctx.progress = progress;
+        const context = chatContextOf({ allowlist, ctx, progress });
+        return yield* Effect.promise(() => next()).pipe(withChatEvent(context));
+      })
+    );
+    handled.catch(() => {
+      // The row above already says how the update ended. Rethrowing here would
+      // only reach grammy's default error handler, which logs it a second time.
+    });
+    return Promise.resolve();
+  });
+
+  registerAccess({
+    allowlist,
+    bot,
+    botId: telegram.botId,
+    onDenied: (ctx) =>
+      runUpdate(
+        observeChat({ outcome: "not_allowed", promptChars: 0 }).pipe(
+          Effect.provideService(CurrentChatProgress, ctx.progress)
+        )
+      ).then(() => undefined),
+  });
+
+  const services = yield* Effect.context<FileSystem>();
+
+  /**
+   * One message into one container turn.
+   *
+   * The turn answers into the chat, writes its own `chat_message` row and
+   * records the session the next turn resumes; what comes back is what the
+   * update's row folds in. It is handed plain values rather than a grammy
+   * context, because a context captured before a long turn replies into a
+   * conversation that has moved on.
+   */
+  const runTurn: RunManagerTurn = (request) =>
+    manager
+      .run({
+        chatId: request.thread.chatId,
+        isPrivateChat: request.isPrivateChat,
+        message: request.message,
+        messageId: request.messageId,
+        replyToMessageId: request.replyToMessageId,
+        thread: request.thread,
+      })
+      .pipe(Effect.provideContext(services));
+
+  const pending = makePendingComments();
+  const dispatcher = yield* makeDispatcher({
+    api: telegram.api,
+    botToken: wiring.botToken,
+    pending,
+    provider: wiring.env.managerProvider,
+    runTurn,
+  });
+
+  yield* registerCommands({
+    bot,
+    dispatcher,
+    provider: wiring.env.managerProvider,
+  });
+  yield* registerCallbacks({
+    bot,
+    pending,
+    provider: wiring.env.managerProvider,
+  });
+  // Last: it claims every message the commands above did not.
+  registerIntake(bot, dispatcher.handleUpdate);
+
+  return { dispatcher, pending, runUpdate, telegram } as const;
+});
+
+/**
+ * The whole bot: the handlers, the two background fibers, and the poller.
+ *
+ * Never returns on its own — the poller holds until the fiber is interrupted,
+ * and the line on the way out is the operator's confirmation that the interrupt
+ * was seen, written while the logger layer is still up.
+ */
+export const runBot = Effect.fnUntraced(function* (wiring: BotWiring) {
+  const allowlist = yield* Allowlist;
+  const scan = yield* StuckScan;
+  const { runUpdate, telegram } = yield* registerHandlers(wiring);
+
+  yield* Effect.forkScoped(
+    runNotifyListener({ repairIntervalMs: wiring.env.notifyRepairIntervalMs })
+  );
+  yield* Effect.forkScoped(
+    scan.watch({ workspaceIds: allowlist.workspaceIds })
+  );
+
+  yield* Effect.logInfo(
+    "bot: handlers registered, listener and stuck watch running"
+  );
+
+  // Pending updates are dropped: a bot that was down for an hour would otherwise
+  // wake up and spend a container turn on every message it missed, all at once,
+  // answering conversations that have moved on.
+  return yield* telegram
+    .runPolling({
+      dropPendingUpdates: true,
+      onStart: () => runUpdate(publishBotCommands(telegram.api)),
+    })
+    .pipe(
+      Effect.onInterrupt(() =>
+        Effect.logInfo(
+          "shutdown requested — stopping the poller, interrupting live turns, flushing telemetry"
+        )
+      )
+    );
+});

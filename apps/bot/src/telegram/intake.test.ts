@@ -1,0 +1,254 @@
+/**
+ * Classification is the one part of intake with no I/O in it, and it is where
+ * the mistakes are cheapest to make: an album counted as a photo, a forwarded
+ * voice note counted as a forward, a caption dropped because it was not
+ * `text`. Each test below is one of those confusions, pinned.
+ *
+ * The resolve tests exist for a different reason: to hold the rule that
+ * `transcriptChars` and `transcribeMs` are non-null for a voice note and null
+ * for everything else. A fabricated zero on a text message is what makes an
+ * average over the ledger a lie.
+ */
+
+import { describe, expect, test } from "bun:test";
+import { Effect, Layer, Redacted } from "effect";
+import { TranscribeService } from "../transcribe";
+import type { FileLocator } from "./download";
+import {
+  classifyMessage,
+  forwardSenderName,
+  isIntakeMessage,
+  refusalFor,
+  resolveIntake,
+  type TelegramMessage,
+  UNSUPPORTED_INTAKE_REASONS,
+} from "./intake";
+
+const CHAT_ID = 4242;
+const MESSAGE_ID = 7;
+
+/** A message with only the fields a branch reads. The rest never reaches the classifier. */
+const messageOf = (fields: Partial<TelegramMessage>) =>
+  ({
+    chat: { id: CHAT_ID, type: "private" },
+    date: 0,
+    message_id: MESSAGE_ID,
+    ...fields,
+  }) as TelegramMessage;
+
+const userOrigin = {
+  date: 0,
+  sender_user: { first_name: "Ada", id: 1, is_bot: false },
+  type: "user",
+} as NonNullable<TelegramMessage["forward_origin"]>;
+
+describe("classifyMessage", () => {
+  test("plain text carries its body, its length and its message id", () => {
+    const result = classifyMessage(messageOf({ text: "file a task" }));
+    expect(result).toEqual({
+      body: "file a task",
+      chars: 11,
+      forwardFrom: null,
+      kind: "text",
+      telegramChatId: CHAT_ID,
+      telegramMessageId: MESSAGE_ID,
+    });
+  });
+
+  test("a forward is its own kind and names the sender, without prefixing the body", () => {
+    const result = classifyMessage(
+      messageOf({ forward_origin: userOrigin, text: "look at this" })
+    );
+    expect(result).toEqual({
+      body: "look at this",
+      chars: 12,
+      forwardFrom: "Ada",
+      kind: "forward",
+      telegramChatId: CHAT_ID,
+      telegramMessageId: MESSAGE_ID,
+    });
+  });
+
+  test("a caption is a body — a forwarded caption is not dropped", () => {
+    const result = classifyMessage(
+      messageOf({ caption: "from the channel", forward_origin: userOrigin })
+    );
+    expect(result).toMatchObject({ body: "from the channel", kind: "forward" });
+  });
+
+  test("a voice note carries no body and no character count", () => {
+    const result = classifyMessage(
+      messageOf({
+        voice: { duration: 12, file_id: "AgAD", file_unique_id: "u" },
+      })
+    );
+    expect(result).toEqual({
+      fileId: "AgAD",
+      forwardFrom: null,
+      kind: "voice",
+      telegramChatId: CHAT_ID,
+      telegramMessageId: MESSAGE_ID,
+      voiceSeconds: 12,
+    });
+  });
+
+  test("a forwarded voice note is a voice note that remembers the sender", () => {
+    const result = classifyMessage(
+      messageOf({
+        forward_origin: userOrigin,
+        voice: { duration: 3, file_id: "AgAD", file_unique_id: "u" },
+      })
+    );
+    expect(result).toMatchObject({ forwardFrom: "Ada", kind: "voice" });
+  });
+
+  test("an album is refused as a group, before its photos are refused one by one", () => {
+    const result = classifyMessage(
+      messageOf({
+        media_group_id: "999",
+        photo: [{ file_id: "p", file_unique_id: "u", height: 1, width: 1 }],
+      })
+    );
+    expect(result).toMatchObject({
+      kind: "unsupported",
+      reason: "media_group",
+    });
+  });
+
+  test("photos, documents and anything else are refused with their own reason", () => {
+    expect(
+      classifyMessage(
+        messageOf({
+          photo: [{ file_id: "p", file_unique_id: "u", height: 1, width: 1 }],
+        })
+      )
+    ).toMatchObject({ reason: "photo" });
+    expect(
+      classifyMessage(
+        messageOf({ document: { file_id: "d", file_unique_id: "u" } })
+      )
+    ).toMatchObject({ reason: "document" });
+    expect(classifyMessage(messageOf({}))).toMatchObject({
+      reason: "unsupported_media",
+    });
+    expect(classifyMessage(messageOf({ text: "" }))).toMatchObject({
+      reason: "empty",
+    });
+  });
+
+  test("every refusal reason has a sentence of its own", () => {
+    const sentences = UNSUPPORTED_INTAKE_REASONS.map(refusalFor);
+    expect(new Set(sentences).size).toBe(UNSUPPORTED_INTAKE_REASONS.length);
+  });
+
+  test("isIntakeMessage separates the turns from the refusals", () => {
+    expect(isIntakeMessage(classifyMessage(messageOf({ text: "hi" })))).toBe(
+      true
+    );
+    expect(isIntakeMessage(classifyMessage(messageOf({})))).toBe(false);
+  });
+});
+
+describe("forwardSenderName", () => {
+  test("names a user, a channel and a hidden sender, and refuses to guess otherwise", () => {
+    expect(forwardSenderName(userOrigin)).toBe("Ada");
+    expect(
+      forwardSenderName({
+        chat: { id: -1, title: "Releases", type: "channel" },
+        date: 0,
+        message_id: 1,
+        type: "channel",
+      } as NonNullable<TelegramMessage["forward_origin"]>)
+    ).toBe("Releases");
+    expect(
+      forwardSenderName({
+        date: 0,
+        sender_user_name: "Someone",
+        type: "hidden_user",
+      } as NonNullable<TelegramMessage["forward_origin"]>)
+    ).toBe("Someone");
+    expect(
+      forwardSenderName({ type: "chat" } as NonNullable<
+        TelegramMessage["forward_origin"]
+      >)
+    ).toBe("unknown");
+  });
+});
+
+const silentTranscriber = Layer.succeed(TranscribeService, {
+  available: true,
+  transcribe: () =>
+    Effect.succeed({ chars: 9, durationMs: 1234, text: "spoken it" }),
+} as unknown as TranscribeService["Service"]);
+
+const locator: FileLocator = {
+  getFile: () => Promise.resolve({ file_path: "voice/file_1.oga" }),
+};
+
+const token = Redacted.make("123456:aaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+describe("resolveIntake", () => {
+  test("a text turn has null transcription measurements, not zeros", async () => {
+    const resolved = await Effect.runPromise(
+      resolveIntake({
+        api: locator,
+        message: {
+          body: "file a task",
+          chars: 11,
+          forwardFrom: null,
+          kind: "text",
+          telegramChatId: CHAT_ID,
+          telegramMessageId: MESSAGE_ID,
+        },
+        token,
+      }).pipe(Effect.provide(silentTranscriber))
+    );
+    expect(resolved).toEqual({
+      body: "file a task",
+      chars: 11,
+      forwardFrom: null,
+      intakeKind: "text",
+      telegramChatId: CHAT_ID,
+      telegramMessageId: MESSAGE_ID,
+      transcribeMs: null,
+      transcriptChars: null,
+    });
+  });
+
+  test("a voice turn resolves to the transcript, its length and how long it took", async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(new Uint8Array([1, 2, 3]))
+      )) as unknown as typeof globalThis.fetch;
+
+    try {
+      const resolved = await Effect.runPromise(
+        resolveIntake({
+          api: locator,
+          message: {
+            fileId: "AgAD",
+            forwardFrom: "Ada",
+            kind: "voice",
+            telegramChatId: CHAT_ID,
+            telegramMessageId: MESSAGE_ID,
+            voiceSeconds: 3,
+          },
+          token,
+        }).pipe(Effect.provide(silentTranscriber))
+      );
+      expect(resolved).toEqual({
+        body: "spoken it",
+        chars: 9,
+        forwardFrom: "Ada",
+        intakeKind: "voice",
+        telegramChatId: CHAT_ID,
+        telegramMessageId: MESSAGE_ID,
+        transcribeMs: 1234,
+        transcriptChars: 9,
+      });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
