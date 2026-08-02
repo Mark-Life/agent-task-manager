@@ -22,6 +22,7 @@ import { runCommandsHandlers } from "./run-commands";
 import { runsHandlers } from "./runs";
 import { sessionsHandlers } from "./sessions";
 import { tasksHandlers } from "./tasks";
+import { threadsHandlers } from "./threads";
 
 /** Every group of the contract, implemented. */
 export const handlersLayer = Layer.mergeAll(
@@ -32,5 +33,6 @@ export const handlersLayer = Layer.mergeAll(
   sessionsHandlers,
   runsHandlers,
   runCommandsHandlers,
-  artifactsHandlers
+  artifactsHandlers,
+  threadsHandlers
 );

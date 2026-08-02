@@ -37,6 +37,7 @@ export { RunCommandsGroup } from "./groups/run-commands";
 export { RunsGroup } from "./groups/runs";
 export { SessionsGroup } from "./groups/sessions";
 export { TasksGroup } from "./groups/tasks";
+export { ThreadsGroup } from "./groups/threads";
 export {
   Artifact,
   ArtifactPromotion,
@@ -76,6 +77,19 @@ export {
   TaskPlacement,
   TaskTransition,
 } from "./schemas/task";
+export {
+  DEFAULT_MESSAGE_PAGE,
+  DEFAULT_THREAD_PAGE,
+  Thread,
+  ThreadCreate,
+  ThreadDetail,
+  ThreadMessage,
+  ThreadMessageAppend,
+  ThreadMessageCursor,
+  ThreadMessagePage,
+  ThreadMessagePosted,
+  ThreadPatch,
+} from "./schemas/thread";
 export {
   AdminAccess,
   AdminToken,

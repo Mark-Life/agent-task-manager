@@ -134,13 +134,17 @@ const fileRun = (title: string) =>
     filed.push(task.id);
 
     const session = yield* asOrchestrator(
-      sessions.open({ provider: "claude", taskId: task.id, workspaceId })
+      sessions.open({
+        provider: "claude",
+        subject: { id: task.id, kind: "task" },
+        workspaceId,
+      })
     );
     const run = yield* asOrchestrator(
       runs.create({
         agentSessionId: session.id,
         provider: "claude",
-        taskId: task.id,
+        subject: { id: task.id, kind: "task" },
         trigger: "status_change",
         workspaceId,
       })
@@ -159,7 +163,14 @@ const appendEvent = (input: {
   Effect.gen(function* () {
     const events = yield* RunEventRepo;
     const occurredAt = yield* DateTime.now;
-    return yield* events.append({ ...input, occurredAt, workspaceId });
+    return yield* events.append({
+      occurredAt,
+      payload: input.payload,
+      runId: input.runId,
+      seq: input.seq,
+      subject: { id: input.taskId, kind: "task" },
+      workspaceId,
+    });
   });
 
 /** A line the agent said, which is the cheapest event that is not a terminus. */

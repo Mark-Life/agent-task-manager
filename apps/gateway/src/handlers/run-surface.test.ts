@@ -203,7 +203,11 @@ const openSession = (taskId: TaskId) =>
   runStore(
     Effect.gen(function* () {
       const sessions = yield* AgentSessionRepo;
-      return yield* sessions.open({ provider: "claude", taskId, workspaceId });
+      return yield* sessions.open({
+        provider: "claude",
+        subject: { id: taskId, kind: "task" },
+        workspaceId,
+      });
     })
   );
 
@@ -222,7 +226,7 @@ const makeRun = (taskId: TaskId, agentSessionId: AgentSessionId) =>
       return yield* runs.create({
         agentSessionId,
         provider: "claude",
-        taskId,
+        subject: { id: taskId, kind: "task" },
         trigger: "status_change",
         workspaceId,
       });
@@ -243,17 +247,26 @@ const finishRun = (id: RunId) =>
  * container's event file, not the order rows reached Postgres, and the endpoint
  * has to answer in the first order rather than the second.
  */
-const appendEvent = (run: Run, seq: number, text: string) =>
+const appendEvent = (input: {
+  readonly run: Run;
+  readonly seq: number;
+  readonly task: Task;
+  readonly text: string;
+}) =>
   runStore(
     Effect.gen(function* () {
       const events = yield* RunEventRepo;
       const occurredAt = yield* DateTime.now;
       return yield* events.append({
         occurredAt,
-        payload: { chars: text.length, kind: "assistant_message", text },
-        runId: run.id,
-        seq,
-        taskId: run.taskId,
+        payload: {
+          chars: input.text.length,
+          kind: "assistant_message",
+          text: input.text,
+        },
+        runId: input.run.id,
+        seq: input.seq,
+        subject: { id: input.task.id, kind: "task" },
         workspaceId,
       });
     })
@@ -265,7 +278,11 @@ const appendEvent = (run: Run, seq: number, text: string) =>
  * catches a run that stopped saying anything is ten seconds away and is not
  * what this suite is testing.
  */
-const appendFinished = (run: Run, seq: number) =>
+const appendFinished = (input: {
+  readonly run: Run;
+  readonly seq: number;
+  readonly task: Task;
+}) =>
   runStore(
     Effect.gen(function* () {
       const events = yield* RunEventRepo;
@@ -280,9 +297,9 @@ const appendFinished = (run: Run, seq: number) =>
           totalTokens: 0,
           turns: 1,
         },
-        runId: run.id,
-        seq,
-        taskId: run.taskId,
+        runId: input.run.id,
+        seq: input.seq,
+        subject: { id: input.task.id, kind: "task" },
         workspaceId,
       });
     })
@@ -293,9 +310,21 @@ const appendFinished = (run: Run, seq: number) =>
  * because each write opens its own pool: five at once would be five, and the
  * order they land in is what one test below is about.
  */
-const appendEach = (run: Run, seqs: readonly number[]) =>
-  seqs.reduce<Promise<unknown>>(
-    (written, seq) => written.then(() => appendEvent(run, seq, `line ${seq}`)),
+const appendEach = (input: {
+  readonly run: Run;
+  readonly seqs: readonly number[];
+  readonly task: Task;
+}) =>
+  input.seqs.reduce<Promise<unknown>>(
+    (written, seq) =>
+      written.then(() =>
+        appendEvent({
+          run: input.run,
+          seq,
+          task: input.task,
+          text: `line ${seq}`,
+        })
+      ),
     Promise.resolve()
   );
 
@@ -363,7 +392,7 @@ test("a run belonging to another task is absent, not forbidden", async () => {
 test("a run's events page in seq order whatever order they were written", async () => {
   const task = await makeTask("run surface: timeline");
   const run = await makeLiveRun(task);
-  await appendEach(run, [3, 0, 4, 1, 2]);
+  await appendEach({ run, seqs: [3, 0, 4, 1, 2], task });
 
   const first = await get(`/tasks/${task.id}/runs/${run.id}/events?limit=2`);
   expect(first.status).toBe(200);
@@ -400,8 +429,8 @@ test("a run's events page in seq order whatever order they were written", async 
 test("the stream replays from the cursor and closes on a finished run", async () => {
   const task = await makeTask("run surface: stream");
   const run = await makeLiveRun(task);
-  await appendEach(run, [0, 1]);
-  await appendFinished(run, 2);
+  await appendEach({ run, seqs: [0, 1], task });
+  await appendFinished({ run, seq: 2, task });
   await finishRun(run.id);
 
   const response = await get(

@@ -67,4 +67,20 @@ describe("the contract", () => {
     );
     expect(stray).toEqual([]);
   });
+
+  // A conversation is not a card, so it is rooted beside the board rather than
+  // under it — and everything it owns still nests under one id, so the thread
+  // is proved once per request instead of once per read.
+  test("nests everything a thread owns under its id", () => {
+    const stray = Object.keys(makeOpenApiSpec().paths).filter(
+      (path) => path.startsWith("/threads/") && !path.startsWith("/threads/{")
+    );
+    expect(stray).toEqual([]);
+  });
+
+  test("reaches a conversation without going through a task", () => {
+    const paths = Object.keys(makeOpenApiSpec().paths);
+    expect(paths).toContain("/threads");
+    expect(paths).toContain("/threads/{threadId}/messages");
+  });
 });

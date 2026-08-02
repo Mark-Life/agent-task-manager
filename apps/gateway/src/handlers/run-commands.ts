@@ -157,7 +157,7 @@ const enqueue = (
       commands.enqueue({
         payload: input.payload,
         runId: input.runId,
-        taskId: route.taskId,
+        subject: { id: route.taskId, kind: "task" },
         workspaceId: route.workspaceId,
       })
     );

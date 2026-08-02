@@ -2776,6 +2776,691 @@
           "required": true
         }
       }
+    },
+    "/threads": {
+      "get": {
+        "tags": [
+          "threads"
+        ],
+        "operationId": "threads.list",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^[+-]?\\d*\\.?\\d+(?:[Ee][+-]?\\d+)?$"
+                }
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^[+-]?\\d*\\.?\\d+(?:[Ee][+-]?\\d+)?$"
+                }
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "archived"
+              ]
+            },
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Thread"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List the manager conversations"
+      },
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "operationId": "threads.create",
+        "parameters": [],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Thread"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Open a conversation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThreadCreate"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/threads/{threadId}": {
+      "get": {
+        "tags": [
+          "threads"
+        ],
+        "operationId": "threads.get",
+        "parameters": [
+          {
+            "name": "threadId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ThreadDetail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get a conversation with its live turn"
+      },
+      "patch": {
+        "tags": [
+          "threads"
+        ],
+        "operationId": "threads.patch",
+        "parameters": [
+          {
+            "name": "threadId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Thread"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Retitle, select or archive a conversation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThreadPatch"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/threads/{threadId}/messages": {
+      "get": {
+        "tags": [
+          "threads"
+        ],
+        "operationId": "threads.messages",
+        "parameters": [
+          {
+            "name": "threadId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^[+-]?\\d*\\.?\\d+(?:[Ee][+-]?\\d+)?$"
+                }
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^[+-]?\\d*\\.?\\d+(?:[Ee][+-]?\\d+)?$"
+                }
+              ]
+            },
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ThreadMessagePage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadMessagePage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read a page of a conversation"
+      },
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "operationId": "threads.postMessage",
+        "parameters": [
+          {
+            "name": "threadId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ThreadMessagePosted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadMessagePosted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Post a message to a conversation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThreadMessageAppend"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/threads/{threadId}/runs": {
+      "get": {
+        "tags": [
+          "threads"
+        ],
+        "operationId": "threads.runs",
+        "parameters": [
+          {
+            "name": "threadId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Run"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List a conversation's turns"
+      }
+    },
+    "/threads/{threadId}/stop": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "operationId": "threads.stop",
+        "parameters": [
+          {
+            "name": "threadId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "taskWriteToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "RunCommand",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunCommand"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Ask the orchestrator to stop a live turn",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunTarget"
+              }
+            }
+          },
+          "required": true
+        }
+      }
     }
   },
   "components": {
@@ -3897,32 +4582,6 @@
           "updatedAt": {
             "type": "string"
           },
-          "commentWatermarkAt": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "commentWatermarkId": {
-            "anyOf": [
-              {
-                "type": "string",
-                "allOf": [
-                  {
-                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
-                    "format": "uuid"
-                  }
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "endedAt": {
             "anyOf": [
               {
@@ -3978,11 +4637,60 @@
             ]
           },
           "taskId": {
-            "type": "string",
-            "allOf": [
+            "anyOf": [
               {
-                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
-                "format": "uuid"
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "threadId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unreadWatermarkAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unreadWatermarkId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -3991,15 +4699,16 @@
           "createdAt",
           "workspaceId",
           "updatedAt",
-          "commentWatermarkAt",
-          "commentWatermarkId",
           "endedAt",
           "errorMessage",
           "id",
           "provider",
           "providerSessionId",
           "status",
-          "taskId"
+          "taskId",
+          "threadId",
+          "unreadWatermarkAt",
+          "unreadWatermarkId"
         ],
         "additionalProperties": false
       },
@@ -4131,16 +4840,6 @@
           },
           "updatedAt": {
             "type": "string"
-          },
-          "agentHomePath": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "agentSessionId": {
             "type": "string",
@@ -4292,6 +4991,13 @@
               "codex"
             ]
           },
+          "role": {
+            "type": "string",
+            "enum": [
+              "worker",
+              "manager"
+            ]
+          },
           "sandboxImage": {
             "anyOf": [
               {
@@ -4323,11 +5029,34 @@
             ]
           },
           "taskId": {
-            "type": "string",
-            "allOf": [
+            "anyOf": [
               {
-                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
-                "format": "uuid"
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "threadId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -4385,7 +5114,6 @@
           "createdAt",
           "workspaceId",
           "updatedAt",
-          "agentHomePath",
           "agentSessionId",
           "attempt",
           "branch",
@@ -4400,10 +5128,12 @@
           "model",
           "outcome",
           "provider",
+          "role",
           "sandboxImage",
           "startedAt",
           "status",
           "taskId",
+          "threadId",
           "totalTokens",
           "traceId",
           "trigger",
@@ -4928,11 +5658,34 @@
             ]
           },
           "taskId": {
-            "type": "string",
-            "allOf": [
+            "anyOf": [
               {
-                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
-                "format": "uuid"
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "threadId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -4945,7 +5698,8 @@
           "payload",
           "runId",
           "seq",
-          "taskId"
+          "taskId",
+          "threadId"
         ],
         "additionalProperties": false
       },
@@ -5171,11 +5925,34 @@
             ]
           },
           "taskId": {
-            "type": "string",
-            "allOf": [
+            "anyOf": [
               {
-                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
-                "format": "uuid"
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "threadId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -5205,6 +5982,7 @@
           "runId",
           "status",
           "taskId",
+          "threadId",
           "traceparent"
         ],
         "additionalProperties": false
@@ -5490,6 +6268,373 @@
           "artifactId"
         ],
         "additionalProperties": false
+      },
+      "Thread": {
+        "type": "object",
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "chatId": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "isCurrent": {
+            "type": "boolean"
+          },
+          "lastMessageAt": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "archived"
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "userId": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          }
+        },
+        "required": [
+          "createdAt",
+          "workspaceId",
+          "updatedAt",
+          "chatId",
+          "id",
+          "isCurrent",
+          "lastMessageAt",
+          "provider",
+          "status",
+          "title",
+          "userId"
+        ],
+        "additionalProperties": false
+      },
+      "ThreadCreate": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ThreadDetail": {
+        "type": "object",
+        "properties": {
+          "liveRunId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "thread": {
+            "$ref": "#/components/schemas/Thread"
+          }
+        },
+        "required": [
+          "liveRunId",
+          "thread"
+        ],
+        "additionalProperties": false
+      },
+      "ThreadPatch": {
+        "type": "object",
+        "properties": {
+          "isCurrent": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "archived"
+            ]
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ThreadMessage": {
+        "type": "object",
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "forwardFrom": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "intakeKind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "text",
+                  "voice",
+                  "forward",
+                  "command",
+                  "callback",
+                  "api"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "manager"
+            ]
+          },
+          "runId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "telegramChatId": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "telegramMessageId": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "threadId": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "transcriptChars": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "createdAt",
+          "workspaceId",
+          "body",
+          "forwardFrom",
+          "id",
+          "intakeKind",
+          "role",
+          "runId",
+          "telegramChatId",
+          "telegramMessageId",
+          "threadId",
+          "transcriptChars"
+        ],
+        "additionalProperties": false
+      },
+      "ThreadMessagePage": {
+        "type": "object",
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThreadMessage"
+            }
+          },
+          "nextOffset": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "messages",
+          "nextOffset"
+        ],
+        "additionalProperties": false
+      },
+      "ThreadMessageAppend": {
+        "type": "object",
+        "properties": {
+          "body": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "body"
+        ],
+        "additionalProperties": false
+      },
+      "ThreadMessagePosted": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "$ref": "#/components/schemas/ThreadMessage"
+          },
+          "queued": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "message",
+          "queued"
+        ],
+        "additionalProperties": false
       }
     },
     "securitySchemes": {
@@ -5552,6 +6697,10 @@
     {
       "name": "artifacts",
       "description": "Artifacts: files a run kept, and the promotion that shares them."
+    },
+    {
+      "name": "threads",
+      "description": "Threads: conversations with the manager agent, and the turns they cause."
     }
   ]
 }

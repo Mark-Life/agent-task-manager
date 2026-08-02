@@ -7,6 +7,7 @@ import { RunCommandsGroup } from "./groups/run-commands";
 import { RunsGroup } from "./groups/runs";
 import { SessionsGroup } from "./groups/sessions";
 import { TasksGroup } from "./groups/tasks";
+import { ThreadsGroup } from "./groups/threads";
 
 /**
  * The whole HTTP surface of the system, as a contract.
@@ -29,6 +30,11 @@ import { TasksGroup } from "./groups/tasks";
  * against the path — rather than in each of the handlers that would otherwise
  * have to remember.
  *
+ * A conversation with the manager is the one thing that is not a task's, so
+ * `/threads` is rooted beside `/tasks` rather than under it: the same thread is
+ * reachable from Telegram and from anything else holding a credential, and it
+ * would still exist if the board were empty.
+ *
  * Creates answer 200 carrying the created row rather than 201. The body is the
  * same entity every read of it returns and the generated document names that
  * shape once; a status-annotated copy of a schema is a second component with
@@ -43,7 +49,8 @@ export class Api extends HttpApi.make("atm")
     SessionsGroup,
     RunsGroup,
     RunCommandsGroup,
-    ArtifactsGroup
+    ArtifactsGroup,
+    ThreadsGroup
   )
   .annotate(OpenApi.Title, "Agent Task Manager")
   .annotate(OpenApi.Version, "0.0.1")
