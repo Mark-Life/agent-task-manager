@@ -21,7 +21,9 @@
 
 import type {
   ChatIntakeKind,
+  ChatMessage,
   ChatMessageRole,
+  RunId,
   TelegramChatId,
   TelegramMessageId,
   ThreadId,
@@ -29,7 +31,7 @@ import type {
 } from "@workspace/domain";
 import { newChatMessageId } from "@workspace/domain";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
-import { Context, Effect, Layer } from "effect";
+import { Context, DateTime, Effect, Layer } from "effect";
 import { Database } from "../client";
 import { ChatMessageInsert, decodeChatMessage } from "../rows";
 import { chatMessage, chatThread } from "../schema/chat";
@@ -64,12 +66,22 @@ export interface ChatMessageAppend extends ThreadMessages {
   readonly forwardFrom?: string | null;
   /** Set for a `user` message and refused on the manager's own. */
   readonly intakeKind?: ChatIntakeKind | null;
-  readonly providerSessionId?: string | null;
   readonly role: ChatMessageRole;
-  readonly telegramChatId: TelegramChatId;
+  /** The turn that produced this answer. Absent on the question that starts one. */
+  readonly runId?: RunId | null;
+  /** Absent on a message that never travelled through Telegram. */
+  readonly telegramChatId?: TelegramChatId | null;
   readonly telegramMessageId?: TelegramMessageId | null;
   readonly transcriptChars?: number | null;
 }
+
+/**
+ * How far through a thread a session has been read. A position, compared as the
+ * `(createdAt, id)` tuple the thread is ordered by, so a same-millisecond tie
+ * cannot skip a message.
+ */
+export interface ChatMessageWatermark
+  extends Pick<ChatMessage, "createdAt" | "id"> {}
 
 const make = Effect.gen(function* () {
   const db = yield* Database;
@@ -105,9 +117,9 @@ const make = Effect.gen(function* () {
         forwardFrom: input.forwardFrom ?? null,
         id: newChatMessageId(),
         intakeKind: input.intakeKind ?? null,
-        providerSessionId: input.providerSessionId ?? null,
         role: input.role,
-        telegramChatId: input.telegramChatId,
+        runId: input.runId ?? null,
+        telegramChatId: input.telegramChatId ?? null,
         telegramMessageId: input.telegramMessageId ?? null,
         threadId: input.threadId,
         transcriptChars: input.transcriptChars ?? null,
@@ -185,6 +197,54 @@ const make = Effect.gen(function* () {
     return [...decoded].reverse();
   });
 
+  /**
+   * Everything said after a position in the thread, oldest first — the backlog
+   * a turn is prompted with. The comparison is one row-wise `>` rather than a
+   * timestamp test with a tiebreaker bolted on, because that is the shape of
+   * the `(thread_id, created_at, id)` index and the shape that cannot drop a
+   * message written in the same millisecond as the watermark.
+   *
+   * A session with no watermark has been shown nothing, so it gets the thread
+   * from the beginning. That is also what makes coalescing free: every message
+   * that arrived while a turn ran is unread when the next one starts, so N of
+   * them become one prompt without anybody queueing them.
+   */
+  const since = Effect.fn("ChatMessageRepo.since")(function* (
+    options: ThreadMessages & {
+      readonly watermark: ChatMessageWatermark | null;
+    }
+  ) {
+    yield* Effect.annotateCurrentSpan({
+      threadId: options.threadId,
+      workspaceId: options.workspaceId,
+    });
+
+    const scope = threadOf(options);
+    const { watermark } = options;
+
+    const rows = yield* execute(
+      "ChatMessageRepo.since",
+      db
+        .select()
+        .from(chatMessage)
+        .where(
+          watermark === null
+            ? scope
+            : and(
+                scope,
+                sql`(${chatMessage.createdAt}, ${chatMessage.id}) > (${DateTime.toDate(watermark.createdAt)}::timestamptz, ${watermark.id}::uuid)`
+              )
+        )
+        .orderBy(asc(chatMessage.createdAt), asc(chatMessage.id))
+    );
+
+    return yield* decodeMany({
+      decode: decodeChatMessage,
+      entity: ENTITY,
+      rows,
+    });
+  });
+
   /** A page of a thread, oldest first — what `/history` walks through. */
   const listForThread = Effect.fn("ChatMessageRepo.listForThread")(function* (
     options: ThreadMessages & {
@@ -215,7 +275,7 @@ const make = Effect.gen(function* () {
     });
   });
 
-  return { append, listForThread, recent } as const;
+  return { append, listForThread, recent, since } as const;
 });
 
 /** A thread's messages. Append-only, and the manager's whole memory. */

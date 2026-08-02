@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import { commandActorFields } from "./actor";
 import { RunCommandStatus, RunTrigger } from "./enums";
-import { RunCommandId, RunId, TaskId } from "./ids";
+import { RunCommandId, RunId, TaskId, ThreadId } from "./ids";
 import { recordFields, Timestamp } from "./primitives";
 
 /** Kill the container. */
@@ -49,8 +49,10 @@ export const RunCommand = Schema.Struct({
   /** Null targets whichever run is live. */
   runId: Schema.NullOr(RunId),
   status: RunCommandStatus,
-  /** A command can target a task that has no run yet. */
-  taskId: TaskId,
+  /** A command can target a task that has no run yet. Null when it names a thread. */
+  taskId: Schema.NullOr(TaskId),
+  /** How a live manager turn is stopped: the same row, naming the conversation. */
+  threadId: Schema.NullOr(ThreadId),
   /**
    * The W3C `traceparent` of the request that asked, so the run this command
    * starts joins it. Null for a command written outside a trace.

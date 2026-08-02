@@ -4,6 +4,7 @@ import {
   RunEventPayload,
   RunId,
   TaskId,
+  ThreadId,
   Timestamp,
   WorkspaceId,
 } from "@workspace/domain";
@@ -30,6 +31,7 @@ const columns = {
   runId: () => RunId,
   seq: () => Schema.Natural,
   taskId: () => TaskId,
+  threadId: () => ThreadId,
   workspaceId: () => WorkspaceId,
 };
 

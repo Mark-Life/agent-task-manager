@@ -5,6 +5,7 @@ import type {
   RunOutcome,
   RunTrigger,
   SessionProvider,
+  ThreadId,
   WorkspaceId,
 } from "@workspace/domain";
 import {
@@ -12,12 +13,15 @@ import {
   newRunId,
   RunId,
   RunStatus,
-  TaskId,
+  RunSubject,
+  roleOfSubject,
+  type TaskId,
 } from "@workspace/domain";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { Context, DateTime, Effect, Layer, Schema } from "effect";
 import { Database } from "../client";
 import { decodeRun, RunInsert, RunUpdate } from "../rows";
+import { chatThread } from "../schema/chat";
 import { run } from "../schema/run";
 import { task } from "../schema/task";
 import {
@@ -32,14 +36,26 @@ import {
   encodeWrite,
   execute,
   firstRow,
+  type Transaction,
   writer,
 } from "./audit";
+import { subjectColumns } from "./subject";
 
-/** Nothing in here reads more than one row by id, and a task has at most one live run. */
+/** Nothing in here reads more than one row by id, and a subject has at most one live run. */
 const ONE = 1;
 
 /** The table these rows live in, and what an error names them as. */
 const ENTITY = "run";
+
+/** The other table a run can be attached to, named for a not-found failure. */
+const ENTITY_THREAD = "chat_thread";
+
+/**
+ * What the lock read selects. A constant rather than the id, so locking a task
+ * and locking a thread produce one row shape and the caller only has to ask
+ * whether anything came back.
+ */
+const LOCKED = sql<number>`1`;
 
 /** The first attempt at a task. Later attempts count up from here for the retry backoff. */
 const FIRST_ATTEMPT = 1;
@@ -70,21 +86,34 @@ interface RunRef {
   readonly workspaceId: WorkspaceId;
 }
 
+/** What identifies the runs on one task or one thread. */
+interface SubjectRef {
+  readonly subject: RunSubject;
+  readonly workspaceId: WorkspaceId;
+}
+
 /** What identifies a task's runs. */
 interface TaskRef {
   readonly taskId: TaskId;
   readonly workspaceId: WorkspaceId;
 }
 
+/** What identifies a thread's turns. */
+interface ThreadRunsRef {
+  readonly threadId: ThreadId;
+  readonly workspaceId: WorkspaceId;
+}
+
 /**
- * The task already has a queued or running run. One run per task at a time is
- * what stops two containers writing the same artifacts directory; the partial
- * unique index enforces it, and this is the same refusal arriving as a value
- * rather than as a constraint violation.
+ * The subject already has a queued or running run. One run per task at a time
+ * is what stops two containers writing the same artifacts directory, and one
+ * per thread is what stops two answers to one conversation; the partial unique
+ * indexes enforce both, and this is the same refusal arriving as a value rather
+ * than as a constraint violation.
  */
 export class RunAlreadyLive extends Schema.TaggedErrorClass<RunAlreadyLive>()(
   "RunRepo.AlreadyLive",
-  { liveRunId: RunId, taskId: TaskId }
+  { liveRunId: RunId, subject: RunSubject }
 ) {}
 
 /** A run leaves the queue once. Starting it again would restate when it began. */
@@ -108,15 +137,27 @@ const liveStatuses = [...LIVE_RUN_STATUSES];
 const refOf = (ref: RunRef) =>
   and(eq(run.workspaceId, ref.workspaceId), eq(run.id, ref.id));
 
-const liveOn = (ref: TaskRef) =>
+/** The one of the two columns this subject is stored in. */
+const subjectOf = (subject: RunSubject) =>
+  subject.kind === "task"
+    ? eq(run.taskId, subject.id)
+    : eq(run.threadId, subject.id);
+
+/** What a subject writes on a run: its id, and the role that follows from it. */
+const runSubjectColumns = (subject: RunSubject) => ({
+  ...subjectColumns(subject),
+  role: roleOfSubject(subject),
+});
+
+const liveOn = (ref: SubjectRef) =>
   and(
     eq(run.workspaceId, ref.workspaceId),
-    eq(run.taskId, ref.taskId),
+    subjectOf(ref.subject),
     inArray(run.status, liveStatuses)
   );
 
 /** What claiming an attempt needs. Everything the container reports comes later. */
-interface CreateInput extends TaskRef {
+interface CreateInput extends SubjectRef {
   readonly agentSessionId: AgentSessionId;
   /** Retry backoff and the park threshold count from here. */
   readonly attempt?: number;
@@ -128,8 +169,6 @@ interface CreateInput extends TaskRef {
 
 /** What the container reported about itself once it was up. */
 interface StartInput extends RunRef {
-  /** This run's agent-home directory, relative to the data root. */
-  readonly agentHomePath?: string;
   readonly containerId?: string;
   readonly model?: string;
   readonly sandboxImage?: string;
@@ -205,23 +244,61 @@ const make = Effect.gen(function* () {
     );
 
   /**
-   * Claims an attempt at a task: queued, and not yet started. A queued run has no
-   * `startedAt`, which is what makes the queue wait measurable as
+   * Locks the row a subject names, so two concurrent creates serialize on it.
+   * Without the lock both read no live run under READ COMMITTED, both insert,
+   * and the partial unique index decides — which is the right answer arriving
+   * as a constraint violation rather than as {@link RunAlreadyLive}.
+   */
+  const lockSubject = (tx: Transaction, input: SubjectRef) =>
+    input.subject.kind === "task"
+      ? execute(
+          "RunRepo.create",
+          tx
+            .select({ found: LOCKED })
+            .from(task)
+            .where(
+              and(
+                eq(task.workspaceId, input.workspaceId),
+                eq(task.id, input.subject.id)
+              )
+            )
+            .limit(ONE)
+            .for("update")
+        )
+      : execute(
+          "RunRepo.create",
+          tx
+            .select({ found: LOCKED })
+            .from(chatThread)
+            .where(
+              and(
+                eq(chatThread.workspaceId, input.workspaceId),
+                eq(chatThread.id, input.subject.id)
+              )
+            )
+            .limit(ONE)
+            .for("update")
+        );
+
+  /**
+   * Claims an attempt at a subject: queued, and not yet started. A queued run
+   * has no `startedAt`, which is what makes the queue wait measurable as
    * `startedAt - createdAt`.
    *
    * The session it belongs to is written first, by its own repository — every run
    * belongs to a session, because that is what resuming means.
    *
-   * One live run per task is what stops two containers writing one artifacts
-   * directory, and it is enforced twice: the task row is locked here so two
-   * dispatchers serialize and the loser is told {@link RunAlreadyLive}, and the
-   * partial unique index behind that catches anything reaching the table by
-   * another route.
+   * One live run per subject is what stops two containers writing one artifacts
+   * directory and two agents answering one conversation. It is enforced twice:
+   * the task or thread row is locked here and the loser is told
+   * {@link RunAlreadyLive}, and the partial unique index behind that catches
+   * anything reaching the table by another route.
    */
   const create = Effect.fn("RunRepo.create")(function* (input: CreateInput) {
     yield* Effect.annotateCurrentSpan({
       sessionId: input.agentSessionId,
-      taskId: input.taskId,
+      subjectId: input.subject.id,
+      subjectKind: input.subject.kind,
       workspaceId: input.workspaceId,
     });
     const id = newRunId();
@@ -229,6 +306,7 @@ const make = Effect.gen(function* () {
       entity: ENTITY,
       schema: RunInsert,
       value: {
+        ...runSubjectColumns(input.subject),
         agentSessionId: input.agentSessionId,
         attempt: input.attempt ?? FIRST_ATTEMPT,
         costUsd: null,
@@ -239,7 +317,6 @@ const make = Effect.gen(function* () {
         provider: input.provider,
         startedAt: null,
         status: "queued",
-        taskId: input.taskId,
         totalTokens: null,
         traceId: input.traceId,
         trigger: input.trigger,
@@ -249,25 +326,12 @@ const make = Effect.gen(function* () {
     });
     return yield* write(({ tx }) =>
       Effect.gen(function* () {
-        // The task row is the lock two concurrent creates serialize on. Without
-        // it both read no live run under READ COMMITTED, both insert, and the
-        // partial unique index decides — which is the right answer arriving as
-        // a constraint violation rather than as the refusal below.
-        const owner = yield* execute(
-          "RunRepo.create",
-          tx
-            .select({ id: task.id })
-            .from(task)
-            .where(
-              and(
-                eq(task.workspaceId, input.workspaceId),
-                eq(task.id, input.taskId)
-              )
-            )
-            .limit(ONE)
-            .for("update")
-        );
-        yield* firstRow({ entity: "task", id: input.taskId, rows: owner });
+        const owner = yield* lockSubject(tx, input);
+        yield* firstRow({
+          entity: input.subject.kind === "task" ? "task" : ENTITY_THREAD,
+          id: input.subject.id,
+          rows: owner,
+        });
 
         const held = yield* execute(
           "RunRepo.create",
@@ -278,7 +342,7 @@ const make = Effect.gen(function* () {
           return yield* Effect.fail(
             new RunAlreadyLive({
               liveRunId: RunId.make(live.id),
-              taskId: input.taskId,
+              subject: input.subject,
             })
           );
         }
@@ -307,8 +371,8 @@ const make = Effect.gen(function* () {
 
   /**
    * The container is up and the harness is working. Records what actually ran —
-   * the image, the model, the container to tear down, the home directory the
-   * transcript will land in — against the task that only asked for them.
+   * the image, the model, the container to tear down — against the request that
+   * only asked for them.
    */
   const start = Effect.fn("RunRepo.start")(function* (input: StartInput) {
     yield* Effect.annotateCurrentSpan({ runId: input.id });
@@ -324,7 +388,6 @@ const make = Effect.gen(function* () {
           entity: ENTITY,
           schema: RunUpdate,
           value: {
-            agentHomePath: input.agentHomePath,
             containerId: input.containerId,
             model: input.model,
             sandboxImage: input.sandboxImage,
@@ -391,6 +454,20 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const liveOne = (operation: string, input: SubjectRef) =>
+    Effect.gen(function* () {
+      const rows = yield* execute(
+        operation,
+        db.select().from(run).where(liveOn(input)).limit(ONE)
+      );
+      const found = yield* decodeMany({
+        decode: decodeRun,
+        entity: ENTITY,
+        rows,
+      });
+      return found[0] ?? null;
+    });
+
   /**
    * The task's live run, or null. This is the difference the board draws between
    * a task sitting in the in-progress column and an agent actually working: no
@@ -401,16 +478,25 @@ const make = Effect.gen(function* () {
     input: TaskRef
   ) {
     yield* Effect.annotateCurrentSpan({ taskId: input.taskId });
-    const rows = yield* execute(
-      "RunRepo.liveForTask",
-      db.select().from(run).where(liveOn(input)).limit(ONE)
-    );
-    const found = yield* decodeMany({
-      decode: decodeRun,
-      entity: ENTITY,
-      rows,
+    return yield* liveOne("RunRepo.liveForTask", {
+      subject: { id: input.taskId, kind: "task" },
+      workspaceId: input.workspaceId,
     });
-    return found[0] ?? null;
+  });
+
+  /**
+   * The thread's live turn, or null. What the bot asks before it answers a
+   * message that arrived mid-turn: a live run means the message is queued and
+   * the next turn will read it, and null means this message starts one.
+   */
+  const liveForThread = Effect.fn("RunRepo.liveForThread")(function* (
+    input: ThreadRunsRef
+  ) {
+    yield* Effect.annotateCurrentSpan({ threadId: input.threadId });
+    return yield* liveOne("RunRepo.liveForThread", {
+      subject: { id: input.threadId, kind: "thread" },
+      workspaceId: input.workspaceId,
+    });
   });
 
   /**
@@ -439,25 +525,44 @@ const make = Effect.gen(function* () {
     return yield* decodeMany({ decode: decodeRun, entity: ENTITY, rows });
   });
 
+  const listOn = (operation: string, input: SubjectRef) =>
+    Effect.gen(function* () {
+      const rows = yield* execute(
+        operation,
+        db
+          .select()
+          .from(run)
+          .where(
+            and(
+              eq(run.workspaceId, input.workspaceId),
+              subjectOf(input.subject)
+            )
+          )
+          .orderBy(desc(run.createdAt), desc(run.id))
+      );
+      return yield* decodeMany({ decode: decodeRun, entity: ENTITY, rows });
+    });
+
   /** A task's attempts, newest first. */
   const listByTask = Effect.fn("RunRepo.listByTask")(function* (
     input: TaskRef
   ) {
     yield* Effect.annotateCurrentSpan({ taskId: input.taskId });
-    const rows = yield* execute(
-      "RunRepo.listByTask",
-      db
-        .select()
-        .from(run)
-        .where(
-          and(
-            eq(run.workspaceId, input.workspaceId),
-            eq(run.taskId, input.taskId)
-          )
-        )
-        .orderBy(desc(run.createdAt), desc(run.id))
-    );
-    return yield* decodeMany({ decode: decodeRun, entity: ENTITY, rows });
+    return yield* listOn("RunRepo.listByTask", {
+      subject: { id: input.taskId, kind: "task" },
+      workspaceId: input.workspaceId,
+    });
+  });
+
+  /** A thread's turns, newest first — one run each, and their events behind them. */
+  const listByThread = Effect.fn("RunRepo.listByThread")(function* (
+    input: ThreadRunsRef
+  ) {
+    yield* Effect.annotateCurrentSpan({ threadId: input.threadId });
+    return yield* listOn("RunRepo.listByThread", {
+      subject: { id: input.threadId, kind: "thread" },
+      workspaceId: input.workspaceId,
+    });
   });
 
   return {
@@ -465,8 +570,10 @@ const make = Effect.gen(function* () {
     close,
     create,
     listByTask,
+    listByThread,
     listLive,
     liveForTask,
+    liveForThread,
     start,
   } as const;
 });

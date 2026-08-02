@@ -92,6 +92,18 @@ export const RUN_TRIGGERS = [
 export const RunTrigger = Schema.Literals(RUN_TRIGGERS);
 export type RunTrigger = typeof RunTrigger.Type;
 
+/**
+ * Which of the two jobs a run is doing. One runtime serves both: the role
+ * selects the system prompt, the container image, the tool credential's binding
+ * and which table the run is attached to, and nothing else — dispatch, lease,
+ * pool, quota, events, sessions and transcripts are shared.
+ */
+export const RUN_ROLES = ["worker", "manager"] as const;
+
+/** A run works a task (`worker`) or answers a conversation (`manager`). */
+export const RunRole = Schema.Literals(RUN_ROLES);
+export type RunRole = typeof RunRole.Type;
+
 /** Normalized harness events plus the lifecycle markers the orchestrator writes. */
 export const RUN_EVENT_KINDS = [
   "started",
@@ -184,9 +196,10 @@ export const CHAT_INTAKE_KINDS = [
   "forward",
   "command",
   "callback",
+  "api",
 ] as const;
 
-/** What kind of update a user message came from. */
+/** How a user message reached us. `api` is anything that came over HTTP rather than through Telegram. */
 export const ChatIntakeKind = Schema.Literals(CHAT_INTAKE_KINDS);
 export type ChatIntakeKind = typeof ChatIntakeKind.Type;
 

@@ -1,8 +1,11 @@
 import type {
   AgentSession,
+  ChatMessageId,
   CommentId,
+  RunSubject,
   SessionProvider,
   TaskId,
+  ThreadId,
   Timestamp,
   WorkspaceId,
 } from "@workspace/domain";
@@ -10,6 +13,7 @@ import {
   AgentSessionId,
   newAgentSessionId,
   SessionStatus,
+  UnreadWatermarkId,
 } from "@workspace/domain";
 import { and, desc, eq, ne } from "drizzle-orm";
 import { Context, DateTime, Effect, Layer, Schema } from "effect";
@@ -34,6 +38,7 @@ import {
   firstRow,
   writer,
 } from "./audit";
+import { subjectColumns } from "./subject";
 
 /** Nothing in here reads more than one row by id. */
 const ONE = 1;
@@ -54,9 +59,21 @@ interface SessionRef {
   readonly workspaceId: WorkspaceId;
 }
 
+/** What identifies the sessions on one task or one thread. */
+interface SubjectRef {
+  readonly subject: RunSubject;
+  readonly workspaceId: WorkspaceId;
+}
+
 /** What identifies a task's sessions. */
 interface TaskRef {
   readonly taskId: TaskId;
+  readonly workspaceId: WorkspaceId;
+}
+
+/** What identifies a thread's sessions. */
+interface ThreadRef {
+  readonly threadId: ThreadId;
   readonly workspaceId: WorkspaceId;
 }
 
@@ -78,15 +95,25 @@ const refOf = (ref: SessionRef) =>
   );
 
 /** What opening a session needs. The status is not among it: a session is born running. */
-interface OpenInput extends TaskRef {
+interface OpenInput extends SubjectRef {
   readonly provider: SessionProvider;
 }
 
-/** How far a session has read into the task's conversation. */
+/**
+ * How far a session has been read into its conversation. The id is a comment's
+ * on a task's session and a chat message's on a thread's — one position, over
+ * whichever table the session's subject reads from.
+ */
 interface WatermarkInput extends SessionRef {
-  readonly commentAt: Timestamp;
-  readonly commentId: CommentId;
+  readonly unreadAt: Timestamp;
+  readonly unreadId: ChatMessageId | CommentId;
 }
+
+/** The one of the two columns this subject is stored in. */
+const subjectOf = (subject: RunSubject) =>
+  subject.kind === "task"
+    ? eq(agentSession.taskId, subject.id)
+    : eq(agentSession.threadId, subject.id);
 
 const make = Effect.gen(function* () {
   const db = yield* Database;
@@ -160,7 +187,8 @@ const make = Effect.gen(function* () {
    */
   const open = Effect.fn("AgentSessionRepo.open")(function* (input: OpenInput) {
     yield* Effect.annotateCurrentSpan({
-      taskId: input.taskId,
+      subjectId: input.subject.id,
+      subjectKind: input.subject.kind,
       workspaceId: input.workspaceId,
     });
     const id = newAgentSessionId();
@@ -168,13 +196,13 @@ const make = Effect.gen(function* () {
       entity: ENTITY,
       schema: AgentSessionInsert,
       value: {
-        commentWatermarkAt: null,
-        commentWatermarkId: null,
+        ...subjectColumns(input.subject),
         endedAt: null,
         id,
         provider: input.provider,
         status: "running",
-        taskId: input.taskId,
+        unreadWatermarkAt: null,
+        unreadWatermarkId: null,
         workspaceId: input.workspaceId,
       },
     });
@@ -277,13 +305,13 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Moves the session's reading of the task's conversation forward. Done at
+   * Moves the session's reading of its conversation forward. Done at
    * prompt-build time and past this session's own previous output — a resumed
    * run that re-read its own fallback comment would treat its own words as new
    * instructions.
    *
-   * Both halves move together, because the comparison against `comment` is a
-   * `(createdAt, id)` tuple and a same-millisecond tie must not skip a comment.
+   * Both halves move together, because the comparison is a `(createdAt, id)`
+   * tuple and a same-millisecond tie must not skip a row.
    */
   const advanceWatermark = Effect.fn("AgentSessionRepo.advanceWatermark")(
     function* (input: WatermarkInput) {
@@ -293,8 +321,8 @@ const make = Effect.gen(function* () {
           entity: ENTITY,
           schema: AgentSessionUpdate,
           value: {
-            commentWatermarkAt: input.commentAt,
-            commentWatermarkId: input.commentId,
+            unreadWatermarkAt: input.unreadAt,
+            unreadWatermarkId: UnreadWatermarkId.make(input.unreadId),
           },
         })
       );
@@ -318,28 +346,47 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const listOn = (operation: string, input: SubjectRef) =>
+    Effect.gen(function* () {
+      const rows = yield* execute(
+        operation,
+        db
+          .select()
+          .from(agentSession)
+          .where(
+            and(
+              eq(agentSession.workspaceId, input.workspaceId),
+              subjectOf(input.subject)
+            )
+          )
+          .orderBy(desc(agentSession.createdAt), desc(agentSession.id))
+      );
+      return yield* decodeMany({
+        decode: decodeAgentSession,
+        entity: ENTITY,
+        rows,
+      });
+    });
+
   /** A task's sessions, newest first — the order the dashboard lists them in. */
   const listByTask = Effect.fn("AgentSessionRepo.listByTask")(function* (
     input: TaskRef
   ) {
     yield* Effect.annotateCurrentSpan({ taskId: input.taskId });
-    const rows = yield* execute(
-      "AgentSessionRepo.listByTask",
-      db
-        .select()
-        .from(agentSession)
-        .where(
-          and(
-            eq(agentSession.workspaceId, input.workspaceId),
-            eq(agentSession.taskId, input.taskId)
-          )
-        )
-        .orderBy(desc(agentSession.createdAt), desc(agentSession.id))
-    );
-    return yield* decodeMany({
-      decode: decodeAgentSession,
-      entity: ENTITY,
-      rows,
+    return yield* listOn("AgentSessionRepo.listByTask", {
+      subject: { id: input.taskId, kind: "task" },
+      workspaceId: input.workspaceId,
+    });
+  });
+
+  /** A thread's sessions, newest first. More than one only after a provider switch or a session that could not be resumed. */
+  const listByThread = Effect.fn("AgentSessionRepo.listByThread")(function* (
+    input: ThreadRef
+  ) {
+    yield* Effect.annotateCurrentSpan({ threadId: input.threadId });
+    return yield* listOn("AgentSessionRepo.listByThread", {
+      subject: { id: input.threadId, kind: "thread" },
+      workspaceId: input.workspaceId,
     });
   });
 
@@ -351,8 +398,11 @@ const make = Effect.gen(function* () {
    * dispatcher opens a fresh session instead.
    */
   const latestResumable = Effect.fn("AgentSessionRepo.latestResumable")(
-    function* (input: TaskRef) {
-      yield* Effect.annotateCurrentSpan({ taskId: input.taskId });
+    function* (input: SubjectRef) {
+      yield* Effect.annotateCurrentSpan({
+        subjectId: input.subject.id,
+        subjectKind: input.subject.kind,
+      });
       const rows = yield* execute(
         "AgentSessionRepo.latestResumable",
         db
@@ -361,7 +411,7 @@ const make = Effect.gen(function* () {
           .where(
             and(
               eq(agentSession.workspaceId, input.workspaceId),
-              eq(agentSession.taskId, input.taskId),
+              subjectOf(input.subject),
               ne(agentSession.status, "failed")
             )
           )
@@ -384,6 +434,7 @@ const make = Effect.gen(function* () {
     finish,
     latestResumable,
     listByTask,
+    listByThread,
     open,
     recordProviderSession,
   } as const;

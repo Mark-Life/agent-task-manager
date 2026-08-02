@@ -50,7 +50,6 @@ const taskRow = {
 };
 
 const runRow = {
-  agentHomePath: null,
   agentSessionId: SESSION_UUID,
   attempt: 1,
   branch: null,
@@ -66,10 +65,12 @@ const runRow = {
   model: null,
   outcome: null,
   provider: "claude",
+  role: "worker",
   sandboxImage: null,
   startedAt: null,
   status: "running",
   taskId: TASK_UUID,
+  threadId: null,
   totalTokens: null,
   traceId: null,
   trigger: "status_change",
@@ -93,6 +94,7 @@ const runEventRow = {
   runId: RUN_UUID,
   seq: 0,
   taskId: TASK_UUID,
+  threadId: null,
   workspaceId: WORKSPACE_ID,
 };
 
@@ -110,6 +112,7 @@ const runCommandRow = {
   runId: null,
   status: "pending",
   taskId: TASK_UUID,
+  threadId: null,
   traceparent: null,
   updatedAt: AT,
   workspaceId: WORKSPACE_ID,
@@ -171,6 +174,10 @@ describe("run", () => {
 
   test("rejects a negative turn count", () => {
     failsToDecode(decodeRun({ ...runRow, turns: -1 }));
+  });
+
+  test("rejects a role outside the union", () => {
+    failsToDecode(decodeRun({ ...runRow, role: "reviewer" }));
   });
 });
 

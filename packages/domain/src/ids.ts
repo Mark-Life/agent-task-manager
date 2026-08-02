@@ -119,6 +119,16 @@ export type ChatMessageId = typeof ChatMessageId.Type;
 /** Mints a fresh {@link ChatMessageId}. */
 export const newChatMessageId = mint(ChatMessageId);
 
+/**
+ * The row a session has read up to: a `comment` on a session attached to a
+ * task, a `chat_message` on one attached to a thread. A brand of its own rather
+ * than either of those, because the column is a position and deliberately
+ * carries no foreign key — typing it as one of the two would claim it always
+ * points at that table.
+ */
+export const UnreadWatermarkId = ownId("UnreadWatermarkId");
+export type UnreadWatermarkId = typeof UnreadWatermarkId.Type;
+
 /** One claim to deliver one notice into one chat. */
 export const ChatNotificationId = ownId("ChatNotificationId");
 export type ChatNotificationId = typeof ChatNotificationId.Type;

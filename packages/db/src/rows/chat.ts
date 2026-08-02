@@ -60,6 +60,7 @@ const messageColumns = {
   id: () => ChatMessageId,
   intakeKind: () => ChatIntakeKind,
   role: () => ChatMessageRole,
+  runId: () => RunId,
   telegramChatId: () => TelegramChatId,
   telegramMessageId: () => TelegramMessageId,
   threadId: () => ThreadId,

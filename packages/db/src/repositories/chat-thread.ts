@@ -1,12 +1,14 @@
 /**
- * Conversations with the manager agent, one per Telegram chat at a time.
+ * Conversations with the manager agent, one current per Telegram chat and any
+ * number opened from elsewhere.
  *
  * A thread is the conversation's identity and the audit log points at it, so
  * nothing here deletes one. Opening a new conversation drops the currency of
- * the old thread and keeps its rows; clearing one nulls the provider's session
- * id, which is the only part of a conversation that is safe to forget — the
- * words are in `chat_message`, so a cleared thread costs the provider its
- * transcript and costs us nothing.
+ * the old thread and keeps its rows.
+ *
+ * A thread is also a dispatch source: {@link awaitingReply} is the queue the
+ * loop polls, and the claim that follows is a worker's — a quota check, a pool
+ * slot, a lease and a run row.
  *
  * No audit rows and no actor. A chat is not board state: every board write a
  * conversation causes goes over the gateway, where the manager's actor already
@@ -15,25 +17,39 @@
  */
 
 import type {
-  ChatThread,
   SessionProvider,
   TelegramChatId,
   ThreadId,
+  ThreadStatus,
   UserId,
   WorkspaceId,
 } from "@workspace/domain";
-import { newThreadId } from "@workspace/domain";
-import { and, desc, eq, ne } from "drizzle-orm";
+import { LIVE_RUN_STATUSES, newThreadId } from "@workspace/domain";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  getTableColumns,
+  inArray,
+  min,
+  ne,
+  notExists,
+  sql,
+} from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { Database } from "../client";
 import { ChatThreadInsert, ChatThreadUpdate, decodeChatThread } from "../rows";
-import { chatThread } from "../schema/chat";
+import { agentSession } from "../schema/agent-session";
+import { chatMessage, chatThread } from "../schema/chat";
+import { run } from "../schema/run";
 import {
   decodeMany,
   decodeWritten,
   encodeWrite,
   execute,
   firstRow,
+  InvalidInput,
   unauditedTransaction,
 } from "./audit";
 
@@ -42,6 +58,12 @@ const ONE = 1;
 
 /** How many threads a chat's list returns unless told otherwise. */
 const DEFAULT_LIMIT = 20;
+
+/**
+ * How many threads one dispatch poll considers. The pool admits one chat turn
+ * at a time, so reading more than a handful is work thrown away.
+ */
+const QUEUE_LIMIT = 20;
 
 /** How much of the opening message becomes the thread's title. */
 export const THREAD_TITLE_MAX_CHARS = 60;
@@ -70,11 +92,51 @@ export interface ChatRef {
  * and a thread that silently opened against a different one would resume
  * against a session the other provider never wrote.
  */
-export interface ChatThreadOpen extends ChatRef {
+export interface ChatThreadOpen {
+  /** Absent on a thread opened outside Telegram, which no chat owns. */
+  readonly chatId?: TelegramChatId | null;
   readonly provider: SessionProvider;
   readonly title?: string | null;
   readonly userId: UserId;
+  readonly workspaceId: WorkspaceId;
 }
+
+const liveStatuses = [...LIVE_RUN_STATUSES];
+
+/** The thread's own columns, named so a join can select them and nothing else. */
+const threadColumns = getTableColumns(chatThread);
+
+/**
+ * The newest session on the thread. Its watermark is what the thread has
+ * already been shown: an older session's is not, because a provider switch or a
+ * session that could not be resumed opens a new one whose null watermark
+ * deliberately means "start from the beginning of the conversation".
+ */
+const newestSessionId = sql`(
+  select newest.id
+  from ${agentSession} as newest
+  where newest.workspace_id = ${chatThread.workspaceId}
+    and newest.thread_id = ${chatThread.id}
+  order by newest.created_at desc, newest.id desc
+  limit 1)`;
+
+/**
+ * A message the newest session has not been shown.
+ *
+ * The message's timestamp is truncated to milliseconds before it is compared,
+ * because a watermark comes back through the domain's instant, which is
+ * millisecond-precise, while the column keeps microseconds. Without the
+ * truncation the row a session was just shown still reads as newer than the
+ * watermark that names it, and the thread would be dispatched forever with
+ * nothing new to say.
+ *
+ * Parenthesized as a whole: the surrounding `and` does not bracket what it is
+ * given, and `or` binds looser than `and`, so an unwrapped disjunction would
+ * silently widen the query it sits in.
+ */
+const unread = sql`(${agentSession.unreadWatermarkAt} is null
+  or (date_trunc('milliseconds', ${chatMessage.createdAt}), ${chatMessage.id})
+     > (${agentSession.unreadWatermarkAt}, ${agentSession.unreadWatermarkId}))`;
 
 /** Clips an opening message down to what a thread list can show on one line. */
 const titleOf = (title: string | null | undefined) =>
@@ -113,7 +175,7 @@ const make = Effect.gen(function* () {
       entity: ENTITY,
       schema: ChatThreadInsert,
       value: {
-        chatId: input.chatId,
+        chatId: input.chatId ?? null,
         id: newThreadId(),
         isCurrent: true,
         provider: input.provider,
@@ -128,13 +190,25 @@ const make = Effect.gen(function* () {
       { operation: "ChatThreadRepo.open", table: ENTITY },
       (tx) =>
         Effect.gen(function* () {
-          yield* execute(
-            "ChatThreadRepo.open",
-            tx
-              .update(chatThread)
-              .set({ isCurrent: false })
-              .where(and(chatOf(input), eq(chatThread.isCurrent, true)))
-          );
+          // Only a chat has a current thread, so a thread nobody chatted from
+          // takes currency from nothing.
+          if (input.chatId !== undefined && input.chatId !== null) {
+            yield* execute(
+              "ChatThreadRepo.open",
+              tx
+                .update(chatThread)
+                .set({ isCurrent: false })
+                .where(
+                  and(
+                    chatOf({
+                      chatId: input.chatId,
+                      workspaceId: input.workspaceId,
+                    }),
+                    eq(chatThread.isCurrent, true)
+                  )
+                )
+            );
+          }
 
           const rows = yield* execute(
             "ChatThreadRepo.open",
@@ -238,6 +312,113 @@ const make = Effect.gen(function* () {
   });
 
   /**
+   * Every conversation in the workspace, most recently spoken in first.
+   *
+   * The read a sidebar asks for, and the one {@link listForChat} cannot serve:
+   * a thread opened over HTTP has no chat id and so belongs to no chat's list,
+   * while the same thread is reachable from both interfaces.
+   */
+  const listForWorkspace = Effect.fn("ChatThreadRepo.listForWorkspace")(
+    function* (options: {
+      readonly limit?: number;
+      readonly offset?: number;
+      readonly status?: ThreadStatus;
+      readonly workspaceId: WorkspaceId;
+    }) {
+      yield* Effect.annotateCurrentSpan({ workspaceId: options.workspaceId });
+
+      const rows = yield* execute(
+        "ChatThreadRepo.listForWorkspace",
+        db
+          .select()
+          .from(chatThread)
+          .where(
+            and(
+              eq(chatThread.workspaceId, options.workspaceId),
+              options.status === undefined
+                ? undefined
+                : eq(chatThread.status, options.status)
+            )
+          )
+          .orderBy(desc(chatThread.lastMessageAt), desc(chatThread.id))
+          .limit(options.limit ?? DEFAULT_LIMIT)
+          .offset(options.offset ?? 0)
+      );
+
+      return yield* decodeMany({
+        decode: decodeChatThread,
+        entity: ENTITY,
+        rows,
+      });
+    }
+  );
+
+  /**
+   * The threads with something to answer: an active thread holding a user
+   * message the newest session on it has not been shown, and no live turn of
+   * its own. This is the chat half of the dispatch queue, and it is a query
+   * rather than a queue in memory for the reason the board column is — a queue
+   * held in a process is dropped when the process restarts.
+   *
+   * Ordered by the oldest unread message, so the person who has been waiting
+   * longest is answered first. The watermark comparison is the `(created_at,
+   * id)` tuple the thread is ordered by, and a session that has been shown
+   * nothing matches every message it has.
+   */
+  const awaitingReply = Effect.fn("ChatThreadRepo.awaitingReply")(
+    function* (options: {
+      readonly limit?: number;
+      readonly workspaceId: WorkspaceId;
+    }) {
+      yield* Effect.annotateCurrentSpan({ workspaceId: options.workspaceId });
+
+      const rows = yield* execute(
+        "ChatThreadRepo.awaitingReply",
+        db
+          .select(threadColumns)
+          .from(chatThread)
+          .innerJoin(
+            chatMessage,
+            and(
+              eq(chatMessage.workspaceId, chatThread.workspaceId),
+              eq(chatMessage.threadId, chatThread.id),
+              eq(chatMessage.role, "user")
+            )
+          )
+          .leftJoin(agentSession, eq(agentSession.id, newestSessionId))
+          .where(
+            and(
+              eq(chatThread.workspaceId, options.workspaceId),
+              eq(chatThread.status, "active"),
+              unread,
+              notExists(
+                db
+                  .select({ live: sql`1` })
+                  .from(run)
+                  .where(
+                    and(
+                      eq(run.workspaceId, chatThread.workspaceId),
+                      eq(run.threadId, chatThread.id),
+                      inArray(run.status, liveStatuses)
+                    )
+                  )
+              )
+            )
+          )
+          .groupBy(chatThread.id)
+          .orderBy(asc(min(chatMessage.createdAt)))
+          .limit(options.limit ?? QUEUE_LIMIT)
+      );
+
+      return yield* decodeMany({
+        decode: decodeChatThread,
+        entity: ENTITY,
+        rows,
+      });
+    }
+  );
+
+  /**
    * Makes one thread the current one for its chat. The chat is read off the
    * thread rather than taken from the caller, so a switch cannot move currency
    * between two chats, and the row is locked for the length of the swap.
@@ -269,6 +450,18 @@ const make = Effect.gen(function* () {
             id: options.id,
             rows: locked,
           });
+
+          // Currency is a property of a chat. A thread opened from the
+          // dashboard has none to be current in, and saying so is better than
+          // an update that silently matches nothing.
+          if (target.chatId === null) {
+            return yield* Effect.fail(
+              new InvalidInput({
+                cause: "a thread with no chat cannot be the current one",
+                entity: ENTITY,
+              })
+            );
+          }
 
           yield* execute(
             "ChatThreadRepo.setCurrent",
@@ -306,71 +499,39 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const patch = (
-    operation: string,
-    ref: ChatThreadRef,
-    fields: Partial<Pick<ChatThread, "providerSessionId" | "status" | "title">>
-  ) =>
-    Effect.gen(function* () {
-      const values = yield* encodeWrite({
-        entity: ENTITY,
-        schema: ChatThreadUpdate,
-        value: fields,
-      });
-
-      const rows = yield* execute(
-        operation,
-        db.update(chatThread).set(values).where(refOf(ref)).returning()
-      );
-
-      yield* firstRow({ entity: ENTITY, id: ref.id, rows });
-
-      return yield* decodeWritten({
-        decode: decodeChatThread,
-        entity: ENTITY,
-        operation,
-        rows,
-      });
+  /**
+   * Renames a conversation. The first message titles an untitled thread on its
+   * own, so this is only ever someone disagreeing with what it chose — clipped
+   * to the same width, because the thread list has the same line either way.
+   */
+  const retitle = Effect.fn("ChatThreadRepo.retitle")(function* (
+    options: ChatThreadRef & { readonly title: string | null }
+  ) {
+    yield* Effect.annotateCurrentSpan({
+      threadId: options.id,
+      workspaceId: options.workspaceId,
     });
 
-  /**
-   * Records the session the provider handed back, so the next turn resumes
-   * instead of starting over. Written after every turn that produced one,
-   * including a crashed turn — a run that got as far as a session is still
-   * resumable.
-   */
-  const setProviderSession = Effect.fn("ChatThreadRepo.setProviderSession")(
-    function* (
-      options: ChatThreadRef & { readonly providerSessionId: string | null }
-    ) {
-      yield* Effect.annotateCurrentSpan({
-        threadId: options.id,
-        workspaceId: options.workspaceId,
-      });
+    const values = yield* encodeWrite({
+      entity: ENTITY,
+      schema: ChatThreadUpdate,
+      value: { title: titleOf(options.title) },
+    });
 
-      return yield* patch("ChatThreadRepo.setProviderSession", options, {
-        providerSessionId: options.providerSessionId,
-      });
-    }
-  );
+    const rows = yield* execute(
+      "ChatThreadRepo.retitle",
+      db.update(chatThread).set(values).where(refOf(options)).returning()
+    );
 
-  /**
-   * Forgets the provider's transcript and keeps the conversation. This is what
-   * `/clear` does: the thread, its history and everything the audit log says
-   * about it survive, and only the provider starts the next turn cold.
-   */
-  const clearProviderSession = Effect.fn("ChatThreadRepo.clearProviderSession")(
-    function* (options: ChatThreadRef) {
-      yield* Effect.annotateCurrentSpan({
-        threadId: options.id,
-        workspaceId: options.workspaceId,
-      });
+    yield* firstRow({ entity: ENTITY, id: options.id, rows });
 
-      return yield* patch("ChatThreadRepo.clearProviderSession", options, {
-        providerSessionId: null,
-      });
-    }
-  );
+    return yield* decodeWritten({
+      decode: decodeChatThread,
+      entity: ENTITY,
+      operation: "ChatThreadRepo.retitle",
+      rows,
+    });
+  });
 
   /**
    * Retires a thread from the list without erasing it. Currency is dropped in
@@ -406,13 +567,14 @@ const make = Effect.gen(function* () {
 
   return {
     archive,
+    awaitingReply,
     byId,
-    clearProviderSession,
     current,
     listForChat,
+    listForWorkspace,
     open,
+    retitle,
     setCurrent,
-    setProviderSession,
   } as const;
 });
 

@@ -1,7 +1,9 @@
 import type {
   ActorAttribution,
   RunId,
+  RunSubject,
   TaskId,
+  ThreadId,
   WorkspaceId,
 } from "@workspace/domain";
 import {
@@ -32,6 +34,7 @@ import {
   InvalidInput,
   unauditedTransaction,
 } from "./audit";
+import { subjectColumns } from "./subject";
 
 /** The queue is drained one command at a time: there is exactly one orchestrator. */
 const ONE = 1;
@@ -69,9 +72,16 @@ interface EnqueueInput {
   readonly payload: RunCommandPayload;
   /** Absent targets whichever run is live. */
   readonly runId?: RunId;
-  readonly taskId: TaskId;
+  /** The task to act on, or the thread whose turn to stop. */
+  readonly subject: RunSubject;
   readonly workspaceId: WorkspaceId;
 }
+
+/** The one of the two columns a subject is stored in. */
+const subjectOf = (subject: RunSubject) =>
+  subject.kind === "task"
+    ? eq(runCommand.taskId, subject.id)
+    : eq(runCommand.threadId, subject.id);
 
 const make = Effect.gen(function* () {
   const db = yield* Database;
@@ -105,7 +115,11 @@ const make = Effect.gen(function* () {
     const { kind, payload } = splitPayload<RunCommandKind, typeof encoded>(
       encoded
     );
-    yield* Effect.annotateCurrentSpan({ kind, taskId: input.taskId });
+    yield* Effect.annotateCurrentSpan({
+      kind,
+      subjectId: input.subject.id,
+      subjectKind: input.subject.kind,
+    });
     const blob = yield* Effect.mapError(
       asBlob(payload),
       (cause) => new InvalidInput({ cause, entity: ENTITY })
@@ -115,13 +129,13 @@ const make = Effect.gen(function* () {
       schema: RunCommandInsert,
       value: {
         ...commandActor(flattenActor(actor)),
+        ...subjectColumns(input.subject),
         consumedAt: null,
         id: newRunCommandId(),
         kind,
         payload: blob,
         runId: input.runId ?? null,
         status: "pending",
-        taskId: input.taskId,
         // The request that asked, so the run this command starts belongs to
         // its trace. Read off the ambient span rather than taken as an
         // argument: the caller is already inside its own request span, and an
@@ -136,7 +150,10 @@ const make = Effect.gen(function* () {
         .insert(runCommand)
         .values(values)
         .onConflictDoNothing({
-          target: [runCommand.taskId, runCommand.kind],
+          target:
+            input.subject.kind === "task"
+              ? [runCommand.taskId, runCommand.kind]
+              : [runCommand.threadId, runCommand.kind],
           where: stillPending,
         })
         .returning()
@@ -158,7 +175,7 @@ const make = Effect.gen(function* () {
         .where(
           and(
             eq(runCommand.workspaceId, input.workspaceId),
-            eq(runCommand.taskId, input.taskId),
+            subjectOf(input.subject),
             eq(runCommand.kind, kind),
             stillPending
           )
@@ -274,6 +291,36 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const listOn = (
+    operation: string,
+    input: {
+      readonly limit?: number;
+      readonly subject: RunSubject;
+      readonly workspaceId: WorkspaceId;
+    }
+  ) =>
+    Effect.gen(function* () {
+      const rows = yield* execute(
+        operation,
+        db
+          .select()
+          .from(runCommand)
+          .where(
+            and(
+              eq(runCommand.workspaceId, input.workspaceId),
+              subjectOf(input.subject)
+            )
+          )
+          .orderBy(desc(runCommand.createdAt), desc(runCommand.id))
+          .limit(input.limit ?? DEFAULT_LIMIT)
+      );
+      return yield* decodeMany({
+        decode: decodeRunCommand,
+        entity: ENTITY,
+        rows,
+      });
+    });
+
   /** Every intervention on a task, newest first, whether it was acted on or refused. */
   const listByTask = Effect.fn("RunCommandRepo.listByTask")(function* (input: {
     readonly limit?: number;
@@ -281,28 +328,28 @@ const make = Effect.gen(function* () {
     readonly workspaceId: WorkspaceId;
   }) {
     yield* Effect.annotateCurrentSpan({ taskId: input.taskId });
-    const rows = yield* execute(
-      "RunCommandRepo.listByTask",
-      db
-        .select()
-        .from(runCommand)
-        .where(
-          and(
-            eq(runCommand.workspaceId, input.workspaceId),
-            eq(runCommand.taskId, input.taskId)
-          )
-        )
-        .orderBy(desc(runCommand.createdAt), desc(runCommand.id))
-        .limit(input.limit ?? DEFAULT_LIMIT)
-    );
-    return yield* decodeMany({
-      decode: decodeRunCommand,
-      entity: ENTITY,
-      rows,
+    return yield* listOn("RunCommandRepo.listByTask", {
+      ...input,
+      subject: { id: input.taskId, kind: "task" },
     });
   });
 
-  return { claimNext, enqueue, listByTask, reject } as const;
+  /** Every intervention on a conversation — which is every force send anyone asked for. */
+  const listByThread = Effect.fn("RunCommandRepo.listByThread")(
+    function* (input: {
+      readonly limit?: number;
+      readonly threadId: ThreadId;
+      readonly workspaceId: WorkspaceId;
+    }) {
+      yield* Effect.annotateCurrentSpan({ threadId: input.threadId });
+      return yield* listOn("RunCommandRepo.listByThread", {
+        ...input,
+        subject: { id: input.threadId, kind: "thread" },
+      });
+    }
+  );
+
+  return { claimNext, enqueue, listByTask, listByThread, reject } as const;
 });
 
 /**

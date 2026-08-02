@@ -52,6 +52,7 @@ export { AuditLogRepo } from "./repositories/audit-log";
 export {
   type ChatMessageAppend,
   ChatMessageRepo,
+  type ChatMessageWatermark,
   type ThreadMessages,
 } from "./repositories/chat-message";
 export {

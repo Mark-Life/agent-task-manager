@@ -13,7 +13,9 @@
 import type {
   RunEventId,
   RunId,
+  RunSubject,
   TaskId,
+  ThreadId,
   Timestamp,
   WorkspaceId,
 } from "@workspace/domain";
@@ -36,6 +38,7 @@ import {
   execute,
   InvalidInput,
 } from "./audit";
+import { subjectColumns } from "./subject";
 
 /** A conflict on `(run_id, seq)` is resolved by reading the one row already there. */
 const ONE = 1;
@@ -66,8 +69,8 @@ interface EventRef {
 interface AppendInput extends EventRef {
   readonly occurredAt: Timestamp;
   readonly payload: RunEventPayload;
-  /** Denormalized, so an SSE subscriber filters one task's stream without a join. */
-  readonly taskId: TaskId;
+  /** The run's own subject, denormalized so a subscriber filters one stream without a join. */
+  readonly subject: RunSubject;
 }
 
 /**
@@ -131,13 +134,13 @@ const valuesOf = (input: AppendInput) =>
       entity: ENTITY,
       schema: RunEventInsert,
       value: {
+        ...subjectColumns(input.subject),
         id: newRunEventId(),
         kind: columns.kind,
         occurredAt: input.occurredAt,
         payload: columns.payload,
         runId: input.runId,
         seq: input.seq,
-        taskId: input.taskId,
         workspaceId: input.workspaceId,
       },
     });
@@ -164,7 +167,7 @@ const make = Effect.gen(function* () {
   ) {
     yield* Effect.annotateCurrentSpan({
       runId: input.runId,
-      taskId: input.taskId,
+      subjectId: input.subject.id,
     });
     const values = yield* valuesOf(input);
     const written = yield* execute(
@@ -269,6 +272,42 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const listOn = (
+    operation: string,
+    input: {
+      readonly afterId?: RunEventId;
+      readonly limit?: number;
+      readonly subject: RunSubject;
+      readonly workspaceId: WorkspaceId;
+    }
+  ) =>
+    Effect.gen(function* () {
+      const rows = yield* execute(
+        operation,
+        db
+          .select()
+          .from(runEvent)
+          .where(
+            and(
+              eq(runEvent.workspaceId, input.workspaceId),
+              input.subject.kind === "task"
+                ? eq(runEvent.taskId, input.subject.id)
+                : eq(runEvent.threadId, input.subject.id),
+              input.afterId === undefined
+                ? undefined
+                : gt(runEvent.id, input.afterId)
+            )
+          )
+          .orderBy(asc(runEvent.id))
+          .limit(input.limit ?? DEFAULT_LIMIT)
+      );
+      return yield* decodeMany({
+        decode: decodeRunEvent,
+        entity: ENTITY,
+        rows,
+      });
+    });
+
   /**
    * A task's events across every run on it, oldest first. The cursor is the event
    * id rather than `seq`, because `seq` restarts with each run and an id is a
@@ -281,31 +320,29 @@ const make = Effect.gen(function* () {
     readonly workspaceId: WorkspaceId;
   }) {
     yield* Effect.annotateCurrentSpan({ taskId: input.taskId });
-    const rows = yield* execute(
-      "RunEventRepo.listByTask",
-      db
-        .select()
-        .from(runEvent)
-        .where(
-          and(
-            eq(runEvent.workspaceId, input.workspaceId),
-            eq(runEvent.taskId, input.taskId),
-            input.afterId === undefined
-              ? undefined
-              : gt(runEvent.id, input.afterId)
-          )
-        )
-        .orderBy(asc(runEvent.id))
-        .limit(input.limit ?? DEFAULT_LIMIT)
-    );
-    return yield* decodeMany({
-      decode: decodeRunEvent,
-      entity: ENTITY,
-      rows,
+    return yield* listOn("RunEventRepo.listByTask", {
+      ...input,
+      subject: { id: input.taskId, kind: "task" },
     });
   });
 
-  return { append, appendAll, listByRun, listByTask } as const;
+  /** The same across a conversation's turns, which is what a thread timeline reads. */
+  const listByThread = Effect.fn("RunEventRepo.listByThread")(
+    function* (input: {
+      readonly afterId?: RunEventId;
+      readonly limit?: number;
+      readonly threadId: ThreadId;
+      readonly workspaceId: WorkspaceId;
+    }) {
+      yield* Effect.annotateCurrentSpan({ threadId: input.threadId });
+      return yield* listOn("RunEventRepo.listByThread", {
+        ...input,
+        subject: { id: input.threadId, kind: "thread" },
+      });
+    }
+  );
+
+  return { append, appendAll, listByRun, listByTask, listByThread } as const;
 });
 
 /**

@@ -1,9 +1,10 @@
 import type {
   AgentSessionId,
-  CommentId,
   SessionProvider,
   SessionStatus,
   TaskId,
+  ThreadId,
+  UnreadWatermarkId,
 } from "@workspace/domain";
 import { sql } from "drizzle-orm";
 import {
@@ -15,6 +16,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import { chatThread } from "./chat";
 import { mutableColumns, tstz } from "./columns";
 import { task } from "./task";
 
@@ -27,26 +29,28 @@ import { task } from "./task";
  * the PR, a fresh review session with no memory of having written it, the
  * implementation session resumed with the review as its next prompt. Each
  * carries its own status, so a research session that died producing nothing
- * stays visible as failed rather than as an absence.
+ * stays visible as failed rather than as an absence. A chat thread has them for
+ * the same reason and through the same rows: a manager's turn runs inside a
+ * session, and a provider switch opens another one instead of erasing
+ * anything.
  *
- * The watermark is the last comment this session has read. On resume its prompt
- * is every comment added since, so the cross-session channel needs no
- * special-casing anywhere. Both halves are stored because the comparison is a
- * `(created_at, id)` tuple: a same-millisecond tie must not skip a comment.
- * There is deliberately no foreign key on `comment_watermark_id` — a watermark
- * is a position, and a cascade that nulled the id while leaving the timestamp
- * set would make every tuple comparison NULL, silently feeding a resumed run no
- * feedback at all.
+ * The watermark is the last row this session has been shown — a `comment` when
+ * it is attached to a task, a `chat_message` when it is attached to a thread.
+ * On resume its prompt is everything added since, so neither the cross-session
+ * channel nor a conversation's backlog needs special-casing anywhere. Both
+ * halves are stored because the comparison is a `(created_at, id)` tuple: a
+ * same-millisecond tie must not skip a row. There is deliberately no foreign
+ * key on `unread_watermark_id` — it points at one of two tables, and a cascade
+ * that nulled the id while leaving the timestamp set would make every tuple
+ * comparison NULL, silently feeding a resumed run nothing at all.
  *
- * No agent-home path here: the home directory is per run, because parallel
- * containers sharing one credentials file invalidate each other.
+ * No agent-home path here or on the run: every run of a provider shares one
+ * host directory, so there is nothing per session or per run to record.
  */
 export const agentSession = pgTable(
   "agent_session",
   {
     ...mutableColumns<AgentSessionId>(),
-    commentWatermarkAt: tstz("comment_watermark_at"),
-    commentWatermarkId: uuid("comment_watermark_id").$type<CommentId>(),
     // When the last run on this session terminated; `status` says whether it can
     // still be resumed.
     endedAt: tstz("ended_at"),
@@ -56,7 +60,10 @@ export const agentSession = pgTable(
     // the provider can change without rewriting the session.
     providerSessionId: text("provider_session_id"),
     status: text("status").$type<SessionStatus>().notNull().default("running"),
-    taskId: uuid("task_id").$type<TaskId>().notNull(),
+    taskId: uuid("task_id").$type<TaskId>(),
+    threadId: uuid("thread_id").$type<ThreadId>(),
+    unreadWatermarkAt: tstz("unread_watermark_at"),
+    unreadWatermarkId: uuid("unread_watermark_id").$type<UnreadWatermarkId>(),
   },
   (t) => [
     foreignKey({
@@ -64,6 +71,17 @@ export const agentSession = pgTable(
       foreignColumns: [task.workspaceId, task.id],
       name: "agent_session_task_fk",
     }).onDelete("cascade"),
+    foreignKey({
+      columns: [t.workspaceId, t.threadId],
+      foreignColumns: [chatThread.workspaceId, chatThread.id],
+      name: "agent_session_thread_fk",
+    }).onDelete("cascade"),
+    // A session belongs to exactly one of the two, which is what makes "the
+    // latest session on this thread" a question with one answer.
+    check(
+      "agent_session_subject_ck",
+      sql`(${t.taskId} is null) <> (${t.threadId} is null)`
+    ),
     // Liveness is one fact, so it cannot be written two ways that disagree: a
     // running session has not ended, and a stopped one has.
     check(
@@ -74,10 +92,11 @@ export const agentSession = pgTable(
     // would feed a resumed run no feedback at all rather than failing loudly.
     check(
       "agent_session_watermark_ck",
-      sql`(${t.commentWatermarkId} is null) = (${t.commentWatermarkAt} is null)`
+      sql`(${t.unreadWatermarkId} is null) = (${t.unreadWatermarkAt} is null)`
     ),
     uniqueIndex("agent_session_workspace_id_id_uidx").on(t.workspaceId, t.id),
     // The session list, and "the latest session" that a default resume means.
     index("agent_session_task_id_created_at_idx").on(t.taskId, t.createdAt),
+    index("agent_session_thread_id_created_at_idx").on(t.threadId, t.createdAt),
   ]
 );

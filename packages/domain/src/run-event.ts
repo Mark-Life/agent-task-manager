@@ -1,6 +1,13 @@
 import { Schema } from "effect";
 import { ActorKind, RunLogLevel, RunOutcome, SessionProvider } from "./enums";
-import { RunCommandId, RunEventId, RunId, TaskId, UserId } from "./ids";
+import {
+  RunCommandId,
+  RunEventId,
+  RunId,
+  TaskId,
+  ThreadId,
+  UserId,
+} from "./ids";
 import { appendOnlyFields, CostUsd, Timestamp } from "./primitives";
 
 /**
@@ -169,8 +176,10 @@ export const RunEvent = Schema.Struct({
    * duplicating a run's whole timeline.
    */
   seq: Schema.Natural,
-  /** Denormalized, so an SSE subscriber filters one task's stream without a join. */
-  taskId: TaskId,
+  /** Denormalized, so a subscriber filters one task's stream without a join. Null on a manager run. */
+  taskId: Schema.NullOr(TaskId),
+  /** The same, for a conversation's turns. Null on a worker run. */
+  threadId: Schema.NullOr(ThreadId),
 });
 
 export interface RunEvent extends Schema.Schema.Type<typeof RunEvent> {}

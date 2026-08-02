@@ -31,31 +31,29 @@ export const TelegramMessageId = Schema.Int.pipe(
 export type TelegramMessageId = typeof TelegramMessageId.Type;
 
 /**
- * One conversation with the manager agent, in one Telegram chat.
+ * One conversation with the manager agent.
  *
  * The thread is the conversation's identity, and the audit log points at it:
  * every board write a chat causes lands with this id in `actor_thread_id`,
  * which is what later answers "which conversation asked for this". So a thread
- * is archived, never deleted, and clearing a conversation nulls
- * {@link ChatThread.providerSessionId} rather than dropping the row.
+ * is archived, never deleted.
  *
- * `providerSessionId` is a column of its own instead of a field inside the
- * provider's name because the two have different lifetimes: the provider is
- * chosen, the session is handed back by it, and switching providers has to
- * forget the second without forgetting the first. Losing it costs a longer
- * prompt, not the conversation — the history is in `chat_message`.
+ * The provider's own session id is not here: a turn is a run, a run has an
+ * `agent_session`, and that row is where the id the provider handed back lives.
+ * One conversation may go through several of them — a provider switch or a
+ * session that could not be resumed opens another — and none of that costs the
+ * thread its history, which is in `chat_message`.
  */
 export const ChatThread = Schema.Struct({
   ...recordFields,
-  chatId: TelegramChatId,
+  /** Null on a thread opened outside Telegram, which is reachable from the dashboard alone. */
+  chatId: Schema.NullOr(TelegramChatId),
   id: ThreadId,
   /** The chat's current thread. At most one per chat, enforced by a partial unique index. */
   isCurrent: Schema.Boolean,
   /** Ordering key for the thread list, so a long-quiet thread sinks. */
   lastMessageAt: Timestamp,
   provider: SessionProvider,
-  /** Null until the provider names one, and again whenever the conversation is cleared. */
-  providerSessionId: Schema.NullOr(Schema.String),
   status: ThreadStatus,
   /** The opening message, clipped — what the thread list shows instead of a uuid. */
   title: Schema.NullOr(Schema.String),
@@ -84,10 +82,11 @@ export const ChatMessage = Schema.Struct({
   id: ChatMessageId,
   /** How the message arrived. Set for `user` messages and null for the manager's own. */
   intakeKind: Schema.NullOr(ChatIntakeKind),
-  /** The session the turn actually ran under, on the manager's side only. */
-  providerSessionId: Schema.NullOr(Schema.String),
   role: ChatMessageRole,
-  telegramChatId: TelegramChatId,
+  /** The turn that produced this answer, or that this question started. Null until one exists. */
+  runId: Schema.NullOr(RunId),
+  /** Null on a message that never travelled through Telegram. */
+  telegramChatId: Schema.NullOr(TelegramChatId),
   /** The inbound update's id, or the id of what the bot sent. Null when the send failed. */
   telegramMessageId: Schema.NullOr(TelegramMessageId),
   threadId: ThreadId,

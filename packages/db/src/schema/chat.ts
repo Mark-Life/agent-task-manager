@@ -27,16 +27,23 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { baseColumns, mutableColumns, tstz } from "./columns";
+import { run } from "./run";
 
 /**
- * The conversation, which is the bot's half of the system. The board is the
- * gateway's, and nothing here points at a task by foreign key.
+ * The conversation. A thread is the identity of one conversation with the
+ * manager agent, and the audit log names it: every board write a chat causes
+ * lands with this id in `audit_entry.actor_thread_id`. That is why a thread is
+ * archived rather than deleted — dropping it would orphan every audit row
+ * already written.
  *
- * A thread is the identity of one conversation with the manager agent, and the
- * audit log names it: every board write a chat causes lands with this id in
- * `audit_entry.actor_thread_id`. That is why a thread is archived rather than
- * deleted, and why clearing a conversation nulls `provider_session_id` and
- * keeps the row — dropping it would orphan every audit row already written.
+ * A thread is not a board card and not a Telegram chat. `chat_id` is null on
+ * one opened from the dashboard, and the same thread is reachable from both
+ * interfaces; a null chat id already says where it came from, so there is no
+ * `origin` column to disagree with it.
+ *
+ * The provider's session id is not here. A turn is a run, a run has an
+ * `agent_session`, and that row holds the id the provider handed back — one
+ * fact in one column instead of three.
  *
  * The chat's current thread is a partial unique index rather than a rule a
  * switch handler follows, so two updates racing cannot leave a chat with two
@@ -48,29 +55,25 @@ export const chatThread = pgTable(
     ...mutableColumns<ThreadId>(),
     // Number mode, not bigint: a chat id is signed and wider than 32 bits, and
     // still far inside what a double holds exactly.
-    chatId: bigint("chat_id", { mode: "number" })
-      .$type<TelegramChatId>()
-      .notNull(),
+    chatId: bigint("chat_id", { mode: "number" }).$type<TelegramChatId>(),
     isCurrent: boolean("is_current").notNull().default(true),
     lastMessageAt: tstz("last_message_at").notNull().defaultNow(),
     provider: text("provider")
       .$type<SessionProvider>()
       .notNull()
       .default("claude"),
-    // Separate from `provider`: null until the provider hands one back, and
-    // cleared whenever the conversation is cleared or the provider changes, so
-    // a thread survives both without losing what it is.
-    providerSessionId: text("provider_session_id"),
     status: text("status").$type<ThreadStatus>().notNull().default("active"),
     title: text("title"),
     userId: text("user_id").$type<UserId>().notNull(),
   },
   (t) => [
     uniqueIndex("chat_thread_workspace_id_id_uidx").on(t.workspaceId, t.id),
-    // One current thread per chat, enforced rather than assumed.
+    // One current thread per chat, enforced rather than assumed. Currency is a
+    // property of a chat, so a thread with no chat is outside the rule rather
+    // than competing for it.
     uniqueIndex("chat_thread_current_uidx")
       .on(t.workspaceId, t.chatId)
-      .where(sql`${t.isCurrent}`),
+      .where(sql`${t.isCurrent} and ${t.chatId} is not null`),
     index("chat_thread_workspace_id_chat_id_last_message_at_idx").on(
       t.workspaceId,
       t.chatId,
@@ -90,10 +93,14 @@ export const chatThread = pgTable(
  * privileges rather than by the absence of an `updated_at` column.
  *
  * The text is stored because the manager has no memory of its own: it is
- * invoked once per message, and the next turn's prompt is the tail of this
- * table. Telemetry counts these characters and never carries them; the split
- * between the two is what keeps a chat's words in workspace-scoped Postgres and
- * out of a flat file an operator greps.
+ * invoked once per turn, and the turn's prompt is what this table holds past
+ * the session's watermark. Telemetry counts these characters and never carries
+ * them; the split between the two is what keeps a chat's words in
+ * workspace-scoped Postgres and out of a flat file an operator greps.
+ *
+ * An inserted `user` row is also the dispatch signal: the trigger on this table
+ * is what tells the loop a thread has something to answer, the same way a task
+ * moving into the in-progress column tells it a task does.
  */
 export const chatMessage = pgTable(
   "chat_message",
@@ -102,12 +109,16 @@ export const chatMessage = pgTable(
     body: text("body").notNull(),
     forwardFrom: text("forward_from"),
     intakeKind: text("intake_kind").$type<ChatIntakeKind>(),
-    // Which session this turn actually ran under, on the manager's side.
-    providerSessionId: text("provider_session_id"),
     role: text("role").$type<ChatMessageRole>().notNull(),
-    telegramChatId: bigint("telegram_chat_id", { mode: "number" })
-      .$type<TelegramChatId>()
-      .notNull(),
+    // The turn that answered, or that this question started. Set null rather
+    // than cascaded away with the run, because what was said outlives it.
+    runId: uuid("run_id")
+      .$type<RunId>()
+      .references(() => run.id, { onDelete: "set null" }),
+    // Null on a message that never travelled through Telegram.
+    telegramChatId: bigint("telegram_chat_id", {
+      mode: "number",
+    }).$type<TelegramChatId>(),
     telegramMessageId: bigint("telegram_message_id", {
       mode: "number",
     }).$type<TelegramMessageId>(),

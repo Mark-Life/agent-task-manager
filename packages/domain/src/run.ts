@@ -1,6 +1,12 @@
 import { Schema } from "effect";
-import { RunOutcome, RunStatus, RunTrigger, SessionProvider } from "./enums";
-import { AgentSessionId, RunId, TaskId } from "./ids";
+import {
+  RunOutcome,
+  RunRole,
+  RunStatus,
+  RunTrigger,
+  SessionProvider,
+} from "./enums";
+import { AgentSessionId, RunId, TaskId, ThreadId } from "./ids";
 import { CostUsd, recordFields, Timestamp } from "./primitives";
 
 /**
@@ -16,15 +22,54 @@ export const LIVE_RUN_STATUSES = ["queued", "running"] as const;
 export const isRunLive = (run: Pick<Run, "status">) =>
   (LIVE_RUN_STATUSES as readonly RunStatus[]).includes(run.status);
 
+/** Work on a task. */
+const TaskSubject = Schema.Struct({
+  id: TaskId,
+  kind: Schema.tag("task"),
+});
+
+/** Work on a conversation. */
+const ThreadSubject = Schema.Struct({
+  id: ThreadId,
+  kind: Schema.tag("thread"),
+});
+
 /**
- * One attempt at a task, inside one session. The economics are nullable
- * throughout: a degraded run did not cost 0 and did not take 0ms, it produced
- * no number at all, and a fabricated 0 is a number someone later averages.
+ * What a run is attached to. A union rather than two nullable ids, because the
+ * role and the attachment are one fact: a worker always has a task and a
+ * manager always has a thread, and two independent fields would make the other
+ * two combinations representable.
+ *
+ * Foreign keys stay foreign keys on the row — `task_id` and `thread_id` are
+ * real columns with real references — and this is how a caller names one.
+ */
+export const RunSubject = Schema.Union([TaskSubject, ThreadSubject]).pipe(
+  Schema.toTaggedUnion("kind")
+);
+export type RunSubject = typeof RunSubject.Type;
+
+/** One mapping, so a role can never be written to disagree with what it is attached to. */
+const ROLE_OF_KIND = {
+  task: "worker",
+  thread: "manager",
+} as const satisfies Record<RunSubject["kind"], RunRole>;
+
+/** The role that follows from what a run is attached to. There is no other source of it. */
+export const roleOfSubject = (subject: RunSubject) =>
+  ROLE_OF_KIND[subject.kind];
+
+/**
+ * One attempt at a piece of work, inside one session. The economics are
+ * nullable throughout: a degraded run did not cost 0 and did not take 0ms, it
+ * produced no number at all, and a fabricated 0 is a number someone later
+ * averages.
+ *
+ * `taskId` and `threadId` are the two halves of {@link RunSubject}: exactly
+ * one is set, and which one is `role`. The database refuses every other
+ * combination, so reading the role is enough to know which id is there.
  */
 export const Run = Schema.Struct({
   ...recordFields,
-  /** This run's agent-home dir, relative to the data root. Per run, not per session: parallel containers sharing one credentials file invalidate each other. */
-  agentHomePath: Schema.NullOr(Schema.String),
   /** Every run belongs to a session — that is what resume means — and the session row is written first, in the same transaction. */
   agentSessionId: AgentSessionId,
   attempt: Schema.Natural,
@@ -47,12 +92,16 @@ export const Run = Schema.Struct({
   /** Null while the run is live. Never a fabricated terminus. */
   outcome: Schema.NullOr(RunOutcome),
   provider: SessionProvider,
+  role: RunRole,
   /** Which image actually ran, against `task.sandboxImage`, which only selects one. */
   sandboxImage: Schema.NullOr(Schema.String),
   /** Null while queued, so the queue wait is `startedAt - createdAt`. */
   startedAt: Schema.NullOr(Timestamp),
   status: RunStatus,
-  taskId: TaskId,
+  /** Set on a worker run, null on a manager one. */
+  taskId: Schema.NullOr(TaskId),
+  /** Set on a manager run, null on a worker one. */
+  threadId: Schema.NullOr(ThreadId),
   totalTokens: Schema.NullOr(Schema.Natural),
   /** Joins this row to its `atm.run` ledger event. */
   traceId: Schema.NullOr(Schema.String),

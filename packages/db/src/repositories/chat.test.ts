@@ -15,10 +15,12 @@ import { PgClient } from "@effect/sql-pg";
 import type { WorkspaceId } from "@workspace/domain";
 import { newTaskId, TelegramChatId, UserId } from "@workspace/domain";
 import { DateTime, Effect, ManagedRuntime, Schema } from "effect";
+import { withActor } from "../actor";
 import { storeLayer } from "../store";
 import { ChatMessageRepo } from "./chat-message";
 import { ChatNotificationRepo } from "./chat-notification";
 import { ChatThreadRepo } from "./chat-thread";
+import { AgentSessionRepo } from "./session";
 import { WorkspaceRepo } from "./workspace";
 
 /** Reported as `application_name`, so `pg_stat_activity` names this process. */
@@ -36,6 +38,9 @@ const CHAT_ID_RANGE = 1_000_000_000;
 const chatId = TelegramChatId.make(-Math.floor(Math.random() * CHAT_ID_RANGE));
 
 const userId = UserId.make("chat-test-user");
+
+/** Sessions are audited, so the test says who is opening them. */
+const caller = { kind: "human", userId } as const;
 
 const runtime = ManagedRuntime.make(
   storeLayer({ applicationName: APPLICATION_NAME })
@@ -93,7 +98,6 @@ test("a conversation round-trips: open, say something, read the tail back", asyn
       });
       yield* messages.append({
         body: "filed it in backlog",
-        providerSessionId: "sess-1",
         role: "manager",
         telegramChatId: chatId,
         threadId: thread.id,
@@ -110,7 +114,6 @@ test("a conversation round-trips: open, say something, read the tail back", asyn
 
   expect(result.opened.isCurrent).toBe(true);
   expect(result.opened.status).toBe("active");
-  expect(result.opened.providerSessionId).toBeNull();
 
   // Oldest first: the order a prompt is built in.
   expect(result.stored.map((message) => message.role)).toEqual([
@@ -124,7 +127,6 @@ test("a conversation round-trips: open, say something, read the tail back", asyn
   // The manager's own message carries no intake kind, which the row's CHECK
   // is what actually enforces.
   expect(result.stored[1]?.intakeKind).toBeNull();
-  expect(result.stored[1]?.providerSessionId).toBe("sess-1");
 
   // The first message titled the thread and moved it up the list.
   expect(result.touched.title).toBe("file a task to rename the deploy script");
@@ -176,37 +178,66 @@ test("a chat has one current thread, and switching moves it", async () => {
   expect(result.listed.length).toBeGreaterThanOrEqual(2);
 });
 
-test("clearing a conversation forgets the provider's session and keeps the thread", async () => {
+test("a thread with an unread message is dispatchable, and stops being one at the watermark", async () => {
   const result = await runtime.runPromise(
     Effect.gen(function* () {
       const threads = yield* ChatThreadRepo;
+      const messages = yield* ChatMessageRepo;
+      const sessions = yield* AgentSessionRepo;
+
       const thread = yield* threads.open({
         chatId,
         provider: "claude",
         userId,
         workspaceId,
       });
+      const asked = yield* messages.append({
+        body: "what is left on the board?",
+        intakeKind: "text",
+        role: "user",
+        telegramChatId: chatId,
+        threadId: thread.id,
+        workspaceId,
+      });
 
-      const resumable = yield* threads.setProviderSession({
-        id: thread.id,
-        providerSessionId: "sess-resume",
+      const queued = yield* threads.awaitingReply({ workspaceId });
+
+      // A session that has been shown nothing is shown the whole thread.
+      const session = yield* sessions.open({
+        provider: "claude",
+        subject: { id: thread.id, kind: "thread" },
+        workspaceId,
+      });
+      const fresh = yield* messages.since({
+        threadId: thread.id,
+        watermark: null,
+        workspaceId,
+      });
+
+      yield* sessions.advanceWatermark({
+        id: session.id,
+        unreadAt: asked.createdAt,
+        unreadId: asked.id,
         workspaceId,
       });
 
       return {
-        cleared: yield* threads.clearProviderSession({
-          id: thread.id,
-          workspaceId,
-        }),
-        resumable,
+        answered: yield* threads.awaitingReply({ workspaceId }),
+        fresh,
+        queued,
+        thread,
       };
-    })
+    }).pipe(withActor(caller))
   );
 
-  expect(result.resumable.providerSessionId).toBe("sess-resume");
-  expect(result.cleared.providerSessionId).toBeNull();
-  expect(result.cleared.id).toBe(result.resumable.id);
-  expect(result.cleared.isCurrent).toBe(true);
+  expect(result.queued.map((thread) => thread.id)).toContain(result.thread.id);
+  expect(result.fresh.map((message) => message.body)).toEqual([
+    "what is left on the board?",
+  ]);
+  // Read is read: the watermark is what takes the thread back out of the queue.
+  expect(result.answered.map((thread) => thread.id)).not.toContain(
+    result.thread.id
+  );
 });
 
 test("a notice is claimed once, and the second attempt is refused", async () => {

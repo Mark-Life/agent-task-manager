@@ -1,10 +1,11 @@
 import {
   AgentSessionId,
-  CommentId,
   SessionProvider,
   SessionStatus,
   TaskId,
+  ThreadId,
   Timestamp,
+  UnreadWatermarkId,
   WorkspaceId,
 } from "@workspace/domain";
 import {
@@ -17,21 +18,22 @@ import { agentSession } from "../schema/agent-session";
 
 /**
  * The watermark is two columns and stays two columns: it is compared against
- * `comment` as a `(created_at, id)` tuple, so collapsing it into one value here
- * would cost the tiebreaker that stops a same-millisecond tie from skipping a
- * comment.
+ * the row it points at as a `(created_at, id)` tuple, so collapsing it into one
+ * value here would cost the tiebreaker that stops a same-millisecond tie from
+ * skipping a row.
  *
  * `provider_session_id` is left underived — it is whatever string the harness
  * reports, and giving it a brand of ours would suggest we mint it.
  */
 const columns = {
-  commentWatermarkAt: () => Timestamp,
-  commentWatermarkId: () => CommentId,
   endedAt: () => Timestamp,
   id: () => AgentSessionId,
   provider: () => SessionProvider,
   status: () => SessionStatus,
   taskId: () => TaskId,
+  threadId: () => ThreadId,
+  unreadWatermarkAt: () => Timestamp,
+  unreadWatermarkId: () => UnreadWatermarkId,
   workspaceId: () => WorkspaceId,
 };
 

@@ -7,6 +7,7 @@ import {
   RunCommandStatus,
   RunId,
   TaskId,
+  ThreadId,
   Timestamp,
   UserId,
   WorkspaceId,
@@ -41,6 +42,7 @@ const columns = {
   runId: () => RunId,
   status: () => RunCommandStatus,
   taskId: () => TaskId,
+  threadId: () => ThreadId,
   workspaceId: () => WorkspaceId,
 };
 

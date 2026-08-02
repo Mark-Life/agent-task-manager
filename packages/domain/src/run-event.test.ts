@@ -21,6 +21,7 @@ const row: typeof RunEvent.Encoded = {
   runId: newRunId(),
   seq: 0,
   taskId: newTaskId(),
+  threadId: null,
   workspaceId: "8f6ba3cc0d2a4a0f9b1f7e2c5d3a6b41",
 };
 
