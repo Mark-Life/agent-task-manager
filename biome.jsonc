@@ -18,6 +18,15 @@
       "!packages/ui/src/lib/**/*"
     ]
   },
+  // Biome 2.5's HTML formatter is not idempotent over a block comment inside an
+  // embedded <style> or <script>: every pass indents the comment's continuation
+  // lines again, so `apps/dashboard/index.html` came back changed from each
+  // pre-commit run. The repository has one HTML file and it is hand-written.
+  "html": {
+    "formatter": {
+      "enabled": false
+    }
+  },
   "overrides": [
     {
       "includes": [

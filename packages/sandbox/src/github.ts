@@ -73,11 +73,11 @@ export const CREDENTIAL_HELPER = `!f() { test "$1" = get && printf '%s\\n' "user
  * The `-c` pair that installs the helper for one invocation.
  *
  * The empty assignment first is not redundant: git's credential helpers are a
- * *list*, and a host with a `credential.helper` in its own `~/.gitconfig` —
- * a keychain, a manager, an `osxkeychain` left over from a laptop — would
- * otherwise be consulted first and answer with the wrong account. Clearing the
- * list and then appending exactly one is how this stays independent of whatever
- * the operator's git is configured to do.
+ * list rather than a single setting, and a host with a `credential.helper` in
+ * its own `~/.gitconfig` — a keychain, a manager, an `osxkeychain` left over
+ * from a laptop — would otherwise be consulted first and answer with the wrong
+ * account. Clearing the list and then appending exactly one is how this stays
+ * independent of whatever the operator's git is configured to do.
  */
 export const credentialConfigArgs: readonly string[] = [
   "-c",

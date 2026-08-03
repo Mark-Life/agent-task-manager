@@ -407,6 +407,24 @@ const textOfUnknown = (failure: unknown): string => {
 };
 
 /**
+ * The failure's own words, from whichever of the three vocabularies it speaks:
+ * one of ours, one of the sandbox's, or whatever a thrown value carried.
+ */
+const textOf = (input: {
+  readonly failure: unknown;
+  readonly ours: boolean;
+  readonly sandbox: ReturnType<typeof sandboxClassOf>;
+}): string => {
+  if (input.ours) {
+    return messageOf(input.failure as OrchestratorError);
+  }
+  if (input.sandbox === null) {
+    return textOfUnknown(input.failure);
+  }
+  return sandboxMessageOf(input.failure as SandboxError);
+};
+
+/**
  * The three fields a failure puts on the run row, the crash comment and the
  * wide event, from the one place that holds the tag.
  *
@@ -419,11 +437,7 @@ export const describeFailure = (failure: unknown) => {
   const tag = tagOf(failure);
   const sandbox = tag === null ? null : sandboxClassOf(tag);
   const ours = tag !== null && tag in CLASS_OF_TAG;
-  const text = ours
-    ? messageOf(failure as OrchestratorError)
-    : sandbox === null
-      ? textOfUnknown(failure)
-      : sandboxMessageOf(failure as SandboxError);
+  const text = textOf({ failure, ours, sandbox });
   return {
     errorClass,
     // Both sanitizers, because they cover different shapes: the shared one
