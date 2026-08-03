@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { newRunId, newTaskId } from "@workspace/domain";
 import { RateLimited } from "@workspace/harness";
-import { OomKilled } from "@workspace/sandbox";
+import { CloneFailed, MountSourceMissing, OomKilled } from "@workspace/sandbox";
 import {
   AlreadyLive,
   classifyFailure,
@@ -95,6 +95,63 @@ describe("describeFailure", () => {
 
   test("never leaves the message empty, since a blank row explains nothing", () => {
     expect(describeFailure({}).errorMessage).toBe("Unknown");
+  });
+
+  /**
+   * A sandbox failure used to arrive as its bare tag and a colon, because these
+   * tags are not in the loop's own table and the fallback reads `message` off an
+   * `Error` that never had one. Everything worth knowing was already on the
+   * error and reached nobody.
+   */
+  test("says why a checkout failed, not just that it did", () => {
+    const described = describeFailure(
+      new CloneFailed({
+        exitCode: 128,
+        repo: "Mark-Life/agent-task-manager",
+        stderr: "fatal: could not read Username for 'https://github.com'",
+      })
+    );
+    expect(described.errorClass).toBe("CloneFailed");
+    expect(described.errorMessage).toBe(
+      "cloning Mark-Life/agent-task-manager failed (exit 128): fatal: could not read Username for 'https://github.com'"
+    );
+  });
+
+  test("names the limit a container was killed for exceeding", () => {
+    expect(
+      describeFailure(new OomKilled({ containerId: "abc", limitMb: 2048 }))
+        .errorMessage
+    ).toBe("the kernel killed the container for exceeding its 2048MB limit");
+  });
+
+  test("names the path a mount pointed at", () => {
+    expect(
+      describeFailure(
+        new MountSourceMissing({
+          hostPath: "/var/lib/atm/bin/turn.js",
+          purpose: "entrypoint",
+        })
+      ).errorMessage
+    ).toBe(
+      "the entrypoint mount points at /var/lib/atm/bin/turn.js, which does not exist"
+    );
+  });
+
+  /**
+   * git quotes the remote in its own error text, and the remote is where a
+   * token would be. The sanitizer runs over the assembled sentence, not over
+   * the fields, so it covers whatever a tool decided to print.
+   */
+  test("redacts a credential git printed back", () => {
+    const described = describeFailure(
+      new CloneFailed({
+        exitCode: 128,
+        repo: "owner/name",
+        stderr:
+          "fatal: unable to access 'https://x:ghp_abcdefghijklmnopqrst@github.com/owner/name'",
+      })
+    );
+    expect(described.errorMessage).not.toContain("ghp_abcdefghijklmnopqrst");
   });
 });
 

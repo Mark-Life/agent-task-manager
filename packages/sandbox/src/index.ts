@@ -103,6 +103,10 @@ export {
   SandboxTimedOut,
   TeardownFailed,
 } from "./errors";
+// The remote redactor, exported because the loop assembles a failure's message
+// out of git's own stderr and the sanitizer at that layer covers bearer tokens
+// and API keys but not the `user:pass@` a clone URL carries.
+export { redactRemote } from "./git";
 // The GitHub credential. Exported because the orchestrator hands the same
 // token to a container that this package hands to the host's git — one value
 // reaching two sides, so the names it travels under are shared, not repeated.
