@@ -1,17 +1,30 @@
 import { describe, expect, test } from "bun:test";
-import { RunId, ThreadId } from "@workspace/domain";
+import { ChatMessageRepo, ChatThreadRepo, RunRepo } from "@workspace/db";
+import type { ChatMessage, ChatThread, Run } from "@workspace/domain";
+import {
+  RunId,
+  TelegramChatId,
+  ThreadId,
+  WorkspaceId,
+} from "@workspace/domain";
+import { Effect, Layer } from "effect";
+import { lastTextOf, recordingApi } from "../testing/telegram";
 import {
   answerText,
+  deliverAnswer,
   FORCE_SEND_LABEL,
   forceSendKeyboard,
   makeQueueNotices,
   queuedText,
 } from "./answer";
+import { BotService } from "./bot-service";
 import { decodeCallbackData } from "./callback-data";
 
 const THREAD_ID = ThreadId.make("0195f2a0-1c3d-7a11-8f2e-0b1c2d3e4f60");
 const OTHER_THREAD_ID = ThreadId.make("0195f2a0-1c3d-7a11-8f2e-0b1c2d3e4f61");
 const RUN_ID = RunId.make("0195f2a0-1c3d-7a11-8f2e-0b1c2d3e4f62");
+const WORKSPACE_ID = WorkspaceId.make("0195f2a0-1c3d-7a11-8f2e-0b1c2d3e4f63");
+const CHAT_ID = TelegramChatId.make(4242);
 
 const STATUS_MESSAGE = 4242;
 
@@ -132,5 +145,124 @@ describe("answerText", () => {
 
     expect(rendered).toContain("errored");
     expect(rendered).toContain("Sandbox.ContainerFailed");
+  });
+});
+
+/**
+ * A conversation that is being closed out while the bot reads it.
+ *
+ * The listener is woken by the run's terminal event, which the ingest appends
+ * before the run row closes and before the manager's message is stored — so a
+ * store this test drives has to be able to answer "still running, nothing said"
+ * first and the truth a moment later. `closesAfterMs` is where that moment is.
+ */
+const closingStore = (options: {
+  readonly closesAfterMs: number;
+  readonly spoken: string | null;
+}) => {
+  const openedAt = Date.now();
+  const closed = () => Date.now() - openedAt >= options.closesAfterMs;
+
+  const runs = Layer.succeed(RunRepo, {
+    byId: () =>
+      Effect.sync(
+        () =>
+          ({
+            costUsd: null,
+            durationMs: null,
+            errorClass: null,
+            errorMessage: null,
+            id: RUN_ID,
+            outcome: closed() ? "done" : null,
+            status: closed() ? "finished" : "running",
+            threadId: THREAD_ID,
+            totalTokens: null,
+            turns: null,
+            workspaceId: WORKSPACE_ID,
+          }) as unknown as Run
+      ),
+  } as unknown as RunRepo["Service"]);
+
+  const threads = Layer.succeed(ChatThreadRepo, {
+    byId: () =>
+      Effect.succeed({
+        chatId: CHAT_ID,
+        id: THREAD_ID,
+        workspaceId: WORKSPACE_ID,
+      } as unknown as ChatThread),
+  } as unknown as ChatThreadRepo["Service"]);
+
+  const messages = Layer.succeed(ChatMessageRepo, {
+    recent: () =>
+      Effect.sync(() =>
+        options.spoken === null || !closed()
+          ? []
+          : [
+              { body: "hello", role: "user", runId: null },
+              {
+                body: options.spoken,
+                role: "manager",
+                runId: RUN_ID,
+              },
+            ].map((row) => row as unknown as ChatMessage)
+      ),
+  } as unknown as ChatMessageRepo["Service"]);
+
+  return Layer.mergeAll(messages, runs, threads);
+};
+
+describe("deliverAnswer", () => {
+  test("the answer of a turn still closing out is waited for, not written off", async () => {
+    const telegram = recordingApi();
+    const notices = makeQueueNotices();
+    notices.next({ messageId: STATUS_MESSAGE, threadId: THREAD_ID });
+    const spoken = "Loud and clear. Board's here whenever you want to file.";
+
+    await Effect.runPromise(
+      deliverAnswer({
+        notices,
+        run: { id: RUN_ID, workspaceId: WORKSPACE_ID },
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            closingStore({ closesAfterMs: 700, spoken }),
+            Layer.succeed(BotService, {
+              api: telegram.api,
+            } as unknown as BotService["Service"])
+          )
+        )
+      )
+    );
+
+    const said = lastTextOf({ calls: telegram.calls, method: "sendMessage" });
+    expect(said).toContain(spoken);
+    expect(said).not.toContain("without an answer");
+    expect(
+      telegram.calls.some((call) => call.method === "deleteMessage")
+    ).toBeTrue();
+  });
+
+  test("a turn that really said nothing is reported as one, once it has ended", async () => {
+    const telegram = recordingApi();
+
+    await Effect.runPromise(
+      deliverAnswer({
+        notices: makeQueueNotices(),
+        run: { id: RUN_ID, workspaceId: WORKSPACE_ID },
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            closingStore({ closesAfterMs: 0, spoken: null }),
+            Layer.succeed(BotService, {
+              api: telegram.api,
+            } as unknown as BotService["Service"])
+          )
+        )
+      )
+    );
+
+    const said = lastTextOf({ calls: telegram.calls, method: "sendMessage" });
+    expect(said).toContain("without an answer");
+    expect(said).toContain("done");
   });
 });

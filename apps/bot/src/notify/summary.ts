@@ -12,10 +12,10 @@
  * terminal event is appended by the ingest, and the run row's outcome and the
  * task's move into `review` are written after it. A notice that read the rows
  * the instant it was woken would announce a finished run as still running and
- * would never see the review. So the read settles: a run still live when first
- * asked is asked once more, a moment later, and only then is the answer taken.
- * The wait is bounded and happens on a background fiber, so the cost of it is
- * latency nobody is watching.
+ * would never see the review. So the read settles — see `../settle`, which is
+ * the same wait the manager's answer is read behind. The window is bounded and
+ * the notices are handled concurrently, so the cost of it is latency nobody is
+ * watching.
  *
  * What comes back is a value the renderer can turn into a message and nothing
  * more — no tool calls, no transcript, no argv. A person is told what the run
@@ -35,16 +35,15 @@ import type {
 import { costUsdToNumber, isRunLive } from "@workspace/domain";
 import { clipError } from "@workspace/telemetry";
 import { Effect } from "effect";
+import { settledRun } from "../settle";
 import type { RunNotice } from "./render";
 
 /**
- * How long a notice waits for the close-out to land before it reads the rows
- * for the second and last time.
+ * How long a notice waits for the close-out to land.
  *
  * Long enough for the writes that follow a terminal event, short enough that
- * nobody notices. It is not a retry loop: one re-read is the difference
- * between racing and not, and a run that is somehow still live after it is
- * described from the event that woke us.
+ * nobody notices. A run somehow still live at the end of it is described from
+ * the event that woke us.
  */
 export const NOTICE_SETTLE_MS = 2000;
 
@@ -102,25 +101,6 @@ export const notifyKindOf = (options: {
   return null;
 };
 
-/** One run, re-read once if it is still closing. */
-const settledRun = Effect.fnUntraced(function* (options: {
-  readonly runId: RunId;
-  readonly runs: RunRepo["Service"];
-  readonly workspaceId: WorkspaceId;
-}) {
-  const { runId, runs, workspaceId } = options;
-  const read = () =>
-    runs
-      .byId({ id: runId, workspaceId })
-      .pipe(Effect.catchTag("Db.NotFound", () => Effect.succeed(null)));
-  const first = yield* read();
-  if (first === null || !isRunLive(first)) {
-    return first;
-  }
-  yield* Effect.sleep(NOTICE_SETTLE_MS);
-  return yield* read();
-});
-
 /**
  * Everything a notice about this task needs, or null when there is nothing to
  * say.
@@ -138,7 +118,14 @@ export const describeNotice = Effect.fn("Notify.describeNotice")(function* (
   const tasks = yield* TaskRepo;
 
   const run =
-    runId === null ? null : yield* settledRun({ runId, runs, workspaceId });
+    runId === null
+      ? null
+      : yield* settledRun({
+          runId,
+          runs,
+          windowMs: NOTICE_SETTLE_MS,
+          workspaceId,
+        });
   const task = yield* tasks.byId({ id: taskId, workspaceId });
 
   const kind =

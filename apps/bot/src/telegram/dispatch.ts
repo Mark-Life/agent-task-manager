@@ -12,6 +12,11 @@
  * and no fiber holding a turn. What the router does after the write is ask the
  * database one question — is a turn already live on this thread — and say so.
  *
+ * **A voice note is answered twice.** Before anything is stored, the words it
+ * turned out to hold are echoed back into the chat — see `./voice` — because
+ * the sender of a voice note has no other way to see what was heard. Then it
+ * takes the same path every other message takes.
+ *
  * **The queue is the unread rows, not a list in this process.** A message that
  * arrives mid-turn is stored like any other and stays unread, so the next turn
  * reads it with everything else that arrived. The person is told it is waiting
@@ -50,6 +55,11 @@ import {
   resolveIntake,
 } from "./intake";
 import { ensureThread, telegramChatIdOf } from "./threads";
+import {
+  echoTranscript,
+  echoTranscriptFailure,
+  openTranscriptNotice,
+} from "./voice";
 
 /**
  * The chats waiting for their next message to become a comment, armed by the
@@ -186,6 +196,18 @@ export const makeDispatcher = Effect.fnUntraced(function* (
     });
     yield* observeChat({ provider: thread.provider, threadId: thread.id });
 
+    // A voice note is the one intake whose sender cannot see what arrived, so
+    // the chat says it is listening and then says what it heard. Opened before
+    // the transcription because the transcription is the wait.
+    const notice =
+      classification.kind === "voice"
+        ? yield* openTranscriptNotice({
+            api,
+            chatId,
+            replyToMessageId: classification.telegramMessageId,
+          })
+        : null;
+
     const resolved = yield* resolveIntake({
       api,
       message: classification,
@@ -193,11 +215,23 @@ export const makeDispatcher = Effect.fnUntraced(function* (
     }).pipe(Effect.option);
 
     if (resolved._tag === "None") {
+      if (classification.kind === "voice") {
+        yield* echoTranscriptFailure({ api, chatId, noticeId: notice });
+        return;
+      }
       yield* reply(ctx, "That message could not be read.");
       return;
     }
 
     const message = resolved.value;
+    if (classification.kind === "voice") {
+      yield* echoTranscript({
+        api,
+        chatId,
+        noticeId: notice,
+        text: message.body,
+      });
+    }
     yield* observeChat({
       promptChars: message.chars,
       transcribeMs: message.transcribeMs,

@@ -148,18 +148,19 @@ const observabilityLayer = Layer.mergeAll(
  */
 const infrastructureLayer = (
   wiring: BotWiring,
-  board: Layer.Layer<Board> = Board.layer({
-    // The gateway as *this process* reaches it, which is not the address a
-    // container resolves; the loop reads its own.
-    baseUrl: wiring.env.botGatewayUrl,
-    mint: mintFor(wiring.signer),
-  })
+  substitutes: AppSubstitutes = {}
 ) =>
   Layer.mergeAll(
     Allowlist.layer(wiring.allowlist),
-    board,
+    substitutes.board ??
+      Board.layer({
+        // The gateway as *this process* reaches it, which is not the address a
+        // container resolves; the loop reads its own.
+        baseUrl: wiring.env.botGatewayUrl,
+        mint: mintFor(wiring.signer),
+      }),
     BotService.layer(wiring.botToken),
-    TranscribeService.layer,
+    substitutes.transcribe ?? TranscribeService.layer,
     chatStoreLayer({ applicationName: SERVICE_NAME })
   ).pipe(Layer.provideMerge(observabilityLayer));
 
@@ -188,6 +189,19 @@ const taskUrlFor = (origins: {
 };
 
 /**
+ * The two services a check may stand in for, because they are the two that
+ * reach off the machine: the gateway, which is a second process, and Groq,
+ * which is a paid API with a key this process may not even hold.
+ *
+ * Everything else — the store, the allow-list, the grammy client, the router —
+ * is exercised as itself. Production passes neither and gets both for real.
+ */
+export interface AppSubstitutes {
+  readonly board?: Layer.Layer<Board>;
+  readonly transcribe?: Layer.Layer<TranscribeService>;
+}
+
+/**
  * The whole process, as one layer.
  *
  * Provide it to the entrypoint and nothing else: a second build would mean a
@@ -195,13 +209,8 @@ const taskUrlFor = (origins: {
  * claiming to be this bot. Everything is merged out rather than hidden, because
  * the entrypoint legitimately reaches most of it — it registers the handlers on
  * the bot, forks the listener on the pool's own `PgClient`, and starts the scan.
- *
- * `board` is the one substitution this file allows, and it exists for
- * `bun run bot:check`: every other part of the process can be exercised without
- * a network, and the gateway cannot. Production passes nothing and gets the real
- * client.
  */
-export const appLayer = (wiring: BotWiring, board?: Layer.Layer<Board>) =>
+export const appLayer = (wiring: BotWiring, substitutes?: AppSubstitutes) =>
   StuckScan.layer.pipe(Layer.provide(stuckAnnouncerLayer)).pipe(
     Layer.provideMerge(
       Notifier.layer({
@@ -213,5 +222,5 @@ export const appLayer = (wiring: BotWiring, board?: Layer.Layer<Board>) =>
         }),
       })
     ),
-    Layer.provideMerge(infrastructureLayer(wiring, board))
+    Layer.provideMerge(infrastructureLayer(wiring, substitutes))
   );

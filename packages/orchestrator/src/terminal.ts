@@ -308,12 +308,14 @@ const closeOnTask = Effect.fnUntraced(function* (input: {
  * Closes one run out: the run row, whatever it was attached to, and the
  * session.
  *
- * The order is the order a reader wants it in. The run row closes first, so the
- * work stops looking live the moment anything is written at all. What the
- * ending is written back to comes next — see {@link closeOnTask} and
- * `closeChatTurn`. The session ends last, because a failed session's message is
- * the same text the crash comment carries and writing it twice from two places
- * is how the two come to differ.
+ * The order is the order a reader wants it in. A conversation's answer goes
+ * first, because the interface reading it is woken by an event this path has
+ * not caught up with yet and uses the closed run row as the signal that it has
+ * — see `closeChatTurn`. The run row closes next, so the work stops looking
+ * live the moment anything else is written at all, and a task's comments and
+ * board move follow it — see {@link closeOnTask}. The session ends last,
+ * because a failed session's message is the same text the crash comment carries
+ * and writing it twice from two places is how the two come to differ.
  *
  * Total by construction: every failure is logged and reported as a flag. The
  * two refusals worth naming are ordinary rather than exceptional — a run closed
@@ -357,6 +359,19 @@ export const closeRun = Effect.fn("Run.close")(function* (closure: RunClosure) {
     ).pipe(bestEffort("recording the provider session id"));
   }
 
+  // The conversation's answer, written *before* the run row closes.
+  //
+  // The order is the contract with every reader of a finished turn. The bot is
+  // woken by the terminal run event, waits for the run to stop reading as live,
+  // and then looks for the message — so a run that reads as ended and has no
+  // answer beside it is a turn that said nothing, rather than a turn whose
+  // answer had not been written yet. Reversed, the chat says "the turn ended
+  // without an answer" about a turn that answered.
+  const answerStored =
+    context.attached.role === "manager"
+      ? yield* closeChatTurn({ context, terminus })
+      : false;
+
   const economics = economicsOf(terminus);
   // `RunRepo.NotLive` is the one refusal here that means the work is already
   // done: the stop path and this path agreeing, or a reconcile that closed the
@@ -388,18 +403,14 @@ export const closeRun = Effect.fn("Run.close")(function* (closure: RunClosure) {
     bestEffort("closing the run row")
   );
 
-  // What the ending is written back to, which is the one thing the role
-  // decides: a task gets its comments and its board move, a conversation gets
-  // the answer. Both run before the session ends, so a dashboard reacting to
-  // either finds the record already complete.
+  // The other half of what the ending is written back to: a task's comments and
+  // its board move. After the close, so the card stops looking live the moment
+  // anything at all is written, and before the session ends, so a dashboard
+  // reacting to either finds the record already complete.
   const board =
     context.attached.role === "worker"
       ? yield* closeOnTask({ attached: context.attached, closure })
       : NO_BOARD_WRITES;
-  const answerStored =
-    context.attached.role === "manager"
-      ? yield* closeChatTurn({ context, terminus })
-      : false;
 
   const ended = yield* asActor(
     failed
