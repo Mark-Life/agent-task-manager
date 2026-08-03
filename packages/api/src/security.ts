@@ -20,7 +20,13 @@
  * Each scope is a floor, not an exact match: a token that satisfies a stricter
  * scope satisfies a looser one. `read` is every GET, `task-write` is every
  * mutation that is a piece of ordinary work, and `admin` is the destructive
- * end — the deletes.
+ * end — deleting a project, which orphans the tasks filed under it.
+ *
+ * Deleting a *task* is deliberately not up here. The manager clears cards off a
+ * board when it is asked to, and the choice was between a scope that says
+ * "ordinary work" and a credential that could also erase a project. Which
+ * actors may erase a task is then checked past the scope, against the actor the
+ * credential names, where the status machine's other two answers live.
  *
  * A run's token is a `task-write` token bound to the task it was dispatched
  * for. The binding is checked against the `:taskId` path parameter, which is
@@ -77,9 +83,9 @@ export const TaskWriteToken = scopedToken(
   "Bearer token scoped to writes. A run's token is bound to its own task and is refused on any other."
 );
 
-/** A token that may also destroy: the deletes, and nothing else needs it. */
+/** A token that may also destroy: deleting a project, and nothing else needs it. */
 export const AdminToken = scopedToken(
-  "Bearer token scoped to destructive operations — deleting a project or a task."
+  "Bearer token scoped to destructive operations — deleting a project."
 );
 
 /**
@@ -149,9 +155,11 @@ export class ReadAccess extends HttpApiMiddleware.Service<
 }) {}
 
 /**
- * Ordinary work: creating and editing tasks, moving them, commenting, steering
- * a run, keeping a file. A run's token reaches these only on its own task, and
- * that is checked here against the `:taskId` in the path.
+ * Ordinary work: creating and editing tasks, moving them, deleting one,
+ * commenting, steering a run, keeping a file. A run's token reaches these only
+ * on its own task, and that is checked here against the `:taskId` in the path —
+ * which is the floor and not the whole answer for a delete, since a run may
+ * write on its own task and still may not erase it.
  */
 export class TaskWriteAccess extends HttpApiMiddleware.Service<
   TaskWriteAccess,
@@ -162,9 +170,9 @@ export class TaskWriteAccess extends HttpApiMiddleware.Service<
 }) {}
 
 /**
- * The destructive end. Deleting a project orphans nothing — the store refuses
- * that — but deleting a task takes its comments, sessions and runs with it, and
- * no agent's token should reach it.
+ * The destructive end, which is now one operation: deleting a project. The
+ * store refuses one that still has tasks filed under it, so what this guards is
+ * the workspace's own furniture rather than anybody's work.
  */
 export class AdminAccess extends HttpApiMiddleware.Service<
   AdminAccess,

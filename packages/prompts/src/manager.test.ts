@@ -262,7 +262,7 @@ describe("the rules", () => {
   /** The bullet list the rules introduce the tools with, and nothing else. */
   const toolSection = MANAGER_RULES.slice(
     MANAGER_RULES.indexOf("The tools are:"),
-    MANAGER_RULES.indexOf("There is no delete")
+    MANAGER_RULES.indexOf("## How you move and remove cards")
   );
 
   const named = [...toolSection.matchAll(/`(\w+)`/g)].map(
@@ -281,6 +281,16 @@ describe("the rules", () => {
   test("say to file into backlog and never straight into in_progress", () => {
     expect(MANAGER_RULES).toContain("backlog");
     expect(MANAGER_RULES).toContain("in_progress");
+  });
+
+  test("say a delete is confirmed first and cannot be undone", () => {
+    expect(MANAGER_RULES).toContain("tasks_delete");
+    expect(MANAGER_RULES).toContain("no undo");
+    expect(MANAGER_RULES).toContain("Ask before you call it");
+  });
+
+  test("say a move out of in_progress asks a live run to stop", () => {
+    expect(MANAGER_RULES).toContain("asks that run to stop");
   });
 
   test("name no single window the conversation arrives through", () => {

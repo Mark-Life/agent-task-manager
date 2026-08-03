@@ -67,6 +67,20 @@ const targetOf = (
 };
 
 /**
+ * The column a drop would land in, or null when the pointer is over nothing the
+ * board knows.
+ *
+ * Exported for the highlight, which is a separate question from where the card
+ * ends up: hovering a *card* names its column just as hovering the column does,
+ * and a column that lights up only when the pointer is in its empty space would
+ * flicker off every time it crossed a card.
+ */
+export const destinationOf = (
+  columns: readonly BoardColumn[],
+  overId: string
+): TaskStatus | null => targetOf(columns, overId)?.status ?? null;
+
+/**
  * Where the card lands in the destination column, counted the way a sortable
  * list counts: the index of whatever it was dropped over, in that column as it
  * is drawn. Dropping on the column rather than on a card means the end of it,

@@ -18,8 +18,10 @@
 import {
   ActorKind,
   canCreateWithStatus,
+  canDeleteTask,
   canTransition,
   DEFAULT_NEXT_SESSION,
+  movesFreely,
   newTaskId,
   type Task,
   TaskId,
@@ -101,6 +103,18 @@ export class IllegalTransition extends Schema.TaggedErrorClass<IllegalTransition
 export class IllegalInitialStatus extends Schema.TaggedErrorClass<IllegalInitialStatus>()(
   "TaskRepo.IllegalInitialStatus",
   { actorKind: ActorKind, status: TaskStatus }
+) {}
+
+/**
+ * This kind of actor may not erase a task. The third door beside
+ * {@link IllegalTransition} and {@link IllegalInitialStatus}, and the one that
+ * leads off the board: a run's token is good for writes on the task it was
+ * dispatched for, so without this an agent could delete the card it was asked to
+ * work on and take its own evidence with it.
+ */
+export class IllegalDeletion extends Schema.TaggedErrorClass<IllegalDeletion>()(
+  "TaskRepo.IllegalDeletion",
+  { actorKind: ActorKind, taskId: TaskId }
 ) {}
 
 /**
@@ -213,9 +227,10 @@ const make = Effect.gen(function* () {
    * here" is the stall signal and nothing else can answer it without scanning
    * the audit log.
    *
-   * A human move into `in_progress` clears `parkedUntil`: parking exists to stop
-   * the dispatcher looping on a failing task, and a person deciding to run it
-   * again is exactly the signal that the loop should resume.
+   * A free mover's move into `in_progress` clears `parkedUntil`: parking exists
+   * to stop the dispatcher looping on a failing task, and a person — or the
+   * manager asked by one — deciding to run it again is exactly the signal that
+   * the loop should resume.
    */
   const transition = Effect.fn("TaskRepo.transition")(function* (
     options: TaskRef & {
@@ -278,7 +293,7 @@ const make = Effect.gen(function* () {
           );
         }
 
-        const unparks = actor.kind === "human" && options.to === "in_progress";
+        const unparks = movesFreely(actor.kind) && options.to === DISPATCHES;
 
         // A card keeps no position across columns — its old rank was relative
         // to the column it left. `after` carries the drop point when the move
@@ -344,6 +359,10 @@ const make = Effect.gen(function* () {
    * means, and it is why deleting is an operation of its own rather than a
    * sixth column: nothing on the board archives.
    *
+   * Who may is the domain's answer and it is asked here, in the transaction,
+   * for the same reason a move is: this is the door every writer comes through,
+   * and a check in a service above it would leave a second one open.
+   *
    * The audit row outlives the task, because `entityId` carries no foreign key.
    * It is then the only remaining evidence the task existed at all, which is
    * the whole reason an erasure is audited.
@@ -354,8 +373,14 @@ const make = Effect.gen(function* () {
       workspaceId: options.workspaceId,
     });
 
-    return yield* write(({ tx }) =>
+    return yield* write(({ actor, tx }) =>
       Effect.gen(function* () {
+        if (!canDeleteTask({ actorKind: actor.kind })) {
+          return yield* Effect.fail(
+            new IllegalDeletion({ actorKind: actor.kind, taskId: options.id })
+          );
+        }
+
         const rows = yield* execute(
           "TaskRepo.delete",
           tx.delete(task).where(scopedTo(options)).returning()

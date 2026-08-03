@@ -19,7 +19,6 @@ import { Textarea } from "@workspace/ui/components/textarea";
 import { type ChangeEvent, useCallback, useState } from "react";
 import { projectsQuery } from "@/api/projects";
 import { useCreateTask, usePatchTask } from "@/api/tasks";
-import { failureText } from "@/features/task/actions";
 import {
   CREATABLE_STATUSES,
   draftOf,
@@ -28,6 +27,7 @@ import {
   STATUS_LABELS,
   type TaskDraft,
 } from "@/features/task/task-fields";
+import { failureText } from "@/lib/failure";
 
 interface TaskFormDialogProps {
   /** Where a new task lands when the form is opened from a column. */

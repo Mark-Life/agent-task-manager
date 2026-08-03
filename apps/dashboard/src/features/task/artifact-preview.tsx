@@ -19,7 +19,7 @@ import { type ChangeEvent, useCallback, useState } from "react";
 import { artifactContentUrl, useUploadArtifact } from "@/api/artifacts";
 import { keys } from "@/api/keys";
 import { taskQuery } from "@/api/tasks";
-import { failureText } from "@/features/task/actions";
+import { failureText } from "@/lib/failure";
 
 /** Extensions worth showing inline as text, whatever they hold. */
 const TEXT_EXTS = new Set([

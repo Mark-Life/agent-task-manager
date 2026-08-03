@@ -2,30 +2,30 @@ import { describe, expect, test } from "bun:test";
 import { ACTOR_KINDS, TASK_STATUSES, type TaskStatus } from "./enums";
 import {
   canCreateWithStatus,
+  canDeleteTask,
   canTransition,
   creatableStatuses,
+  FREE_MOVERS,
   nextStatuses,
   TASK_TRANSITIONS,
 } from "./status";
 
-const froms = new Set(TASK_TRANSITIONS.map((transition) => transition.from));
-const tos = new Set(TASK_TRANSITIONS.map((transition) => transition.to));
+/** Every ordered pair of columns, self-pairs included. */
+const allMoves = (actorKind: (typeof ACTOR_KINDS)[number]) =>
+  TASK_STATUSES.flatMap((from) =>
+    TASK_STATUSES.map((to) => ({ actorKind, from, to }))
+  );
+
+const restricted = ACTOR_KINDS.filter(
+  (actorKind) => !(FREE_MOVERS as readonly string[]).includes(actorKind)
+);
 
 describe("TASK_TRANSITIONS", () => {
-  test("covers the status union: every status has a way out and a way in", () => {
-    for (const status of TASK_STATUSES) {
-      expect({
-        hasIn: tos.has(status),
-        hasOut: froms.has(status),
-        status,
-      }).toEqual({ hasIn: true, hasOut: true, status });
-    }
-  });
-
-  test("names no status outside the union, so nothing is unreachable in either direction", () => {
+  test("names no status outside the union", () => {
     const known = new Set<string>(TASK_STATUSES);
-    for (const status of [...froms, ...tos]) {
-      expect(known.has(status)).toBe(true);
+    for (const transition of TASK_TRANSITIONS) {
+      expect(known.has(transition.from)).toBe(true);
+      expect(known.has(transition.to)).toBe(true);
     }
   });
 
@@ -46,22 +46,57 @@ describe("TASK_TRANSITIONS", () => {
       expect(transition.from).not.toBe(transition.to);
     }
   });
+
+  test("constrains runs only — a free mover is never listed", () => {
+    for (const transition of TASK_TRANSITIONS) {
+      for (const actorKind of FREE_MOVERS) {
+        expect(transition.actorKinds).not.toContain(actorKind);
+      }
+    }
+  });
 });
 
 describe("canTransition", () => {
-  test("allows the dispatch trigger for a human", () => {
-    expect(
-      canTransition({ actorKind: "human", from: "backlog", to: "in_progress" })
-    ).toBe(true);
+  test("lets a free mover make every move between two columns", () => {
+    for (const actorKind of FREE_MOVERS) {
+      const moves = allMoves(actorKind).filter(({ from, to }) => from !== to);
+      expect(moves.filter((move) => !canTransition(move))).toEqual([]);
+    }
   });
 
-  test("rejects an edge that is not in the table", () => {
-    expect(
-      canTransition({ actorKind: "human", from: "ideas", to: "done" })
-    ).toBe(false);
-    expect(
-      canTransition({ actorKind: "human", from: "review", to: "ideas" })
-    ).toBe(false);
+  test("lets a person take the moves the old machine refused", () => {
+    const reopened = [
+      { from: "ideas", to: "done" },
+      { from: "backlog", to: "review" },
+      { from: "backlog", to: "done" },
+      { from: "done", to: "ideas" },
+      { from: "review", to: "ideas" },
+    ] as const;
+    for (const { from, to } of reopened) {
+      for (const actorKind of FREE_MOVERS) {
+        expect(canTransition({ actorKind, from, to })).toBe(true);
+      }
+    }
+  });
+
+  test("the manager has every move a person has", () => {
+    for (const from of TASK_STATUSES) {
+      for (const to of TASK_STATUSES) {
+        expect(canTransition({ actorKind: "manager", from, to })).toBe(
+          canTransition({ actorKind: "human", from, to })
+        );
+      }
+    }
+  });
+
+  test("refuses a move to the column the card is already in, whoever asks", () => {
+    for (const actorKind of ACTOR_KINDS) {
+      for (const status of TASK_STATUSES) {
+        expect(canTransition({ actorKind, from: status, to: status })).toBe(
+          false
+        );
+      }
+    }
   });
 
   test("rejects an actor kind without permission on an otherwise legal edge", () => {
@@ -89,51 +124,30 @@ describe("canTransition", () => {
       expect(nextStatuses({ actorKind, from: "in_progress" })).toEqual([
         "review",
       ]);
+      expect(allMoves(actorKind).filter(canTransition)).toEqual([
+        { actorKind, from: "in_progress", to: "review" },
+      ]);
     }
   });
 
   test("no run of any kind reaches done", () => {
-    for (const actorKind of ["worker_run", "orchestrator"] as const) {
+    for (const actorKind of restricted) {
       for (const from of TASK_STATUSES) {
         expect(canTransition({ actorKind, from, to: "done" })).toBe(false);
       }
     }
   });
 
-  test("the manager has every move a person has", () => {
-    for (const { actorKinds, from, to } of TASK_TRANSITIONS) {
-      if (actorKinds.includes("human")) {
-        expect(canTransition({ actorKind: "manager", from, to })).toBe(true);
-      }
-    }
-  });
-
-  test("a worker run may only end its own work", () => {
-    const moves = TASK_STATUSES.flatMap((from) =>
-      TASK_STATUSES.map((to) => ({
-        actorKind: "worker_run" as const,
-        from,
-        to,
-      }))
-    );
-    expect(moves.filter(canTransition)).toEqual([
-      { actorKind: "worker_run", from: "in_progress", to: "review" },
-    ]);
-  });
-
   test("system performs no transitions at all", () => {
-    const moves = TASK_STATUSES.flatMap((from) =>
-      TASK_STATUSES.map((to) => ({ actorKind: "system" as const, from, to }))
-    );
-    expect(moves.filter(canTransition)).toEqual([]);
+    expect(allMoves("system").filter(canTransition)).toEqual([]);
   });
 });
 
 describe("creatableStatuses", () => {
-  test("lets a human and the seed script file into any column", () => {
-    for (const actorKind of ["human", "system"] as const) {
+  test("lets a free mover and the seed script file into any column", () => {
+    for (const actorKind of [...FREE_MOVERS, "system"] as const) {
       expect(new Set(creatableStatuses(actorKind))).toEqual(
-        new Set(TASK_STATUSES)
+        new Set<TaskStatus>(TASK_STATUSES)
       );
     }
   });
@@ -144,12 +158,6 @@ describe("creatableStatuses", () => {
         expect(canCreateWithStatus({ actorKind, status })).toBe(false);
       }
     }
-  });
-
-  test("lets the manager file into any column, as a person can", () => {
-    expect(new Set(creatableStatuses("manager"))).toEqual(
-      new Set<TaskStatus>(TASK_STATUSES)
-    );
   });
 
   test("holds one entry per column", () => {
@@ -167,10 +175,14 @@ describe("creatableStatuses", () => {
 });
 
 describe("nextStatuses", () => {
-  test("returns only statuses the table allows this actor", () => {
-    expect(
-      new Set(nextStatuses({ actorKind: "worker_run", from: "in_progress" }))
-    ).toEqual(new Set<TaskStatus>(["review"]));
+  test("offers a free mover every column but the one the card is in", () => {
+    for (const actorKind of FREE_MOVERS) {
+      for (const from of TASK_STATUSES) {
+        expect(new Set(nextStatuses({ actorKind, from }))).toEqual(
+          new Set(TASK_STATUSES.filter((status) => status !== from))
+        );
+      }
+    }
   });
 
   test("agrees with canTransition for every actor kind and status", () => {
@@ -182,5 +194,20 @@ describe("nextStatuses", () => {
         }
       }
     }
+  });
+});
+
+describe("canDeleteTask", () => {
+  test("is the free movers, and nobody else", () => {
+    for (const actorKind of FREE_MOVERS) {
+      expect(canDeleteTask({ actorKind })).toBe(true);
+    }
+    for (const actorKind of restricted) {
+      expect(canDeleteTask({ actorKind })).toBe(false);
+    }
+  });
+
+  test("keeps a worker run from erasing the task it was dispatched for", () => {
+    expect(canDeleteTask({ actorKind: "worker_run" })).toBe(false);
   });
 });

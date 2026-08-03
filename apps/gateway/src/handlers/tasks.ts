@@ -11,6 +11,13 @@
  * next are the same call. `selectNextSession` writes the two columns that say
  * what the next run does.
  *
+ * The one thing this file decides on its own is {@link runToStop}, and it
+ * is decided here because it is not a rule about a task row: taking a card out
+ * of `in_progress` while a container is working on it asks the orchestrator to
+ * stop that container, which is a second row in a second table. The two halves
+ * of the `in_progress` column are then symmetric — landing in it starts work,
+ * leaving it ends work — and neither needs a button of its own.
+ *
  * Reading a column is the one place the store's surface shows through: there is
  * no query for "every task" and none for "the tasks of a project", so the list
  * and the board fan out over the five statuses and filter in memory. That is
@@ -19,11 +26,15 @@
  */
 
 import { Api, Principal } from "@workspace/api";
-import { TaskRepo, withActor } from "@workspace/db";
+import { RunCommandRepo, TaskRepo, withActor } from "@workspace/db";
 import {
+  type Actor,
+  movesFreely,
   type ProjectId,
+  type RunId,
   TASK_STATUSES,
   type Task,
+  type TaskId,
   type TaskStatus,
   type WorkspaceId,
 } from "@workspace/domain";
@@ -31,6 +42,7 @@ import { Effect } from "effect";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import {
   storeDefects,
+  toIllegalDeletion,
   toIllegalInitialStatus,
   toIllegalTransition,
   toInvalidInput,
@@ -56,17 +68,75 @@ const columnsOf = (query: ColumnQuery) =>
 const inProject = (projectId: ProjectId | undefined) => (task: Task) =>
   projectId === undefined || task.projectId === projectId;
 
+/** The column a run is dispatched from, and therefore the one leaving ends work. */
+const DISPATCHES = "in_progress" satisfies TaskStatus;
+
+/** What a move has to be for the run under it to be asked to stop. */
+interface LeavingWork {
+  readonly actor: Actor;
+  readonly from: TaskStatus;
+  readonly liveRunId: RunId | null;
+  readonly to: TaskStatus;
+}
+
+/**
+ * The run this move takes the card out from under, or null when the move leaves
+ * nothing running.
+ *
+ * Only a person's move, or the manager's on their behalf. A run ending its own
+ * work moves the same card out of the same column, and asking the orchestrator
+ * to stop the run that just finished would put a refusal on the board for
+ * something nobody asked for.
+ */
+const runToStop = (move: LeavingWork): RunId | null =>
+  movesFreely(move.actor.kind) &&
+  move.from === DISPATCHES &&
+  move.to !== DISPATCHES
+    ? move.liveRunId
+    : null;
+
 /**
  * The `tasks` group, implemented.
  *
- * The repository is taken once, at layer build, because it is a handle on the
- * process's connection pool. Who is calling is read per request and provided to
- * every write, so the audit row the repository writes in the same transaction
+ * The repositories are taken once, at layer build, because each is a handle on
+ * the process's connection pool. Who is calling is read per request and provided
+ * to every write, so the audit row the repository writes in the same transaction
  * names the caller rather than the gateway.
  */
 export const tasksHandlers = HttpApiBuilder.group(Api, "tasks", (handlers) =>
   Effect.gen(function* () {
     const tasks = yield* TaskRepo;
+    const commands = yield* RunCommandRepo;
+
+    /**
+     * Asks the orchestrator to kill the container working on this task.
+     *
+     * The same row the Stop button writes, attributed to whoever moved the card,
+     * so a stop that came from a drag and a stop that came from a button are one
+     * thing in the command history. Nothing here touches a container: the
+     * orchestrator claims the row, and a stop it cannot act on is recorded on the
+     * row as a refusal rather than raised at the person who moved the card.
+     */
+    const requestStop = (input: {
+      readonly actor: Actor;
+      readonly runId: RunId;
+      readonly taskId: TaskId;
+      readonly workspaceId: WorkspaceId;
+    }) =>
+      commands
+        .enqueue({
+          payload: { kind: "stop" },
+          runId: input.runId,
+          subject: { id: input.taskId, kind: "task" },
+          workspaceId: input.workspaceId,
+        })
+        .pipe(
+          withActor(input.actor),
+          // The payload is a constant this file wrote, so a store that refuses
+          // it is a bug here rather than an answer for the caller.
+          Effect.catchTags({ ...storeDefects, "Db.InvalidInput": Effect.die }),
+          Effect.asVoid
+        );
 
     /** One column, or every column, already narrowed to the project asked for. */
     const readColumns = (query: ColumnQuery) =>
@@ -118,6 +188,7 @@ export const tasksHandlers = HttpApiBuilder.group(Api, "tasks", (handlers) =>
               ...storeDefects,
               "Db.InvalidInput": Effect.die,
               "Db.NotFound": toNotFound,
+              "TaskRepo.IllegalDeletion": toIllegalDeletion,
             }),
             Effect.asVoid
           );
@@ -201,10 +272,24 @@ export const tasksHandlers = HttpApiBuilder.group(Api, "tasks", (handlers) =>
       // what a status change with no gesture behind it wants; `null` means the
       // top. The repository reads that difference, so the key is passed through
       // exactly as it arrived.
+      //
+      // The board view is read first because a move out of `in_progress` has a
+      // second half: the column the card is leaving and the run working on it
+      // are both gone from the answer by the time the write returns, and the two
+      // of them together are what say whether a container has to be asked to
+      // stop. A card somebody else moved in between is the same race the move
+      // itself has, and the repository settles it — this read only ever decides
+      // whether one more row is written.
       transition: ({ params, payload }) =>
         Effect.gen(function* () {
           const { actor, workspaceId } = yield* Principal;
-          return yield* tasks
+          const before = yield* tasks
+            .board({ id: params.taskId, workspaceId })
+            .pipe(
+              Effect.catchTags({ ...storeDefects, "Db.NotFound": toNotFound })
+            );
+
+          const moved = yield* tasks
             .transition({
               after: payload.after,
               id: params.taskId,
@@ -220,6 +305,23 @@ export const tasksHandlers = HttpApiBuilder.group(Api, "tasks", (handlers) =>
                 "TaskRepo.IllegalTransition": toIllegalTransition,
               })
             );
+
+          const stopping = runToStop({
+            actor,
+            from: before.task.status,
+            liveRunId: before.liveRunId,
+            to: moved.status,
+          });
+          if (stopping !== null) {
+            yield* requestStop({
+              actor,
+              runId: stopping,
+              taskId: moved.id,
+              workspaceId,
+            });
+          }
+
+          return moved;
         }),
     });
   })

@@ -49,7 +49,9 @@ import {
 } from "@workspace/db";
 import {
   Actor,
+  newAgentSessionId,
   newProjectId,
+  newRunId,
   newTaskId,
   type ProjectId,
   TASK_STATUSES,
@@ -72,6 +74,24 @@ const ORIGIN = "http://gateway.test";
 const human = Actor.cases.human.make({
   userId: UserId.make("gateway-board-test-human"),
 });
+
+/** The manager, acting for that same person in some conversation. */
+const manager = Actor.cases.manager.make({
+  userId: UserId.make("gateway-board-test-human"),
+});
+
+/**
+ * A worker run holding a token bound to one task — the credential that reaches
+ * every write on its own card, which is exactly why the two rules about actors
+ * are worth a test. The run and session ids name nothing: no row is written
+ * under this actor, because every use of it below is refused first.
+ */
+const worker = (taskId: TaskId) =>
+  Actor.cases.worker_run.make({
+    runId: newRunId(),
+    sessionId: newAgentSessionId(),
+    taskId,
+  });
 
 /** The database has never been seeded, so there is no workspace to file into. */
 class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
@@ -103,9 +123,30 @@ const principal: PrincipalShape = {
   workspaceId,
 };
 
+/**
+ * Who the next request is. A binding rather than a constant because two of the
+ * rules under test are about the actor and not the credential — a run holds a
+ * perfectly good task-write token and still may not erase its own task — and
+ * the stand-in middleware is the only place a test can say so.
+ */
+let caller: PrincipalShape = principal;
+
+/** Runs one call as somebody else, and puts the person back afterwards. */
+const as = async <A>(
+  actor: PrincipalShape["actor"],
+  body: () => Promise<A>
+) => {
+  caller = { ...principal, actor };
+  try {
+    return await body();
+  } finally {
+    caller = principal;
+  }
+};
+
 /** Grants one request, whichever scheme its credential arrived under. */
 const grant = <A, E, R>(httpEffect: Effect.Effect<A, E, R>) =>
-  Effect.provideService(httpEffect, Principal, principal);
+  Effect.provideService(httpEffect, Principal, caller);
 
 /**
  * The access middleware, standing in for credential resolution. It says yes to
@@ -193,6 +234,7 @@ const bodyOf = async <S extends Schema.Codec<unknown, unknown, never, never>>(
 /** What every failure in this contract answers with, as far as a test cares. */
 interface WireFailure {
   readonly _tag: string;
+  readonly actorKind?: string;
   readonly from?: string;
   readonly to?: string;
 }
@@ -336,18 +378,49 @@ describe("tasks", () => {
     expect(detail.liveRunId).toBeNull();
   });
 
-  test("refuses a move the status machine does not have", async () => {
-    const filed = await fileTask({ title: "board test illegal move" });
+  test("takes a card from any column to any other, in either direction", async () => {
+    const filed = await fileTask({ title: "board test free movement" });
+
+    /** One move, answered with the column the card ended up in. */
+    const move = async (next: string) =>
+      (
+        await bodyOf(
+          await call("POST", `/tasks/${filed.id}/status`, { to: next }),
+          Task
+        )
+      ).status;
+
+    // The whole point of the loosening: an idea that turned out to be finished
+    // reaches `done` in one move, and comes back the same way. Sequential
+    // because each move is judged against where the last one left the card.
+    expect(await move("done")).toBe("done");
+    expect(await move("ideas")).toBe("ideas");
+    expect(await move("review")).toBe("review");
+    expect(await move("backlog")).toBe("backlog");
+  });
+
+  test("refuses a move to the column the card is already in", async () => {
+    const filed = await fileTask({ title: "board test same column" });
 
     const response = await call("POST", `/tasks/${filed.id}/status`, {
-      to: "done",
+      to: "ideas",
     });
     expect(response.status).toBe(409);
 
     const failure = await failureOf(response);
     expect(failure._tag).toBe("IllegalTransition");
     expect(failure.from).toBe("ideas");
-    expect(failure.to).toBe("done");
+    expect(failure.to).toBe("ideas");
+  });
+
+  test("refuses a run the moves that are not its own", async () => {
+    const filed = await fileTask({ title: "board test run move" });
+
+    const response = await as(worker(filed.id), () =>
+      call("POST", `/tasks/${filed.id}/status`, { to: "done" })
+    );
+    expect(response.status).toBe(409);
+    expect((await failureOf(response))._tag).toBe("IllegalTransition");
   });
 
   test("answers 404 for a task this workspace does not have", async () => {
@@ -430,6 +503,31 @@ describe("tasks", () => {
 
     const read = await call("GET", `/tasks/${filed.id}`);
     expect(read.status).toBe(404);
+  });
+
+  test("lets the manager erase a task, as the person it acts for could", async () => {
+    const filed = await fileTask({ title: "board test manager erasure" });
+
+    const erased = await as(manager, () =>
+      call("DELETE", `/tasks/${filed.id}`)
+    );
+    expect(erased.status).toBe(204);
+  });
+
+  test("refuses a run erasing the task it was dispatched for", async () => {
+    const filed = await fileTask({ title: "board test run erasure" });
+
+    const response = await as(worker(filed.id), () =>
+      call("DELETE", `/tasks/${filed.id}`)
+    );
+    expect(response.status).toBe(403);
+
+    const failure = await failureOf(response);
+    expect(failure._tag).toBe("IllegalDeletion");
+    expect(failure.actorKind).toBe("worker_run");
+
+    // And the card is still there, which is the part that matters.
+    expect((await call("GET", `/tasks/${filed.id}`)).status).toBe(200);
   });
 });
 

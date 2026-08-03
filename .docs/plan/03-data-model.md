@@ -136,13 +136,28 @@ and every backup forever — the same argument that keeps artifact bytes out.
 
 ## 2. Status machine
 
-Data, not conditionals: one exported list of `{ from, to, actorKinds }`, consumed by every
-writer. Anything absent is illegal.
+One module every writer asks, so the rules cannot fork into a second `if`. Two kinds of
+actor, and the difference between them is the whole machine.
 
-The manager has every move a person has, including the ones that spend a worker slot. This
-reverses `00-high-level.md`, which files the manager into `backlog` only. It is a proxy for
-the person talking to it, and a manager that can file a task but not start it just moves
-the same request to a different button.
+**A person and the manager move a card anywhere.** Any column to any other column, in either
+direction, with no order to work through. The manager is a proxy for the person talking to
+it, and a manager that can file a task but not move it just moves the same request to a
+different button — so the two hold the same set, and it is every set.
+
+This is a deliberate loosening of the forward-only table this document used to carry. That
+table read well and blocked ordinary work: a scratch card in `ideas` could be pushed one
+step and never taken off the board, `ideas → done` and `backlog → done` were refusals, and
+the manager hit them first because it is the thing being asked to tidy up. Judging which move
+makes sense is the operator's.
+
+**A run moves one card one way.** `in_progress → review`, and nothing else — the terminal
+path, whether the run ended cleanly, crashed, or was reconciled as lost by the orchestrator at
+startup. That single edge is what the transition table still holds:
+
+| From | To | human | manager | worker run | orchestrator | Why |
+| --- | --- | --- | --- | --- | --- | --- |
+| any | any other | ✓ | ✓ | — | — | The board is theirs. |
+| `in_progress` | `review` | ✓ | ✓ | ✓ | ✓ | Run ended — clean, crashed, or gone without a terminal event. The worker's only move; the orchestrator's too. |
 
 **The columns are actor kinds, not run roles.** `worker run` means a run acting on *its own*
 task, and that restriction is a property of its token's bound task id, not of the word "run".
@@ -150,29 +165,32 @@ A manager-role run is the `manager` column: it holds a workspace-scoped token an
 card a person could.
 
 **A manager run does not enter this table by running.** This is a task machine; a manager
-turn attaches to a thread and ends without touching a card. The one board move a run causes
-by ending — `in_progress → review` — is the worker branch of the terminal path.
+turn attaches to a thread and ends without touching a card.
 
-| From | To | human | manager | worker run | orchestrator | Why |
-| --- | --- | --- | --- | --- | --- | --- |
-| `ideas` | `backlog` | ✓ | ✓ | — | — | The idea survived. Manager's landing zone. |
-| `ideas` | `in_progress` | ✓ | ✓ | — | — | Skipping preparation. |
-| `backlog` | `ideas` | ✓ | ✓ | — | — | Demote. |
-| `backlog` | `in_progress` | ✓ | ✓ | — | — | The dispatch trigger. |
-| `in_progress` | `review` | ✓ | ✓ | ✓ | ✓ | Run ended — clean, crashed, or gone without a terminal event. Worker's only move; the orchestrator's too. |
-| `in_progress` | `backlog` | ✓ | ✓ | — | — | Pull back a stalled or wrongly-started task. |
-| `review` | `in_progress` | ✓ | ✓ | — | — | Resume with comments. |
-| `review` | `backlog` | ✓ | ✓ | — | — | Not worth continuing now. |
-| `review` | `done` | ✓ | ✓ | — | — | Accept the work. |
-| `done` | `in_progress` | ✓ | — | — | — | Reopen. |
-| `done` | `review` | ✓ | ✓ | — | — | Reopen without spending a slot. |
+Rules that still fall out: no agent ever reaches `done` or files a card back into `ideas`;
+every path to `in_progress` is somebody's decision rather than a run's. `system` performs no
+transitions at all — it is the seed script's actor.
 
-The orchestrator's single transition covers both the live terminus and the startup
-reconcile of a lost run. `system` performs no transitions at all — it is the seed script's
-actor.
+**A move to the column the card is already in is nobody's**, free movers included. The card is
+already there, and moving it *within* a column is `place`. Keeping it out is what makes a
+transition always a change, so `status_changed_at` and the audit row stay answers to "when
+did this move".
 
-Rules that fall out: no transition into `ideas` from `in_progress`/`review`/`done`; no
-agent ever reaches `done`; every path to `in_progress` is a human act.
+**The `in_progress` column is two triggers, not one.** A card landing in it asks for a run —
+that is the dispatch trigger, and a manual move into the column is as much of one as any
+other. A card *leaving* it while a run is live asks for that run to stop: the gateway writes
+the same `stop` run command the Stop button writes, attributed to whoever moved the card, and
+the orchestrator acts on it. Only a person's move, or the manager's on their behalf — a run
+ending its own work leaves the same column, and a stop queued against the run that just
+finished would be a refusal nobody asked for.
+
+**Erasing a task is the third door**, and the only one that leads off the board. Same actors
+as the free movers: a person and the manager. Not a run, whose token *is* good for writes on
+the task it was dispatched for — without that check an agent could delete the card it was
+asked to work on and take its own transcript with it. It is a hard delete: comments, sessions,
+runs, run events and artifact index rows cascade, nothing archives, and there is no undo. The
+audit row survives, because `entity_id` carries no foreign key, and is then the only evidence
+the task existed.
 
 **Research from `backlog` spawns a session without a status change** — it is a
 `start_session` run command, not a transition, and it is not in this table.

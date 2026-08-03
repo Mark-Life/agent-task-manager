@@ -10,8 +10,8 @@ import { Skeleton } from "@workspace/ui/components/skeleton";
 import { Spinner } from "@workspace/ui/components/spinner";
 import { useCallback } from "react";
 import { useRunEvents } from "@/api/runs";
-import { failureText } from "@/features/task/actions";
 import { TimelineEvent } from "@/features/task/timeline-event";
+import { failureText } from "@/lib/failure";
 
 interface RunTimelineProps {
   /** Whether this is the attempt a container is working on right now. */

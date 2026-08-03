@@ -73,21 +73,26 @@ actually decides the connector's reach is which token you paste.
 | Connector's job | Scope | What it costs you if the agent is confused |
 | --- | --- | --- |
 | Read the board, summarise, report | `read` | Nothing. Every mutation 403s. |
-| File tasks, comment, steer runs | `task-write` | A wrong task edited, in the audit log, reversible. |
-| Delete projects and tasks | `admin` | A task and every comment, session and run under it, gone. |
+| File tasks, comment, steer runs, clear cards off the board | `task-write` | A wrong task edited — in the audit log, reversible. Or a wrong task *deleted*, with every comment, session and run under it: audited, and not reversible. |
+| Delete projects | `admin` | A project, and the workspace's own furniture. |
 
-**Give it `task-write` and stop there.** Admin adds exactly two operations, the
-deletes, and they are the one class with no undo. A connector token sits in a
-vault, is spent by a model, and is reachable by anyone who can prompt that
-model; the deletes are what you least want on the end of that chain. If a delete
-is genuinely needed, a person does it in the dashboard.
+**Read it twice before you hand out `task-write`.** Erasing a task lives under
+that scope, not under admin, because the manager agent clears cards off a board
+when the person it answers to asks it to — the alternative was minting it a
+credential that could delete projects as well. A connector token sits in a vault,
+is spent by a model, and is reachable by anyone who can prompt that model, so
+what `task-write` now costs at the worst is a card and its whole history. Use
+`read` for a connector that only reports; that is one word of configuration and
+an entire class of incident that stops being possible.
 
-The gateway agrees with this rather than trusting the operator to. A token
+The gateway still holds a line the operator does not have to remember. A token
 carries the actor it speaks as, and every actor kind has a ceiling
-(`apps/gateway/src/auth/tokens.ts`): a connector speaks as `manager`, whose
-ceiling is `task-write`, so an admin token for it cannot be minted — the mint
-refuses, and a forged one is refused again on verify. Only a `human` actor
-reaches admin.
+(`packages/token/src/tokens.ts`): a connector speaks as `manager`, whose ceiling
+is `task-write`, so an admin token for it cannot be minted — the mint refuses,
+and a forged one is refused again on verify. Only a `human` actor reaches admin.
+Below that ceiling, who may erase a task is asked again of the actor rather than
+the scope: a *worker run's* token is `task-write` too, bound to the one task it
+was dispatched for, and it is refused with `IllegalDeletion`.
 
 Use `read` for anything that only reports. One word of configuration, and an
 entire class of incident stops being possible.

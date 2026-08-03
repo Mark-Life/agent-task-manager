@@ -7,7 +7,7 @@ import { Label } from "@workspace/ui/components/label";
 import { Textarea } from "@workspace/ui/components/textarea";
 import { type ChangeEvent, type ReactNode, useCallback, useState } from "react";
 import { usePatchTask } from "@/api/tasks";
-import { failureText } from "@/features/task/actions";
+import { failureText } from "@/lib/failure";
 
 /** How the metadata blob is written when a person is about to edit it. */
 const INDENT = 2;
