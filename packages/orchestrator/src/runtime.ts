@@ -71,7 +71,15 @@ import {
   hostRunLayout,
   readExecutorMcp,
 } from "@workspace/harness";
-import { orphansOf, Sandbox, sandboxImageFor } from "@workspace/sandbox";
+import {
+  AGENT_TOKEN_ENV_VAR,
+  GH_TOKEN_ENV_VAR,
+  githubTokenEnv,
+  orphansOf,
+  readGithubToken,
+  Sandbox,
+  sandboxImageFor,
+} from "@workspace/sandbox";
 import {
   Cause,
   Context,
@@ -237,13 +245,20 @@ export const turnEnvironment = Effect.gen(function* () {
   const executor = yield* readExecutorMcp.pipe(
     Effect.orElseSucceed(() => null)
   );
-  const env: Readonly<Record<string, string>> =
-    executor === null
+  const github = yield* readGithubToken;
+  const env: Readonly<Record<string, string>> = {
+    ...(executor === null
       ? {}
       : {
           [EXECUTOR_KEY_ENV_VAR]: Redacted.value(executor.key),
           [EXECUTOR_URL_ENV_VAR]: executor.url,
-        };
+        }),
+    // The same token the host's git was given, so `gh` in the container is
+    // logged in and the checkout's credential helper has something to read.
+    // Without it an agent can commit and never push, which surfaces at the end
+    // of a run that already did the work.
+    ...githubTokenEnv(github),
+  };
   return env;
 });
 
@@ -1006,9 +1021,13 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Which variables a turn is given, said once at boot. Names only — the value
-   * of `EXECUTOR_MCP_KEY` is a credential, and the operator's question is
-   * whether a run has connector tools at all, which the name answers.
+   * Which variables a turn is given, said once at boot. Names only — every
+   * value here is a credential, and the operator's question is which
+   * capabilities a run has at all, which the names answer.
+   *
+   * The GitHub line is separate because its absence has a specific consequence
+   * worth naming at boot rather than at the end of the first run that tries to
+   * push: a private repository cannot be cloned, and `gh` is not logged in.
    */
   const announceTurnEnv = Effect.gen(function* () {
     const names = Object.keys(turnEnv).sort();
@@ -1017,6 +1036,13 @@ const make = Effect.gen(function* () {
           `turns run with no connector tools: set ${EXECUTOR_URL_ENV_VAR} and ${EXECUTOR_KEY_ENV_VAR} to give them Executor`
         )
       : Effect.logInfo(`turns are given ${names.join(", ")}`);
+    yield* GH_TOKEN_ENV_VAR in turnEnv
+      ? Effect.logInfo(
+          "turns carry a GitHub credential: `gh` is logged in and git can push"
+        )
+      : Effect.logWarning(
+          `turns have no GitHub credential: set ${AGENT_TOKEN_ENV_VAR} to clone a private repository or let an agent open a pull request`
+        );
   });
 
   const run = Effect.gen(function* () {

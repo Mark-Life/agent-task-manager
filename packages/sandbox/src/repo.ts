@@ -46,6 +46,7 @@ import { Effect, Layer } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { CloneFailed } from "./errors";
 import { Git, redactRemote } from "./git";
+import { CREDENTIAL_HELPER } from "./github";
 import type { MaterializeStrategy, RepoSource } from "./spec";
 
 /** Directory under the data root holding one bare mirror per repo. */
@@ -445,6 +446,14 @@ export const materializeRepo = Effect.fn("Repo.materialize")(function* (
       source.cloneUrl === null
         ? ["remote", "remove", "origin"]
         : ["remote", "set-url", "origin", source.cloneUrl],
+  });
+  // The helper, in the checkout rather than on the invocation, because the next
+  // process to run git here is the agent's — inside the container, on this
+  // directory through its mount. It names `GH_TOKEN` and holds no value, so the
+  // config file the agent can read is not the credential.
+  yield* git.mustRun({
+    ...inWorkspace,
+    args: ["config", "--local", "credential.helper", CREDENTIAL_HELPER],
   });
   yield* git.mustRun({
     ...inWorkspace,

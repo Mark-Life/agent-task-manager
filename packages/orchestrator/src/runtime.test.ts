@@ -12,6 +12,11 @@
 
 import { describe, expect, test } from "bun:test";
 import { EXECUTOR_KEY_ENV_VAR, EXECUTOR_URL_ENV_VAR } from "@workspace/harness";
+import {
+  AGENT_TOKEN_ENV_VAR,
+  GH_TOKEN_ENV_VAR,
+  GITHUB_TOKEN_ENV_VAR,
+} from "@workspace/sandbox";
 import { ConfigProvider, Effect } from "effect";
 import { turnEnvironment } from "./runtime";
 
@@ -57,5 +62,20 @@ describe("turnEnvironment", () => {
       EXECUTOR_KEY_ENV_VAR,
       EXECUTOR_URL_ENV_VAR,
     ]);
+  });
+
+  /**
+   * The GitHub credential is an opt-in, and the line above is what it must not
+   * cross: a turn gets the token the operator wrote in the loop's environment,
+   * under the names `gh` and git read, and never the one the host happened to
+   * export for its own shell.
+   */
+  test("hands the opt-in GitHub token over under the names the tools read", () => {
+    const built = withEnv({
+      [AGENT_TOKEN_ENV_VAR]: "ghp_meant_for_agents",
+      GH_TOKEN: "ghp_the_operators_own",
+    });
+    expect(built[GH_TOKEN_ENV_VAR]).toBe("ghp_meant_for_agents");
+    expect(built[GITHUB_TOKEN_ENV_VAR]).toBe("ghp_meant_for_agents");
   });
 });
