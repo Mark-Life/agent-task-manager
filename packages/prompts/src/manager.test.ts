@@ -233,6 +233,24 @@ describe("one row, rendered", () => {
     );
   });
 
+  test("a composed row says it is several messages to answer as one", () => {
+    // The pieces carry their own headers inside the body; what the label adds
+    // is that this is one thing to reply to rather than a person repeating
+    // themselves three times.
+    const rendered = renderChatMessage(
+      message({
+        body: "[message 1 of 2]\nfirst\n\n[message 2 of 2]\nsecond",
+        intakeKind: "compose",
+        role: "user",
+      })
+    );
+
+    expect(rendered).toContain(
+      "Person (several messages, sent together — answer them as one):"
+    );
+    expect(rendered).toContain("[message 2 of 2]");
+  });
+
   test("the manager's own rows are labelled as its own", () => {
     expect(renderChatMessage(message({ body: "done", role: "manager" }))).toBe(
       "You: done"

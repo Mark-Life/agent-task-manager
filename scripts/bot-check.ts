@@ -37,6 +37,12 @@
  * in it, and is stored as the transcript. The sender of a voice note has no
  * other way to see what arrived.
  *
+ * **Compose.** A text, a forward and a voice note sent after `/compose` leave
+ * no `chat_message` row and wake nothing; the *Send* button then writes exactly
+ * one, holding all three in the order they were sent and naming where the
+ * forward came from. *Cancel* writes none. Both leave the mode off, which the
+ * next ordinary message proves by becoming a turn of its own.
+ *
  * **The queue.** A message sent while the thread has a live turn is stored all
  * the same and answered with one line carrying a *Force send* button; a second
  * one edits that same line instead of sending another, which is what "several
@@ -167,6 +173,12 @@ const FAKE_MESSAGE_ID_RANGE = 1_000_000;
 
 /** How many repeated tool calls the stuck window is given. Above the rule's default floor of six. */
 const SPINNING_CALLS = 8;
+
+/** How much of a body a claim's `detail` quotes back, so a failure names what it saw. */
+const DETAIL_PREVIEW_CHARS = 80;
+
+/** How far back a compose claim reads the thread. Above every row this check writes. */
+const THREAD_LOOKBACK = 50;
 
 /** The chat id is minted from the clock, kept inside Telegram's signed 32-bit group range. */
 const CHAT_ID_RANGE = 1_000_000_000;
@@ -404,9 +416,10 @@ const commandEntities = (text: string) => {
   return [{ length: command.length, offset: 0, type: "bot_command" }];
 };
 
-/** A message update as Telegram would deliver it. */
+/** A message update as Telegram would deliver it, forwarded when it says so. */
 const messageUpdate = (options: {
   readonly chatId: number;
+  readonly forwardedFrom?: string;
   readonly fromId: number;
   readonly messageId: number;
   readonly text: string;
@@ -416,6 +429,19 @@ const messageUpdate = (options: {
       chat: { first_name: "Check", id: options.chatId, type: "private" },
       date: Math.floor(Date.now() / MS_PER_SECOND),
       entities: commandEntities(options.text),
+      ...(options.forwardedFrom === undefined
+        ? {}
+        : {
+            forward_origin: {
+              date: 0,
+              sender_user: {
+                first_name: options.forwardedFrom,
+                id: 1,
+                is_bot: false,
+              },
+              type: "user",
+            },
+          }),
       from: { first_name: "Check", id: options.fromId, is_bot: false },
       message_id: options.messageId,
       text: options.text,
@@ -732,6 +758,228 @@ const wiredClaims = (options: {
         voiceRow?.intakeKind === "voice" &&
         voiceRow?.transcriptChars === VOICE_TRANSCRIPT.length,
       step: "the stored row says it was a voice note and how long the transcript was",
+    });
+
+    // Compose. Several messages in a row produce no turn at all, and the button
+    // produces exactly one — which is the whole claim, because the failure mode
+    // on either side of it is invisible: a message that quietly ran a turn
+    // anyway, or a batch that quietly ran three.
+    const composeSendData = encodeCallbackData({
+      kind: "compose",
+      verb: "cmsnd",
+    });
+    const composeCancelData = encodeCallbackData({
+      kind: "compose",
+      verb: "cmcxl",
+    });
+    const carries = (call: ApiCall, data: string) =>
+      JSON.stringify(call.payload.reply_markup ?? {}).includes(data);
+    const rowsInThread = () =>
+      messages.recent({
+        limit: THREAD_LOOKBACK,
+        threadId: opened.id,
+        workspaceId,
+      });
+
+    const beforeCompose = (yield* rowsInThread()).length;
+    const beforeComposeCall = calls.length;
+    yield* Effect.promise(() =>
+      telegram.bot.handleUpdate(
+        messageUpdate({
+          chatId,
+          fromId: ALLOWED_TELEGRAM_USER,
+          messageId: 30,
+          text: "/compose",
+        })
+      )
+    );
+    yield* eventually({
+      effect: Effect.sync(() => calls.slice(beforeComposeCall)),
+      holds: (since) =>
+        since.some(
+          (call) =>
+            call.method === "sendMessage" && carries(call, composeSendData)
+        ),
+      step: "/compose answers with a message carrying its own two buttons",
+    });
+    const composeAnchor = calls
+      .slice(beforeComposeCall)
+      .find(
+        (call) =>
+          call.method === "sendMessage" && carries(call, composeSendData)
+      );
+    yield* check({
+      detail: `the bot said ${JSON.stringify(composeAnchor?.payload.text)}`,
+      ok: carries(
+        composeAnchor ?? { method: "", payload: {} },
+        composeCancelData
+      ),
+      step: "the compose message offers both send and cancel",
+    });
+
+    const composedText = "first, the thing I actually want";
+    const composedForward = "and the message somebody sent me about it";
+    for (const update of [
+      messageUpdate({
+        chatId,
+        fromId: ALLOWED_TELEGRAM_USER,
+        messageId: 31,
+        text: composedText,
+      }),
+      messageUpdate({
+        chatId,
+        forwardedFrom: "Ada",
+        fromId: ALLOWED_TELEGRAM_USER,
+        messageId: 32,
+        text: composedForward,
+      }),
+      voiceUpdate({ chatId, fromId: ALLOWED_TELEGRAM_USER, messageId: 33 }),
+    ]) {
+      yield* Effect.promise(() => telegram.bot.handleUpdate(update));
+    }
+
+    // Three held is the only signal that all three arrived; waiting on a fixed
+    // sleep here would let a message that started a turn pass unnoticed.
+    yield* eventually({
+      effect: Effect.sync(() => calls.slice(beforeComposeCall)),
+      holds: (since) =>
+        since.some(
+          (call) =>
+            call.method === "editMessageText" &&
+            String(call.payload.text ?? "").includes("3 messages held")
+        ),
+      step: "each message sent into compose is counted on the compose message",
+    });
+    yield* check({
+      detail: `the transcript ${VOICE_TRANSCRIPT} came back ${calls.slice(beforeComposeCall).filter((call) => String(call.payload.text ?? "").includes(VOICE_TRANSCRIPT)).length} time(s)`,
+      ok: calls
+        .slice(beforeComposeCall)
+        .some((call) =>
+          String(call.payload.text ?? "").includes(VOICE_TRANSCRIPT)
+        ),
+      step: "a voice note sent into compose is still transcribed and echoed back",
+    });
+
+    const heldRows = yield* rowsInThread();
+    yield* check({
+      detail: `${heldRows.length - beforeCompose} rows written while composing`,
+      ok: heldRows.length === beforeCompose,
+      step: "nothing sent into compose is stored, so nothing wakes the orchestrator",
+    });
+
+    yield* Effect.promise(() =>
+      telegram.bot.handleUpdate(
+        callbackUpdate({
+          chatId,
+          data: composeSendData,
+          fromId: ALLOWED_TELEGRAM_USER,
+          messageId: 34,
+        })
+      )
+    );
+    const afterSend = yield* eventually({
+      effect: rowsInThread(),
+      holds: (rows) => rows.length > beforeCompose,
+      step: "the send button writes the batch",
+    });
+    yield* check({
+      detail: `${afterSend.length - beforeCompose} rows written by the tap`,
+      ok: afterSend.length === beforeCompose + 1,
+      step: "the whole batch is one row, which is one insert and one turn",
+    });
+    const batch = afterSend.find((row) => row.intakeKind === "compose");
+    yield* check({
+      detail: `intake ${String(batch?.intakeKind)}, ${String(batch?.body.length)} chars`,
+      ok:
+        batch !== undefined &&
+        batch.body.indexOf(composedText) <
+          batch.body.indexOf(composedForward) &&
+        batch.body.indexOf(composedForward) <
+          batch.body.indexOf(VOICE_TRANSCRIPT),
+      step: "the row holds every message it collected, in the order they were sent",
+    });
+    yield* check({
+      detail: `the body says ${JSON.stringify(batch?.body.slice(0, DETAIL_PREVIEW_CHARS))}`,
+      ok: batch?.body.includes("forwarded from Ada") === true,
+      step: "a forward keeps the name it came from, inside the combined text",
+    });
+
+    // Off again, which is what makes the next ordinary message an ordinary
+    // message rather than the first of a batch nobody opened.
+    const said2 = "and this one on its own";
+    yield* Effect.promise(() =>
+      telegram.bot.handleUpdate(
+        messageUpdate({
+          chatId,
+          fromId: ALLOWED_TELEGRAM_USER,
+          messageId: 35,
+          text: said2,
+        })
+      )
+    );
+    yield* eventually({
+      effect: rowsInThread(),
+      holds: (rows) => rows.some((row) => row.body === said2),
+      step: "compose is off after the send, so the next message is its own turn",
+    });
+    yield* check({
+      detail: "the message after the batch was stored on its own",
+      ok: true,
+      step: "compose is off after the send, so the next message is its own turn",
+    });
+
+    // And the other button: collected, then dropped, with nothing written.
+    const beforeCancel = (yield* rowsInThread()).length;
+    const beforeCancelCall = calls.length;
+    for (const update of [
+      messageUpdate({
+        chatId,
+        fromId: ALLOWED_TELEGRAM_USER,
+        messageId: 36,
+        text: "/compose",
+      }),
+      messageUpdate({
+        chatId,
+        fromId: ALLOWED_TELEGRAM_USER,
+        messageId: 37,
+        text: "never mind this one",
+      }),
+    ]) {
+      yield* Effect.promise(() => telegram.bot.handleUpdate(update));
+    }
+    yield* eventually({
+      effect: Effect.sync(() => calls.slice(beforeCancelCall)),
+      holds: (since) =>
+        since.some(
+          (call) =>
+            call.method === "editMessageText" &&
+            String(call.payload.text ?? "").includes("1 message held")
+        ),
+      step: "the second compose collects again",
+    });
+    yield* Effect.promise(() =>
+      telegram.bot.handleUpdate(
+        callbackUpdate({
+          chatId,
+          data: composeCancelData,
+          fromId: ALLOWED_TELEGRAM_USER,
+          messageId: 38,
+        })
+      )
+    );
+    yield* eventually({
+      effect: Effect.sync(() => calls.slice(beforeCancelCall)),
+      holds: (since) =>
+        since.some((call) =>
+          String(call.payload.text ?? "").includes("discarded")
+        ),
+      step: "cancel says what it dropped",
+    });
+    const afterCancel = yield* rowsInThread();
+    yield* check({
+      detail: `${afterCancel.length - beforeCancel} rows written across the cancelled batch`,
+      ok: afterCancel.length === beforeCancel,
+      step: "a cancelled batch reaches neither the conversation nor a turn",
     });
 
     // The queue. A turn is opened the way the loop opens one, because after the

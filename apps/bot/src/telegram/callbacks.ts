@@ -20,14 +20,26 @@
  */
 
 import type { ThreadId } from "@workspace/domain";
-import { Effect, FiberSet, Option } from "effect";
+import { Clock, Effect, FiberSet, Option } from "effect";
 import type { Bot } from "grammy";
 import { CurrentChatProgress, observeChat } from "../chat-event";
 import { Board } from "./board";
+import type { BotService } from "./bot-service";
 import { type CallbackData, decodeCallbackData } from "./callback-data";
 import type { CommandServices } from "./commands";
+import {
+  COMPOSE_EMPTY_TEXT,
+  COMPOSE_FAILED_TEXT,
+  COMPOSE_GONE_ANSWER,
+  type ComposeBuffers,
+  closeCompose,
+  composeCancelledText,
+  composeSentText,
+  showCompose,
+} from "./compose";
 import type { BotContext } from "./context";
-import type { PendingComments } from "./dispatch";
+import type { Dispatcher, PendingComments } from "./dispatch";
+import { italic } from "./format";
 import { escapeHtml } from "./helpers";
 import {
   ensureThread,
@@ -53,8 +65,19 @@ const TRANSITIONS = {
 /** What registering the callbacks takes. */
 export interface CallbackOptions {
   readonly bot: Bot<BotContext>;
+  /** The per-chat compose buffers the two compose buttons act on. */
+  readonly compose: ComposeBuffers;
   readonly pending: PendingComments;
+  /** The router's own append, so a released batch takes the path a message takes. */
+  readonly submitCompose: Dispatcher["submitCompose"];
 }
+
+/**
+ * What the taps need from the layer stack: the commands' services, plus the
+ * bot itself — a released compose batch may land behind a live turn, and saying
+ * so is a message into the chat.
+ */
+export type CallbackServices = BotService | CommandServices;
 
 /**
  * Register every inline button on the bot.
@@ -65,9 +88,9 @@ export interface CallbackOptions {
 export const registerCallbacks = Effect.fnUntraced(function* (
   options: CallbackOptions
 ) {
-  const { bot, pending } = options;
+  const { bot, compose, pending, submitCompose } = options;
   const board = yield* Board;
-  const run = yield* FiberSet.makeRuntimePromise<CommandServices>();
+  const run = yield* FiberSet.makeRuntimePromise<CallbackServices>();
 
   /** Answer the tap. Failure to answer is not worth failing the update over. */
   const answer = (ctx: BotContext, text: string) =>
@@ -184,6 +207,70 @@ export const registerCallbacks = Effect.fnUntraced(function* (
     );
   });
 
+  /**
+   * Release or drop a compose buffer — the two buttons on a compose message.
+   *
+   * Both endings close the buffer before anything else happens, so compose is
+   * off from the moment the button is tapped and a second tap on the same
+   * message finds nothing to send twice. An empty *Send* is not an error and not
+   * a no-op either: it ends compose, because a person pressing Send on an empty
+   * buffer is a person trying to get out of it.
+   */
+  const onCompose = Effect.fnUntraced(function* (input: {
+    readonly ctx: BotContext;
+    readonly chatId: number;
+    readonly verb: "cmcxl" | "cmsnd";
+  }) {
+    const { chatId, ctx, verb } = input;
+    const session = compose.close(chatId);
+    if (session === null) {
+      yield* answer(ctx, COMPOSE_GONE_ANSWER);
+      return;
+    }
+    const waiting = session.pieces.length;
+    const retire = (text: string) =>
+      closeCompose({
+        api: ctx.api,
+        chatId,
+        messageId: session.anchorMessageId,
+        text,
+      });
+
+    if (verb === "cmcxl") {
+      yield* retire(composeCancelledText(waiting));
+      yield* observeChat({ outcome: "rejected" });
+      yield* answer(ctx, "Compose cancelled.");
+      return;
+    }
+    if (waiting === 0) {
+      yield* retire(italic(COMPOSE_EMPTY_TEXT));
+      yield* answer(ctx, COMPOSE_EMPTY_TEXT);
+      return;
+    }
+
+    const submitted = yield* submitCompose({
+      chatId,
+      pieces: session.pieces,
+      userId: ctx.identity.userId,
+      workspaceId: ctx.identity.workspaceId,
+    }).pipe(Effect.option);
+
+    if (Option.isNone(submitted)) {
+      const now = yield* Clock.currentTimeMillis;
+      compose.restore({ chatId, now, session });
+      yield* showCompose({
+        api: ctx.api,
+        chatId,
+        messageId: session.anchorMessageId,
+        waiting,
+      });
+      yield* answer(ctx, COMPOSE_FAILED_TEXT);
+      return;
+    }
+    yield* retire(composeSentText(waiting));
+    yield* answer(ctx, `Sent ${waiting} as one.`);
+  });
+
   /** Make one conversation the chat's current one. */
   const onSwitch = Effect.fnUntraced(function* (input: {
     readonly ctx: BotContext;
@@ -219,6 +306,15 @@ export const registerCallbacks = Effect.fnUntraced(function* (
           return;
         }
         const data = decoded.value;
+
+        // Before the thread lookup: compose is a buffer in this process keyed
+        // by the chat, and opening a conversation to answer *Cancel* would be a
+        // conversation nobody asked for. The send path opens its own.
+        if (data.kind === "compose") {
+          yield* onCompose({ chatId, ctx, verb: data.verb });
+          return;
+        }
+
         const thread = yield* currentThread(ctx, chatId);
 
         if (data.kind === "task") {
