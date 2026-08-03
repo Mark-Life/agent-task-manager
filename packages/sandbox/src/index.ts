@@ -103,6 +103,16 @@ export {
   SandboxTimedOut,
   TeardownFailed,
 } from "./errors";
+// The GitHub credential. Exported because the orchestrator hands the same
+// token to a container that this package hands to the host's git — one value
+// reaching two sides, so the names it travels under are shared, not repeated.
+export {
+  AGENT_TOKEN_ENV_VAR,
+  GH_TOKEN_ENV_VAR,
+  GITHUB_TOKEN_ENV_VAR,
+  githubTokenEnv,
+  readGithubToken,
+} from "./github";
 export {
   DEFAULT_CPUS,
   DEFAULT_MEMORY_MB,

@@ -34,10 +34,15 @@
 import * as BunChildProcessSpawner from "@effect/platform-bun/BunChildProcessSpawner";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as BunPath from "@effect/platform-bun/BunPath";
-import { Context, Effect, Layer, Stream } from "effect";
+import { Context, Effect, Layer, type Redacted, Stream } from "effect";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner";
 import { CloneFailed, keepStderrTail } from "./errors";
+import {
+  credentialConfigArgs,
+  githubTokenEnv,
+  readGithubToken,
+} from "./github";
 import { subcommandOf, withSubprocessSpan } from "./sandbox-event";
 
 /**
@@ -111,6 +116,19 @@ const NON_INTERACTIVE_ENV = {
 } as const;
 
 /**
+ * The credential arguments, for `git` and never for `gh`.
+ *
+ * `gh` reads `GH_TOKEN` off the environment by itself and rejects `-c` outright,
+ * so the two tools take the same credential by different routes and only one of
+ * them takes it here.
+ */
+const credentialArgsFor = (
+  executable: GitExecutable,
+  token: Redacted.Redacted | null
+): readonly string[] =>
+  executable === "git" && token !== null ? credentialConfigArgs : [];
+
+/**
  * How long a killed process has to exit before it is killed harder. The scope
  * sends SIGTERM on interrupt; a clone stuck in a network read ignores it.
  */
@@ -148,17 +166,26 @@ export interface GitInterface {
 export const makeGit = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner;
 
+  // Read once, at layer build, so every invocation in this process uses the
+  // same credential — a per-command read is where two clones in one run come
+  // to disagree about which account they are.
+  const token = yield* readGithubToken;
+
   const run = (command: GitCommand) =>
     Effect.gen(function* () {
       const handle = yield* spawner.spawn(
-        ChildProcess.make(command.executable, [...command.args], {
-          cwd: command.cwd ?? undefined,
-          env: NON_INTERACTIVE_ENV,
-          // The binary is found on the host's `PATH`, so the child's
-          // environment is the host's with the refusals above layered over it.
-          extendEnv: true,
-          forceKillAfter: FORCE_KILL_AFTER,
-        })
+        ChildProcess.make(
+          command.executable,
+          [...credentialArgsFor(command.executable, token), ...command.args],
+          {
+            cwd: command.cwd ?? undefined,
+            env: { ...NON_INTERACTIVE_ENV, ...githubTokenEnv(token) },
+            // The binary is found on the host's `PATH`, so the child's
+            // environment is the host's with the refusals above layered over it.
+            extendEnv: true,
+            forceKillAfter: FORCE_KILL_AFTER,
+          }
+        )
       );
       // Both streams are drained concurrently with the exit wait: an undrained
       // pipe fills and stops the child, and a clone that prints more progress
