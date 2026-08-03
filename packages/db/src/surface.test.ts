@@ -51,6 +51,7 @@ const SURFACE = [
   "chatStoreLayer",
   "databaseConfig",
   "databaseLayer",
+  "ensurePassword",
   "repositoriesLayer",
   "storeLayer",
   "withActor",

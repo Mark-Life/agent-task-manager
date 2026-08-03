@@ -4,6 +4,46 @@
     <meta charset="UTF-8">
     <meta content="width=device-width, initial-scale=1.0" name="viewport">
     <title>Agent Task Manager — Dashboard</title>
+    <style>
+    /*
+                                          The shared stylesheet aliases --font-sans onto itself and then applies it
+                                          to <html>, expecting the host app to supply the actual stack. A framework
+                                          app gets that from its font loader; this one has no loader, so the stack
+                                          is declared here and every element inherits it.
+                                        */
+    :root {
+      --font-sans:
+        ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji",
+        "Segoe UI Emoji";
+      --font-heading: var(--font-sans);
+      --font-mono:
+        ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+        "Liberation Mono", monospace;
+    }
+    </style>
+    <script>
+    "use strict";
+    /*
+                                          Paint the stored theme before React mounts, otherwise the first frame is
+                                          light and the app flashes on every load. The key and the class are the
+                                          ones the theme provider owns; change them together or this silently stops
+                                          agreeing with it.
+                                        */
+    (() => {
+      try {
+        const stored = localStorage.getItem("theme");
+        const prefersDark = window.matchMedia(
+          "(prefers-color-scheme: dark)"
+        ).matches;
+        const dark = stored === "dark" || (stored !== "light" && prefersDark);
+        document.documentElement.classList.toggle("dark", dark);
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      } catch {
+        /* Private mode denies localStorage; the default theme is fine. */
+      }
+    })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -166,12 +166,26 @@ const infrastructureLayer = (
 /** A configured origin may or may not end in a slash; the link may not have two. */
 const TRAILING_SLASHES = /\/+$/;
 
-/** Where a person clicks to see a task, or nothing when this deployment has no public origin. */
-const taskUrlFor = (origin: Option.Option<string>) => (taskId: TaskId) =>
-  Option.match(origin, {
-    onNone: () => null,
-    onSome: (base) => `${base.replace(TRAILING_SLASHES, "")}/tasks/${taskId}`,
-  });
+/**
+ * Where a person clicks to see a task, or nothing when this deployment has no
+ * origin to send them to.
+ *
+ * The dashboard's origin is the right answer and the gateway's is the fallback,
+ * because `/tasks/<id>` is a page the dashboard renders and the gateway has no
+ * static assets to answer it with. The fallback stays for the deployment that
+ * puts both behind one host, where the two values are the same string anyway.
+ */
+const taskUrlFor = (origins: {
+  readonly dashboard: Option.Option<string>;
+  readonly gateway: Option.Option<string>;
+}) => {
+  const origin = Option.orElse(origins.dashboard, () => origins.gateway);
+  return (taskId: TaskId) =>
+    Option.match(origin, {
+      onNone: () => null,
+      onSome: (base) => `${base.replace(TRAILING_SLASHES, "")}/tasks/${taskId}`,
+    });
+};
 
 /**
  * The whole process, as one layer.
@@ -193,7 +207,10 @@ export const appLayer = (wiring: BotWiring, board?: Layer.Layer<Board>) =>
       Notifier.layer({
         retryGraceMs: wiring.env.notifyRetryGraceMs,
         splitAt: wiring.env.botSplitAt,
-        taskUrl: taskUrlFor(wiring.env.gatewayPublicUrl),
+        taskUrl: taskUrlFor({
+          dashboard: wiring.env.dashboardOrigin,
+          gateway: wiring.env.gatewayPublicUrl,
+        }),
       })
     ),
     Layer.provideMerge(infrastructureLayer(wiring, board))

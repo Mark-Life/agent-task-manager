@@ -2,10 +2,13 @@
   "extends": "@workspace/typescript-config/react-library.json",
   "compilerOptions": {
     "noEmit": true,
+    "types": ["bun", "vite/client"],
     "paths": {
       "@/*": ["./src/*"],
       "@workspace/ui/*": ["../../packages/ui/src/*"],
-      "@workspace/api/*": ["../../packages/api/src/*"]
+      "@workspace/api": ["../../packages/api/src/index.ts"],
+      "@workspace/api/*": ["../../packages/api/src/*"],
+      "@workspace/domain": ["../../packages/domain/src/index.ts"]
     }
   },
   "include": ["src", "vite.config.ts"],

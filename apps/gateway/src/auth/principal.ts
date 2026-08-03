@@ -49,8 +49,19 @@ import {
  * The cookie the dashboard sends. Spelled here exactly as
  * `@workspace/api`'s session scheme spells it, because the two have to agree
  * for the document to describe the door the gateway actually opens.
+ *
+ * Two spellings, one door. Better Auth renames its cookie with the `__Secure-`
+ * prefix the moment its base URL is https — which every deployment's is — so a
+ * gateway that knew only the bare name would find nothing on a perfectly valid
+ * request and refuse it for having no credential at all.
  */
 const SESSION_COOKIE = "better-auth.session_token";
+const SECURE_SESSION_COOKIE = `__Secure-${SESSION_COOKIE}`;
+
+/** The session cookie on this request under whichever name it arrived. */
+const sessionCookieOf = (
+  cookies: Readonly<Record<string, string | undefined>>
+) => cookies[SECURE_SESSION_COOKIE] ?? cookies[SESSION_COOKIE];
 
 /** The path parameter every task-scoped route in the contract nests below. */
 const TASK_PARAM = "taskId";
@@ -340,7 +351,7 @@ export const makePrincipalResolver = (
   ) {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const token = bearerOf(request.headers);
-    const scheme = schemeOf(token, request.cookies[SESSION_COOKIE]);
+    const scheme = schemeOf(token, sessionCookieOf(request.cookies));
     const attempt = { required, scheme } as const;
 
     if (scheme === "none") {
