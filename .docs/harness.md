@@ -18,6 +18,12 @@ having posted a comment, capped at one retry; the refusal is fed back to the mod
 prompt. The sandbox names the executable through `ATM_STOP_HOOK_COMMAND` and the run's comment
 marker through `ATM_COMMENT_MARKER`.
 
+**It is only registered on a turn that has a task.** A manager turn answers in a conversation
+and has no card to comment on, so the entrypoint asks `commentRuleApplies(spec.identity)` before
+it names the command — and clears the variable when the answer is no, since the image may carry
+one. A manager handed this hook is refused by a rule about a card it does not have, and spends
+the turn it was given telling the person so.
+
 ```bash
 bun run harness:check                        # no model call: agent homes, layout, registry, hook
 bun run harness:check --live                 # one real turn per provider, transcript, rows

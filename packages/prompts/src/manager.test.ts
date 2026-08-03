@@ -23,7 +23,12 @@ import {
   renderChatMessage,
 } from "./manager";
 import type { PromptMode, RunPlacement } from "./render";
-import { MANAGER_RULES, SHARED_RULES } from "./rules";
+import {
+  ARTIFACT_RULES,
+  MANAGER_RULES,
+  SHARED_RULES,
+  WORKER_RULES,
+} from "./rules";
 
 const threadId = newThreadId();
 
@@ -111,6 +116,27 @@ describe("a first turn's prompt", () => {
   test("never promises the scratch directory outlives the turn", () => {
     const text = textOf({ messages: [message({ body: "hi", role: "user" })] });
     expect(text).not.toContain("outlives the container");
+  });
+
+  /**
+   * The bug this pair is about. A manager has no artifacts folder and no card,
+   * so a prompt that hands it the worker's rules about either is describing a
+   * run that does not exist — and the turn is spent explaining that it will not
+   * post onto an unrelated card to satisfy a rule about one.
+   */
+  test("is told nothing about an artifacts folder it does not have", () => {
+    const text = textOf({ messages: [message({ body: "hi", role: "user" })] });
+    expect(text).not.toContain(ARTIFACT_RULES);
+    expect(text).not.toContain("What survives this run");
+  });
+
+  test("is told its answer is the whole of its turn, with no card to close", () => {
+    const text = textOf({ messages: [message({ body: "hi", role: "user" })] });
+    expect(text).not.toContain(WORKER_RULES);
+    expect(text).toContain("You are not working on a card");
+    expect(text).toContain(
+      "a turn where you only read the board and answered is a finished turn"
+    );
   });
 
   test("has no conversation section rather than an empty one", () => {

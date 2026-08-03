@@ -39,7 +39,12 @@ export {
   section,
   speech,
 } from "./render";
-export { MANAGER_RULES, SHARED_RULES, WORKER_RULES } from "./rules";
+export {
+  ARTIFACT_RULES,
+  MANAGER_RULES,
+  SHARED_RULES,
+  WORKER_RULES,
+} from "./rules";
 export type { UnreadInput, Watermark } from "./unread";
 export { isAfterWatermark, nextWatermarkOf, unreadOf } from "./unread";
 export type { CommentLabelInput, WorkerPromptInput } from "./worker";

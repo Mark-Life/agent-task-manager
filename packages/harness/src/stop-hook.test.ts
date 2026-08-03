@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { TaskId } from "@workspace/domain";
 import { spawn } from "bun";
 import {
   ALLOW_TURN_END,
@@ -9,6 +10,7 @@ import {
   COMMENT_MARKER_FILE,
   commentMarkerPath,
   commentMarkerPathOf,
+  commentRuleApplies,
   decideStop,
   NO_COMMENT_REFUSAL,
   parseStopHookPayload,
@@ -166,6 +168,20 @@ describe("commentMarkerPath", () => {
         runDir: "/data/runs/r1",
       })
     ).toBe("/data/runs/r1/comment-posted");
+  });
+});
+
+describe("commentRuleApplies", () => {
+  test("holds for a turn that has a task to comment on", () => {
+    expect(
+      commentRuleApplies({
+        taskId: TaskId.make("019fbfd0-0000-7000-8000-0000000000bb"),
+      })
+    ).toBe(true);
+  });
+
+  test("does not hold for a manager turn, which has no card", () => {
+    expect(commentRuleApplies({ taskId: null })).toBe(false);
   });
 });
 

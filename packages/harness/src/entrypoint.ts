@@ -64,6 +64,7 @@ import { readStdin as readStdinRaw } from "./stdin";
 import {
   ALLOW_TURN_END,
   commentMarkerPath,
+  commentRuleApplies,
   decideStop,
   parseStopHookPayload,
   STOP_HOOK_COMMAND_ENV_VAR,
@@ -505,8 +506,16 @@ const runSpec = (input: {
     // environment as the provider builds its options, not from `RunOptions.env`.
     // The hook names this bundle in its other mode; the CLI is the image's own.
     yield* useImageClaudeCli(spec.provider);
+    // A turn with no task has no comment to enforce, and the variable is
+    // cleared rather than left alone: the image or the host may already carry
+    // one, and inheriting it is a manager turn refused by a rule about a card
+    // it does not have.
     yield* Effect.sync(() => {
-      process.env[STOP_HOOK_COMMAND_ENV_VAR] = containerStopHookCommand();
+      if (commentRuleApplies(spec.identity)) {
+        process.env[STOP_HOOK_COMMAND_ENV_VAR] = containerStopHookCommand();
+        return;
+      }
+      Reflect.deleteProperty(process.env, STOP_HOOK_COMMAND_ENV_VAR);
     });
     // A config file that could not be written costs the run its Executor tools
     // and nothing else, so it is a warning rather than an ending.
