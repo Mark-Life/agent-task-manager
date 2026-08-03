@@ -147,12 +147,17 @@ export type OrchestratorError =
   | QuotaPaused;
 
 /**
- * The names the loop's own failures carry onto a row, plus `PersistenceFailed`,
- * which is what a database failure is called and which no error of ours
- * produces.
+ * The names the loop's own failures carry onto a row.
+ *
+ * Two of them have no error of ours behind them, which is deliberate rather
+ * than an omission. `PersistenceFailed` is what a database failure is called on
+ * a row. `BoardAccessLost` is read off the run's own event stream at the close
+ * rather than raised — nothing fails when a worker loses the board, which is
+ * precisely the problem it names; see `./board-access`.
  */
 export const ORCHESTRATOR_ERROR_CLASSES = [
   "AlreadyLive",
+  "BoardAccessLost",
   "DispatchFailed",
   "IngestFailed",
   "LeaseLost",
@@ -221,6 +226,7 @@ export const RUN_ERROR_CLASSES: readonly RunErrorClass[] = [
  */
 const OUTCOME_OF_CLASS = {
   AlreadyLive: "errored",
+  BoardAccessLost: "errored",
   CloneFailed: "errored",
   ContainerStartFailed: "errored",
   DaemonUnreachable: "errored",

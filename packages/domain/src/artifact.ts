@@ -4,6 +4,29 @@ import { ArtifactId, ProjectId, RunId, TaskId } from "./ids";
 import { recordFields, Timestamp } from "./primitives";
 
 /**
+ * The file a worker writes when it has something to say and no way to say it.
+ *
+ * A run's board tools can stop answering — an expired credential, a gateway
+ * that moved, a network the container lost — and the agent still holds the
+ * thing the whole run was for. The task's artifacts directory is the one place
+ * it can write that outlives the container, so a file with this exact name in
+ * that directory is a comment the run could not post, and the orchestrator
+ * attaches it on the way out.
+ *
+ * It is a name rather than a mechanism on purpose. The agent needs no new tool
+ * and no new credential to use it: it already knows how to write a file, and
+ * the directory is already mounted. What the convention buys is that the file
+ * is found — the alternative is the one this replaced, where the output sat on
+ * disk under whatever name the agent chose and a person went looking for it.
+ *
+ * Named here rather than in the orchestrator or the sandbox because two
+ * packages have to agree on it and neither owns the other: `@workspace/prompts`
+ * tells the agent to write it, `@workspace/orchestrator` reads it back. A
+ * second spelling in either is a handoff nobody collects.
+ */
+export const HANDOFF_FILENAME = "handoff.md";
+
+/**
  * What a rescan of an artifact directory reads off one file. The index is
  * derivable from disk, which makes it a cache rather than a source of truth: if
  * it ever drifts, rescan. That removes a whole class of consistency bug, and it

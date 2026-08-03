@@ -52,6 +52,8 @@
  * confidently calling something that does not exist.
  */
 
+import { HANDOFF_FILENAME } from "@workspace/domain";
+
 /**
  * What is true of every run, whatever it was started to do.
  *
@@ -84,7 +86,8 @@ export const ARTIFACT_RULES = `## What survives this run
 You have one writable artifacts directory and two read-only ones. Anything worth keeping goes in the writable one; everything outside it is scratch and dies with the container.`;
 
 /**
- * The rule the stop hook enforces, in its positive form.
+ * The rule the stop hook enforces, in its positive form, and the one thing to
+ * do when the tool it names cannot be reached.
  *
  * The hook refuses a turn that ends with no comment and feeds its reason back
  * as the next prompt, so the agent will hear this rule either way — but hearing
@@ -92,9 +95,18 @@ You have one writable artifacts directory and two read-only ones. Anything worth
  * and a run that spends a turn being told to. The wording tracks
  * `NO_COMMENT_REFUSAL` in `@workspace/harness` on purpose: one rule stated
  * twice, not two rules that nearly agree.
+ *
+ * The second paragraph exists because a worker that loses the board mid-run
+ * otherwise invents its own answer, and the two it reaches for are both bad: it
+ * retries the dead tool until its deadline, or it writes the file under a name
+ * of its choosing and tells a person to go and copy it. Naming the file is what
+ * turns the second one into a recovery the loop performs — `readHandoff` in
+ * `@workspace/orchestrator` reads exactly this name out of exactly that
+ * directory, and `worker.test.ts` asserts the two still agree.
  */
-export const WORKER_RULES =
-  "Before you end your turn, post a comment on this task: what you did, what changed, and anything the next session or a human reviewer needs to know. A turn that ends without one is sent back to write it.";
+export const WORKER_RULES = `Before you end your turn, post a comment on this task: what you did, what changed, and anything the next session or a human reviewer needs to know. A turn that ends without one is sent back to write it.
+
+If the board tools stop answering — a credential that no longer works, a gateway you cannot reach — write that same comment to \`${HANDOFF_FILENAME}\` in your artifacts directory and end your turn. It is read off the disk and posted for you. Do not spend the rest of your turn retrying the tool, and do not describe the file as something a person has to go and fetch.`;
 
 /**
  * The manager's rules, as the prompt's first section.

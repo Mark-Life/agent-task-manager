@@ -12,6 +12,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   type Comment,
+  HANDOFF_FILENAME,
   newAgentSessionId,
   newCommentId,
   newProjectId,
@@ -141,6 +142,17 @@ describe("a fresh session's prompt", () => {
   test("teaches the rule the stop hook enforces", () => {
     expect(text).toContain("post a comment on this task");
     expect(text).toContain("sent back to write it");
+  });
+
+  test("tells a worker that loses the board where to leave its comment instead", () => {
+    // The name has to be the one `readHandoff` in `@workspace/orchestrator`
+    // looks for. A worker told to write some other file writes a file nobody
+    // collects, which is the bug this replaced.
+    expect(text).toContain(HANDOFF_FILENAME);
+    expect(text).toContain("If the board tools stop answering");
+    // And it has to know the file is collected, or it spends its last turn
+    // telling a person to go and fetch it.
+    expect(text).toContain("read off the disk and posted for you");
   });
 
   test("says a run with no repo has a scratch directory, and no project has none", () => {

@@ -38,6 +38,7 @@
  */
 
 import { join } from "node:path";
+import { HANDOFF_FILENAME } from "@workspace/domain";
 import { Option, Schema } from "effect";
 import { trimmedOrNull } from "./env";
 import { containerRunLayout, type RunLayout } from "./paths";
@@ -225,9 +226,18 @@ export type StopDecision = StopAllowed | StopRefused;
  * Written as an instruction with a stopping condition, because it arrives as a
  * prompt and an agent that reads it as criticism will apologize instead of
  * writing the comment.
+ *
+ * The second sentence is the escape, and it is here rather than only in the
+ * prompt because this text arrives at the exact moment it is needed: an agent
+ * whose board tools have stopped answering reads "post one now" as an
+ * instruction it has already tried and cannot follow, and what it does next is
+ * either burn its remaining turn retrying a dead tool or end without the
+ * comment anyway. Naming the file gives the refusal something to be complied
+ * with. The name is `HANDOFF_FILENAME`, which `@workspace/orchestrator` reads
+ * back off the task's artifacts directory — one convention, three packages, no
+ * second spelling.
  */
-export const NO_COMMENT_REFUSAL =
-  "This run has not posted a comment on its task. Post one now — what you did, what changed, and anything the next session or a human reviewer needs to know — then end your turn. Do not repeat work you have already finished.";
+export const NO_COMMENT_REFUSAL = `This run has not posted a comment on its task. Post one now — what you did, what changed, and anything the next session or a human reviewer needs to know — then end your turn. Do not repeat work you have already finished. If the tool that posts comments is not answering, write the same text to \`${HANDOFF_FILENAME}\` in your artifacts directory instead and end your turn; it is read off the disk and posted for you.`;
 
 /** The allowing response. One object, because it carries no per-decision detail. */
 export const ALLOW_TURN_END: StopHookResponse = { continue: true };

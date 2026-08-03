@@ -36,6 +36,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { BunFileSystem } from "@effect/platform-bun";
+import { AGENT_TOOL_PREFIX, describeFailure } from "@workspace/agent-tools";
+import { Unauthorized } from "@workspace/api";
 import {
   AgentSessionRepo,
   Auth,
@@ -51,6 +53,7 @@ import {
   Actor,
   type AgentSessionId,
   CostUsd,
+  HANDOFF_FILENAME,
   type Task,
   type TaskId,
   UserId,
@@ -66,9 +69,14 @@ import {
   ProviderRegistry,
   type ProviderTable,
 } from "@workspace/harness";
-import { localSandboxLayer, localWorkspaceLayer } from "@workspace/sandbox";
+import {
+  localSandboxLayer,
+  localWorkspaceLayer,
+  taskArtifactsDirOf,
+} from "@workspace/sandbox";
 import { Telemetry } from "@workspace/telemetry";
 import { Effect, Layer, Stream } from "effect";
+import { BOARD_ACCESS_ERROR_CLASS } from "./board-access";
 import { openRun, type RunClaim } from "./open-run";
 import { performRun, runOpened } from "./run";
 import { workerAttachment } from "./subject";
@@ -316,12 +324,19 @@ const runOnce = (input: {
   readonly events: readonly AgentEvent[];
   readonly failure?: ProviderCrashed;
   readonly hang?: boolean;
+  /**
+   * Puts something on disk for the run to find, once the task exists and
+   * before the turn starts — which is the only order that can stage a file an
+   * earlier container left in the task's artifacts folder.
+   */
+  readonly onSeeded?: (task: Task) => void;
   readonly timeoutMs?: number;
   readonly title: string;
 }) =>
   Effect.gen(function* () {
     const { owner } = yield* ensureWorkspace;
     const task = yield* seedTask({ owner, title: input.title });
+    input.onSeeded?.(task);
     const outcome = yield* performRun({
       ...RUN_SETTINGS,
       claim: claimOf(task),
@@ -410,6 +425,60 @@ const doneResult: AgentEvent = {
   text: "I opened the pull request.",
   totalTokens: 900,
   turns: 3,
+};
+
+/**
+ * The board refusing this run's own credential, as the reported bug produced
+ * it: the gateway's `Unauthorized`, rendered by the server that serves the
+ * tool. Built rather than quoted so it stays the text the model actually sees.
+ */
+const EXPIRED_TOKEN_TEXT = describeFailure(
+  new Unauthorized({ reason: "token_expired" })
+);
+
+const expiredCommentCall: AgentEvent = {
+  callId: "call-9",
+  inputChars: 800,
+  kind: "tool_call",
+  summary: "post a comment",
+  toolName: `${AGENT_TOOL_PREFIX}comments_add`,
+};
+
+const expiredCommentResult: AgentEvent = {
+  callId: "call-9",
+  kind: "tool_result",
+  ok: false,
+  outputChars: EXPIRED_TOKEN_TEXT.length,
+  summary: EXPIRED_TOKEN_TEXT,
+};
+
+/**
+ * What the model says after it gives up on the tool. A clean `done`, because
+ * a `401` never failed the turn — which is the whole reason the run used to
+ * come back looking successful.
+ */
+const strandedResult: AgentEvent = {
+  costUsd: COST_USD,
+  durationMs: 4200,
+  errorClass: null,
+  errorMessage: null,
+  kind: "result",
+  outcome: "done",
+  providerSessionId: "provider-session-1",
+  text: "I cannot post the task comment — the run's atm MCP token expired.",
+  totalTokens: 900,
+  turns: 3,
+};
+
+/** The comment the worker could not post, written where it could write. */
+const HANDOFF_BODY =
+  "## What I did\n\nRewrote the lease handling and opened the pull request.";
+
+/** Leaves a handoff in the task's artifacts folder, as a stranded worker does. */
+const writeHandoff = (task: Task) => {
+  const directory = taskArtifactsDirOf({ dataRoot, taskId: task.id });
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, HANDOFF_FILENAME), HANDOFF_BODY);
 };
 
 const erroredResult: AgentEvent = {
@@ -598,6 +667,117 @@ test("the fallback comment appears only when the run posted none", async () => {
       )
     )
   ).toBe(true);
+});
+
+test("a run that lost the board ends visibly failed, with the reason on the card", async () => {
+  const seen = await provide(
+    runOnce({
+      events: [
+        sessionInit,
+        assistant("writing it up"),
+        expiredCommentCall,
+        expiredCommentResult,
+        strandedResult,
+      ],
+      title: "stranded run",
+    })
+  );
+
+  // The provider said `done`. Everything below is what stops that from being
+  // the last word — a card that reads as a run which produced nothing is the
+  // failure being reported here.
+  expect(seen.terminus.kind).toBe("failed");
+  expect(seen.run.outcome).toBe("errored");
+  expect(seen.run.status).toBe("failed");
+  expect(seen.run.errorClass).toBe(BOARD_ACCESS_ERROR_CLASS);
+  expect(seen.session.status).toBe("failed");
+
+  const errors = seen.comments.filter(
+    (comment) => comment.kind === "run_error"
+  );
+  expect(errors).toHaveLength(1);
+  expect(errors[0]?.authorKind).toBe("orchestrator");
+  expect(errors[0]?.body).toContain("token_expired");
+  expect(errors[0]?.body).toContain("could not write to the board");
+
+  // Still to review, like every other ending: there is no failed column, and a
+  // human deciding what to do is the same gate a clean finish lands in.
+  expect(seen.task.status).toBe("review");
+});
+
+test("the handoff a stranded run left on disk is attached without anyone copying it", async () => {
+  const seen = await provide(
+    runOnce({
+      events: [
+        sessionInit,
+        expiredCommentCall,
+        expiredCommentResult,
+        strandedResult,
+      ],
+      onSeeded: writeHandoff,
+      title: "handoff run",
+    })
+  );
+
+  const fallbacks = seen.comments.filter(
+    (comment) => comment.kind === "fallback"
+  );
+  expect(fallbacks).toHaveLength(1);
+  expect(fallbacks[0]?.body).toContain(HANDOFF_BODY);
+  expect(fallbacks[0]?.authorKind).toBe("agent");
+  expect(fallbacks[0]?.runId).toBe(seen.context.runId);
+  // The reader is told this came off disk rather than off the wire, and where
+  // the file is — the two are different claims about the same words.
+  expect(fallbacks[0]?.body).toContain(HANDOFF_FILENAME);
+  expect(seen.report?.handoffAttached).toBe(true);
+
+  // The handoff wins over the final message, which on this path is the model
+  // narrating the failure rather than reporting the work.
+  expect(fallbacks[0]?.body).not.toContain("I cannot post the task comment");
+});
+
+test("the handoff is left on disk for the artifact index to find", async () => {
+  const seen = await provide(
+    runOnce({
+      events: [
+        sessionInit,
+        expiredCommentCall,
+        expiredCommentResult,
+        strandedResult,
+      ],
+      onSeeded: writeHandoff,
+      title: "handoff kept",
+    })
+  );
+
+  // Attaching it as a comment must not consume it: it is the run's only
+  // surviving output, and the rescan indexes it as an artifact too.
+  const path = join(
+    taskArtifactsDirOf({ dataRoot, taskId: seen.task.id }),
+    HANDOFF_FILENAME
+  );
+  expect(readFileSync(path, "utf8")).toBe(HANDOFF_BODY);
+});
+
+test("a run that kept the board is untouched by any of it", async () => {
+  const seen = await provide(
+    runOnce({
+      events: [sessionInit, commentCall, commentResult, doneResult],
+      // A handoff from an earlier attempt, which this run does not need.
+      onSeeded: writeHandoff,
+      title: "healthy run with an old handoff",
+    })
+  );
+
+  expect(seen.terminus.kind).toBe("finished");
+  expect(seen.run.outcome).toBe("done");
+  expect(seen.run.errorClass).toBeNull();
+  // The run commented for itself, so nothing is attached on its behalf — a
+  // stale file from a previous attempt must not become this run's report.
+  expect(
+    seen.comments.filter((comment) => comment.kind === "fallback")
+  ).toHaveLength(0);
+  expect(seen.report?.handoffAttached).toBe(false);
 });
 
 test("the close hook copies the transcript out of the shared home and reads it there", async () => {

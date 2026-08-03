@@ -237,6 +237,7 @@
       },
       "devDependencies": {
         "@types/bun": "catalog:",
+        "@workspace/api": "workspace:*",
         "@workspace/typescript-config": "workspace:*",
       },
     },

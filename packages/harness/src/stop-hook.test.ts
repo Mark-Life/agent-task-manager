@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TaskId } from "@workspace/domain";
+import { HANDOFF_FILENAME, TaskId } from "@workspace/domain";
 import { spawn } from "bun";
 import {
   ALLOW_TURN_END,
@@ -119,6 +119,16 @@ describe("decideStop", () => {
 
   test("decides the same way for both harnesses", () => {
     expect(decided(codexPayload, false)).toEqual(decided(claudePayload, false));
+  });
+
+  test("gives an agent that cannot reach the board a way to comply", () => {
+    // The refusal is read by an agent that has just failed to post a comment,
+    // and one reason for that is a board it can no longer reach. Without this
+    // it is told to do the one thing it has already found it cannot do.
+    expect(NO_COMMENT_REFUSAL).toContain(HANDOFF_FILENAME);
+    expect(NO_COMMENT_REFUSAL).toContain(
+      "read off the disk and posted for you"
+    );
   });
 });
 
