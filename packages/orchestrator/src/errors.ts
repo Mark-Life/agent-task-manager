@@ -37,7 +37,9 @@ import {
   type HarnessErrorClass,
 } from "@workspace/harness";
 import {
+  redactRemote,
   SANDBOX_ERROR_CLASSES,
+  type SandboxError,
   type SandboxErrorClass,
 } from "@workspace/sandbox";
 import { clipError } from "@workspace/telemetry";
@@ -339,6 +341,53 @@ const messageOf = (error: OrchestratorError): string => {
   }
 };
 
+/** A process's exit code, when it had one, as a clause to append. */
+const exitClause = (exitCode: number | null) =>
+  exitCode === null ? "" : ` (exit ${exitCode})`;
+
+/** A tool's own output, when it produced any, as a clause to append. */
+const outputClause = (stderr: string) => {
+  const text = stderr.trim();
+  return text.length === 0 ? "" : `: ${text}`;
+};
+
+/**
+ * What a container or a checkout failed at, in a sentence.
+ *
+ * Every one of these errors already carries the fields that answer "why" — the
+ * repository and git's own stderr, the image, the path a mount pointed at, the
+ * limit the kernel enforced. None of it used to reach anybody: sandbox tags are
+ * not in {@link CLASS_OF_TAG}, so a failure fell through to
+ * {@link textOfUnknown}, which reads `message` off an `Error` that never had
+ * one — and every sandbox failure arrived on the run row, the crash comment and
+ * the wide event as a bare tag and a colon. `Sandbox.CloneFailed:` cannot be
+ * told from a network outage, a missing branch, or a private repository with no
+ * credential, which are three different things to go and do.
+ *
+ * Exhaustive over the union rather than defaulted, so a new sandbox error is a
+ * compile error here instead of another bare tag.
+ */
+const sandboxMessageOf = (error: SandboxError): string => {
+  switch (error._tag) {
+    case "Sandbox.CloneFailed":
+      return `cloning ${error.repo} failed${exitClause(error.exitCode)}${outputClause(error.stderr)}`;
+    case "Sandbox.ContainerStartFailed":
+      return `the container never started from ${error.image}${exitClause(error.exitCode)}${outputClause(error.stderr)}`;
+    case "Sandbox.DaemonUnreachable":
+      return `the docker daemon could not be reached: ${error.detail}`;
+    case "Sandbox.ImageMissing":
+      return `the image ${error.image} is not on this host and could not be pulled: ${error.detail}`;
+    case "Sandbox.MountSourceMissing":
+      return `the ${error.purpose} mount points at ${error.hostPath}, which does not exist`;
+    case "Sandbox.OomKilled":
+      return `the kernel killed the container for exceeding its ${error.limitMb}MB limit`;
+    case "Sandbox.TimedOut":
+      return `the container outlived its ${error.timeoutMs}ms cap`;
+    default:
+      return `the container could not be removed${outputClause(String(error.cause))}`;
+  }
+};
+
 /** Whatever text a thrown value carries, in whichever shape it arrived. */
 const textOfUnknown = (failure: unknown): string => {
   if (typeof failure === "string") {
@@ -362,13 +411,19 @@ const textOfUnknown = (failure: unknown): string => {
 export const describeFailure = (failure: unknown) => {
   const errorClass = classifyFailure(failure);
   const tag = tagOf(failure);
-  const text =
-    tag !== null && tag in CLASS_OF_TAG
-      ? messageOf(failure as OrchestratorError)
-      : textOfUnknown(failure);
+  const sandbox = tag === null ? null : sandboxClassOf(tag);
+  const ours = tag !== null && tag in CLASS_OF_TAG;
+  const text = ours
+    ? messageOf(failure as OrchestratorError)
+    : sandbox === null
+      ? textOfUnknown(failure)
+      : sandboxMessageOf(failure as SandboxError);
   return {
     errorClass,
-    errorMessage: clipError(text.length > 0 ? text : errorClass),
+    // Both sanitizers, because they cover different shapes: the shared one
+    // knows bearer tokens and API keys, and a clone URL carries a credential in
+    // a form — `https://user:pass@host` — that it does not.
+    errorMessage: clipError(redactRemote(text.length > 0 ? text : errorClass)),
     outcome: runOutcomeOfClass(errorClass),
   } as const;
 };
