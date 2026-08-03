@@ -6520,6 +6520,7 @@
                   "text",
                   "voice",
                   "forward",
+                  "compose",
                   "command",
                   "callback",
                   "api"
