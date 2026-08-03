@@ -38,6 +38,14 @@ ExecStart=/usr/local/bin/bun run apps/loop/src/main.ts
 Restart=always
 RestartSec=5s
 
+# A signal is not a failure. This process shuts down through Effect's
+# interrupt path and exits 128+signal — 130 for SIGINT, 143 for SIGTERM — so
+# without this every `systemctl stop` leaves the unit `failed`, and a status
+# anyone reads afterwards says something went wrong when nothing did. Observed
+# on the host: stopping the loop exited 130 and systemd reported
+# `Failed with result 'exit-code'`.
+SuccessExitStatus=130 143
+
 # Longer than LOOP_SHUTDOWN_GRACE_MS. Stopping the loop means stopping every
 # container it is holding and releasing every lease it took; a SIGKILL through
 # the middle of that leaves rows that claim a run is live and a container that
