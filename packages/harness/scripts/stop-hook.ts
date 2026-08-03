@@ -16,7 +16,7 @@
  */
 
 import { existsSync } from "node:fs";
-import process from "node:process";
+import { readStdin } from "../src/stdin";
 import {
   ALLOW_TURN_END,
   commentMarkerPath,
@@ -24,19 +24,6 @@ import {
   parseStopHookPayload,
   stopHookResponseOf,
 } from "../src/stop-hook";
-
-/**
- * Everything the harness wrote to stdin. Chunk-wise rather than a one-shot
- * read, because the payload carries the final assistant message and outgrows a
- * pipe buffer on any turn worth hooking.
- */
-const readStdin = async () => {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-};
 
 /** The parsed payload, or null when stdin held something that was not JSON. */
 const parseJson = (raw: string): unknown => {
@@ -53,7 +40,7 @@ const respond = (response: unknown) => {
 };
 
 try {
-  const payload = parseStopHookPayload(parseJson(await readStdin()));
+  const payload = parseStopHookPayload(parseJson(readStdin()));
   const decision = decideStop({
     commentPosted: existsSync(commentMarkerPath(process.env)),
     payload,

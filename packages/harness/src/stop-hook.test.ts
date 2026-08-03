@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawn } from "bun";
 import {
   ALLOW_TURN_END,
   COMMENT_MARKER_ENV_VAR,
+  COMMENT_MARKER_FILE,
   commentMarkerPath,
   commentMarkerPathOf,
   decideStop,
@@ -12,6 +17,7 @@ import {
   stopHookCommand,
   stopHookResponseOf,
 } from "./stop-hook";
+import { ENTRYPOINT_BUNDLE_FILE, STOP_HOOK_FLAG } from "./turn-spec";
 
 /** What Claude sends: no Codex extensions, `last_assistant_message` present or absent. */
 const claudePayload = {
@@ -175,5 +181,107 @@ describe("stopHookCommand", () => {
         [STOP_HOOK_COMMAND_ENV_VAR]: "bun /opt/atm/stop-hook.ts",
       })
     ).toBe("bun /opt/atm/stop-hook.ts");
+  });
+});
+
+/**
+ * The executable, not the rule.
+ *
+ * Everything above decides from values already in hand. What is left is the
+ * part that turns a pipe into those values, and it is the part that broke: an
+ * `import process from "node:process"` made `process.stdin` yield no chunks at
+ * all when the parent was another Bun process, so the payload read as
+ * unparseable and the hook — which fails open at every step, on purpose — sent
+ * `{continue:true}` to every turn. Nothing was thrown and nothing was logged.
+ * The rule was never wrong; it was never asked.
+ *
+ * So this drives the script the way a harness does, over a real pipe, and
+ * asserts the answer rather than the reasoning. It is slow next to the tests
+ * above and it is the only one that would have caught this.
+ */
+describe("the hook as a process", () => {
+  const script = new URL("../scripts/stop-hook.ts", import.meta.url).pathname;
+
+  /** One run of the script, given a payload on stdin and a marker path. */
+  const ask = async (options: {
+    readonly markerPath: string;
+    readonly payload: Readonly<Record<string, unknown>>;
+  }) => {
+    const child = spawn(["bun", script], {
+      env: { ...process.env, [COMMENT_MARKER_ENV_VAR]: options.markerPath },
+      stdin: new TextEncoder().encode(JSON.stringify(options.payload)),
+      stdout: "pipe",
+    });
+    const answer = await new Response(child.stdout).text();
+    await child.exited;
+    return JSON.parse(answer) as Record<string, unknown>;
+  };
+
+  /** A path nothing has created, so the marker is absent rather than stale. */
+  const absentMarker = join(tmpdir(), "atm-no-such-run", COMMENT_MARKER_FILE);
+
+  test("refuses a first ending with no comment posted", async () => {
+    const answer = await ask({
+      markerPath: absentMarker,
+      payload: claudePayload,
+    });
+    expect(answer.decision).toBe("block");
+    expect(answer.reason).toBe(NO_COMMENT_REFUSAL);
+  });
+
+  test("allows the ending once the marker is there", async () => {
+    const markerPath = join(
+      mkdtempSync(join(tmpdir(), "atm-stop-hook-")),
+      COMMENT_MARKER_FILE
+    );
+    writeFileSync(markerPath, "");
+    try {
+      expect(await ask({ markerPath, payload: claudePayload })).toEqual(
+        ALLOW_TURN_END
+      );
+    } finally {
+      rmSync(markerPath, { force: true });
+    }
+  });
+
+  /**
+   * The bundle, which is the hook every container actually runs — the script
+   * above is only for a run outside one. Worth its own case because the two
+   * disagreed: the same stdin read that worked in the script returned nothing
+   * at all once bundled, so testing one proved nothing about the other.
+   *
+   * Skipped rather than failed when the bundle is absent, since it is a build
+   * artifact and not every checkout has run `entrypoint:build`.
+   */
+  test("the bundled entrypoint refuses on the same terms", async () => {
+    const bundle = join(
+      import.meta.dir,
+      "../../../.data/bin",
+      ENTRYPOINT_BUNDLE_FILE
+    );
+    if (!existsSync(bundle)) {
+      return;
+    }
+    const child = spawn(["bun", bundle, STOP_HOOK_FLAG], {
+      env: { ...process.env, [COMMENT_MARKER_ENV_VAR]: absentMarker },
+      stdin: new TextEncoder().encode(JSON.stringify(claudePayload)),
+      stdout: "pipe",
+    });
+    const answer = JSON.parse(
+      await new Response(child.stdout).text()
+    ) as Record<string, unknown>;
+    await child.exited;
+    expect(answer.decision).toBe("block");
+  });
+
+  test("allows rather than wedges when stdin holds nothing it can read", async () => {
+    const child = spawn(["bun", script], {
+      env: { ...process.env, [COMMENT_MARKER_ENV_VAR]: absentMarker },
+      stdin: new TextEncoder().encode("not json"),
+      stdout: "pipe",
+    });
+    const answer = await new Response(child.stdout).text();
+    await child.exited;
+    expect(JSON.parse(answer)).toEqual(ALLOW_TURN_END);
   });
 });
