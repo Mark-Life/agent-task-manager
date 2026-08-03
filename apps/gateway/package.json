@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "dev": "bun --env-file=../../.env --watch src/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test --pass-with-no-tests"
   },

@@ -41,6 +41,22 @@ bun run gateway:start        # the HTTP contract, on :3100
 bun run bot:start            # Telegram, needs TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWLIST
 ```
 
+## The dashboard
+
+```bash
+bun run dashboard:dev        # gateway on :3100, dashboard on :5173
+```
+
+Sign-up is closed, so the way in is made at the console rather than through a form. Set
+`OWNER_PASSWORD` and run `bun run db:seed`: it gives the seeded owner —
+`owner@agent-task-manager.local` — a password. Re-seeding never overwrites one already there, so
+change it after the first login and the value in `.env` stops mattering.
+
+`DASHBOARD_ORIGIN` is required locally too, set to the dev server's own address. The Vite proxy
+makes the gateway look same-origin to application code, but the browser still stamps the dev
+server's origin on every request, and Better Auth refuses a sign-in from an origin it was not
+told about.
+
 ## Check scripts
 
 Each subsystem has one script that drives it end to end and prints a line per claim. They are
@@ -74,7 +90,7 @@ Other commands: `gateway:token` mints a scoped bearer token, `db:seed` fills a f
 
 ## Environment
 
-Read from `.env` at the repo root. Four matter before anything runs:
+Read from `.env` at the repo root. These matter before anything runs:
 
 | Var | | |
 | --- | --- | --- |
@@ -82,6 +98,8 @@ Read from `.env` at the repo root. Four matter before anything runs:
 | `BETTER_AUTH_SECRET` | required by the gateway | signs session cookies and bearer tokens |
 | `TELEGRAM_BOT_TOKEN` | required by the bot | from @BotFather |
 | `TELEGRAM_ALLOWLIST` | required by the bot | `telegramUserId:workspaceId:userId`, comma separated |
+| `DASHBOARD_ORIGIN` | required by the dashboard | its exact origin, `http://localhost:5173` locally |
+| `OWNER_PASSWORD` | read by `db:seed` | the owner's first password; unset, nobody can sign in |
 
 Worth knowing about: `SANDBOX_MODE=local` runs turns as host processes with no isolation at all,
 which is the debugging escape hatch. `ORCHESTRATOR_GATEWAY_URL` is the gateway *as a container
@@ -110,7 +128,7 @@ ours.
 | `apps/loop` | Runs the orchestrator. |
 | `apps/gateway` | Serves the contract, SSE, auth, artifacts. |
 | `apps/bot` | Telegram: intake, rendering, queueing, buttons. No agent runtime. |
-| `apps/dashboard` | Vite SPA. Scaffold — wiring and nothing else. |
+| `apps/dashboard` | Vite SPA. The operator board, task detail, manager chat. |
 | `apps/web` | Next.js marketing app. |
 
 ## Reading further

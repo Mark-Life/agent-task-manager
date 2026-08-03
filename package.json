@@ -40,6 +40,7 @@
     "harness:check": "bun run scripts/harness-check.ts",
     "sandbox:check": "bun run scripts/sandbox-check.ts",
     "loop:check": "bun run scripts/loop-check.ts",
+    "dashboard:dev": "turbo dev --filter=gateway --filter=dashboard",
     "gateway:dev": "bun run --watch apps/gateway/src/main.ts",
     "gateway:start": "bun run apps/gateway/src/main.ts",
     "gateway:token": "bun run apps/gateway/src/auth/mint.ts",
