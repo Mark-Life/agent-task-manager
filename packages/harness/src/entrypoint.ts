@@ -29,9 +29,7 @@
  * executable for a run that is not in a container.
  */
 
-import { Buffer } from "node:buffer";
 import { dirname, join } from "node:path";
-import process from "node:process";
 import { clipError } from "@workspace/telemetry";
 import {
   Cause,
@@ -62,6 +60,7 @@ import {
 } from "./executor-mcp";
 import { containerRunLayout, runLayout } from "./paths";
 import { ProviderRegistry } from "./provider";
+import { readStdin as readStdinRaw } from "./stdin";
 import {
   ALLOW_TURN_END,
   commentMarkerPath,
@@ -622,14 +621,14 @@ export const specPathFrom = (input: {
   );
 };
 
-/** Whatever the harness wrote to stdin, as one string. */
-const readStdin = Effect.promise(async () => {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-});
+/**
+ * Whatever the harness wrote to stdin, as one string.
+ *
+ * The read itself is `./stdin`, shared with the standalone hook script rather
+ * than written twice — see the comment there for why the global `process` is
+ * the only one that works, and for what a wrong answer here looks like.
+ */
+const readStdin = Effect.sync(readStdinRaw);
 
 /**
  * The stop hook: one JSON payload on stdin, one JSON response on stdout.

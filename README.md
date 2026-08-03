@@ -41,6 +41,18 @@ bun run gateway:start        # the HTTP contract, on :3100
 bun run bot:start            # Telegram, needs TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWLIST
 ```
 
+Those three run in the foreground and stop with the terminal. To keep them up —
+across a logout, across a reboot — `service:install` puts the same three behind
+systemd user units, from this checkout, and `deploy/README.md` says what it
+assumes.
+
+```bash
+bun run service:install      # writes the units, enables them, turns linger on
+bun run service:status       # active, enabled and linger, per service
+bun run service:logs -n 50 loop
+bun run service:restart      # after a code change; name a subset or get all three
+```
+
 ## The dashboard
 
 ```bash
@@ -50,7 +62,18 @@ bun run dashboard:dev        # gateway on :3100, dashboard on :5173
 Sign-up is closed, so the way in is made at the console rather than through a form. Set
 `OWNER_PASSWORD` and run `bun run db:seed`: it gives the seeded owner —
 `owner@agent-task-manager.local` — a password. Re-seeding never overwrites one already there, so
-change it after the first login and the value in `.env` stops mattering.
+change it and the value in `.env` stops mattering. There is no account screen to change it
+from — the dashboard is the board, a task, the project list and the sign-in page — so a rotation
+is `POST /api/auth/change-password` carrying that session's cookie.
+
+That owner is a placeholder; nothing mails the address. `user:add` is how anybody real gets in,
+and the only way a second person ever does — there is no form and no invitation, because nothing
+here sends mail. It also prints the `userId` and `workspaceId` a `TELEGRAM_ALLOWLIST` entry
+needs, which exist nowhere else a person can read them off.
+
+```bash
+USER_PASSWORD='...' bun run user:add --email you@example.com --name You
+```
 
 `DASHBOARD_ORIGIN` is required locally too, set to the dev server's own address. The Vite proxy
 makes the gateway look same-origin to application code, but the browser still stamps the dev
@@ -86,7 +109,9 @@ The libraries are consumed as source through tsconfig paths and have no build st
 the committed spec has drifted from the contract.
 
 Other commands: `gateway:token` mints a scoped bearer token, `db:seed` fills a fresh database,
-`loop:dev` / `gateway:dev` / `bot:dev` are the watch-mode variants, `upgrade` bumps dependencies.
+`user:add` creates a login, `dashboard:build` / `dashboard:publish` produce and place the static
+bundle, `loop:dev` / `gateway:dev` / `bot:dev` are the watch-mode variants, `upgrade` bumps
+dependencies.
 
 ## Environment
 
@@ -95,7 +120,7 @@ Read from `.env` at the repo root. These matter before anything runs:
 | Var | | |
 | --- | --- | --- |
 | `DATABASE_URL` | required | `postgres://user:password@localhost:5432/agent_task_manager` |
-| `BETTER_AUTH_SECRET` | required by the gateway | signs session cookies and bearer tokens |
+| `BETTER_AUTH_SECRET` | required by all three | one value shared: the gateway verifies the tokens the loop and bot mint |
 | `TELEGRAM_BOT_TOKEN` | required by the bot | from @BotFather |
 | `TELEGRAM_ALLOWLIST` | required by the bot | `telegramUserId:workspaceId:userId`, comma separated |
 | `DASHBOARD_ORIGIN` | required by the dashboard | its exact origin, `http://localhost:5173` locally |

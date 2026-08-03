@@ -32,6 +32,14 @@ ExecStart=/usr/local/bin/bun run apps/gateway/src/main.ts
 Restart=always
 RestartSec=2s
 
+# A signal is not a failure. This process shuts down through Effect's
+# interrupt path and exits 128+signal — 130 for SIGINT, 143 for SIGTERM — so
+# without this every `systemctl stop` leaves the unit `failed`, and a status
+# anyone reads afterwards says something went wrong when nothing did. Observed
+# on the host: stopping the loop exited 130 and systemd reported
+# `Failed with result 'exit-code'`.
+SuccessExitStatus=130 143
+
 # Longer than GATEWAY_SHUTDOWN_GRACE_MS, so the process's own watchdog is what
 # ends a stuck shutdown and says why. If systemd wins this race the log says
 # only that it sent SIGKILL.
