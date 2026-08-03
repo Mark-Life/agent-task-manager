@@ -11,7 +11,7 @@ import {
 import { Input } from "@workspace/ui/components/input";
 import { Label } from "@workspace/ui/components/label";
 import { type ChangeEvent, type FormEvent, useCallback, useState } from "react";
-import { signIn } from "@/auth/client";
+import { signIn, useSession } from "@/auth/client";
 
 /** Where a signed-in operator belongs: the board. */
 const HOME_PATH = "/";
@@ -76,6 +76,14 @@ export const SignIn = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
+  // Reading the session here is what keeps the client's session store awake
+  // while this screen is on: the store only listens for sign-in while something
+  // is subscribed to it, and on this page the guard that normally subscribes is
+  // unmounted. Without a reader it holds the settled "no session" from the
+  // redirect that sent the operator here, and hands that same answer to the
+  // guard on the other side of the sign-in.
+  const { refetch: refetchSession } = useSession();
+
   const submit = useMutation({
     mutationFn: async (credentials: {
       readonly email: string;
@@ -85,6 +93,12 @@ export const SignIn = () => {
       if (error) {
         throw error;
       }
+      // The store's own reaction to a sign-in is scheduled, not immediate, so
+      // navigating on the response alone races it: the guard reads the store
+      // synchronously, sees the stale absence and sends the operator straight
+      // back here. Asking for the session and waiting is what makes the
+      // redirect below land on a session the app can already see.
+      await refetchSession();
     },
     onSuccess: () => {
       queryClient.clear();
