@@ -4,9 +4,11 @@
  *
  * The manager agent has no database handle, no container and no privileged
  * path. Everything it does to the board goes through the same HTTP contract a
- * dashboard uses, holding a short-lived `task-write` token that cannot reach
- * the deletes — so what a chat can change is exactly the fourteen tools in
- * `./tools` and nothing else.
+ * dashboard uses, holding a short-lived `task-write` token — so what a chat can
+ * change is exactly the tools in `./tools` and nothing else. That token still
+ * cannot delete a project; deleting a *task* it can do, because clearing a card
+ * off the board on somebody's say-so is ordinary work and the alternative was a
+ * credential that could erase a project too.
  *
  * What this package deliberately does not do: it does not mint the token (the
  * bot does, per turn, and hands it over on a mount), it does not decide which

@@ -16,6 +16,7 @@
  * | `Db.InvalidInput` | {@link InvalidInput} | 422 |
  * | `TaskRepo.IllegalTransition` | {@link IllegalTransition} | 409 |
  * | `TaskRepo.IllegalInitialStatus` | {@link IllegalInitialStatus} | 409 |
+ * | `TaskRepo.IllegalDeletion` | {@link IllegalDeletion} | 403 |
  * | `RunRepo.AlreadyLive` | {@link RunAlreadyLive} | 409 |
  * | `RunRepo.NotLive` | {@link RunNotLive} | 409 |
  * | `AgentSessionRepo.Ended` | {@link AgentSessionEnded} | 409 |
@@ -72,6 +73,21 @@ export class IllegalInitialStatus extends Schema.TaggedErrorClass<IllegalInitial
   "IllegalInitialStatus",
   { actorKind: ActorKind, status: TaskStatus },
   { httpApiStatus: 409 }
+) {}
+
+/**
+ * This kind of actor may not erase a task. A person and the manager acting for
+ * one own what is on the board; a run does not, however good its token is for
+ * writes on the task it was dispatched for.
+ *
+ * 403 rather than the 409 its two siblings carry, because there is no state a
+ * caller could reach where this answer changes: it is about who is asking, and
+ * nothing about the row.
+ */
+export class IllegalDeletion extends Schema.TaggedErrorClass<IllegalDeletion>()(
+  "IllegalDeletion",
+  { actorKind: ActorKind, taskId: Schema.String },
+  { httpApiStatus: 403 }
 ) {}
 
 /**

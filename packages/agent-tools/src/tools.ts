@@ -1,16 +1,19 @@
 /**
- * The board, as the eighteen things an agent can do to it.
+ * The board, as the nineteen things an agent can do to it.
  *
  * One tool per gateway operation, and no tool that is not one. An agent has no
  * database handle and no container: everything it changes, it changes over the
- * same HTTP contract a dashboard would use, with a short-lived token that
- * cannot reach the deletes. So this list is the whole of an agent's power, and
- * reading it is how a person finds out what a run or a chat can do.
+ * same HTTP contract a dashboard would use, with a short-lived token. So this
+ * list is the whole of an agent's power, and reading it is how a person finds
+ * out what a run or a chat can do.
  *
  * One list for both roles, deliberately. What a worker may reach is narrower
  * than what a manager may reach because its credential is bound to one task,
  * not because it was handed fewer tools — a binding is checked on every write
  * and a second tool table would be a second place for that rule to drift.
+ * {@link tasksDelete} is the one place that stops being enough: a worker's token
+ * is good for writes on its own task, so who may erase a task is answered past
+ * the binding, on the actor, and a worker calling this gets `IllegalDeletion`.
  *
  * Inputs are the API's own request schemas wherever one exists, picked off the
  * contract rather than restated, so a field the board calls optional is optional
@@ -186,6 +189,27 @@ const tasksMove = defineTool({
       payload: transition,
     });
   },
+});
+
+/**
+ * Take a card off the board for good.
+ *
+ * The one tool here that destroys something, and the description says what goes
+ * with it because a model asked to "clear these out" should be able to tell the
+ * person what they are about to lose. The rules say to confirm first; the
+ * gateway does not, which is the honest division — a confirmation is a property
+ * of the conversation, and there is nobody to ask inside an HTTP call.
+ */
+const tasksDelete = defineTool({
+  description:
+    "Delete a task. Its comments, sessions, runs and artifacts go with it and there is no undo, so confirm with the person before calling this.",
+  endpoint: "DELETE /tasks/:taskId",
+  input: TaskRef,
+  name: "tasks_delete",
+  run: ({ client, input }) =>
+    client.tasks
+      .delete({ params: input })
+      .pipe(Effect.as({ deleted: true, taskId: input.taskId })),
 });
 
 /** The task's whole thread, oldest first — the order it is read in. */
@@ -373,6 +397,7 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   tasksCreate,
   tasksEdit,
   tasksMove,
+  tasksDelete,
   commentsList,
   commentsAdd,
   runsStatus,

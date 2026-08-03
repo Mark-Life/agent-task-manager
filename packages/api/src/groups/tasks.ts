@@ -21,6 +21,7 @@ import {
   OpenApi,
 } from "effect/unstable/httpapi";
 import {
+  IllegalDeletion,
   IllegalInitialStatus,
   IllegalTransition,
   InvalidInput,
@@ -36,7 +37,7 @@ import {
   TaskPlacement,
   TaskTransition,
 } from "../schemas/task";
-import { AdminAccess, ReadAccess, TaskWriteAccess } from "../security";
+import { ReadAccess, TaskWriteAccess } from "../security";
 
 /**
  * A flat list, filtered. Both filters are optional and they compose: no filter
@@ -99,9 +100,10 @@ const patch = HttpApiEndpoint.patch("patch", "/tasks/:taskId", {
   .annotate(OpenApi.Summary, "Update a task");
 
 /**
- * Move it to another column. Refused when the move is not in the status machine
- * or is but not for this kind of actor — an agent reaching for `done` and a
- * human dragging a card backwards are the same answer.
+ * Move it to another column. A person and the manager reach every column from
+ * every other one, in either direction; what is still refused is a run reaching
+ * past the one move it has, and a move to the column the card is already in,
+ * which is a placement rather than a transition.
  */
 const transition = HttpApiEndpoint.post("transition", "/tasks/:taskId/status", {
   error: [IllegalTransition, NotFound],
@@ -145,14 +147,20 @@ const selectNextSession = HttpApiEndpoint.put(
   .annotate(OpenApi.Summary, "Choose the session the next run uses");
 
 /**
- * Remove it. Admin, because a task takes its whole thread, its sessions and
- * every run on it when it goes.
+ * Remove it, and its whole thread, its sessions and every run on it with it.
+ *
+ * Ordinary work rather than the destructive scope, because the manager agent
+ * clears cards off a board on somebody's say-so and the alternative is minting
+ * it a credential that could also delete a project. Who may is checked past the
+ * scope, on the actor: a person and the manager, and no run — a worker's token
+ * is good for writes on the task it was dispatched for, which without that
+ * check would include erasing it.
  */
 const remove = HttpApiEndpoint.delete("delete", "/tasks/:taskId", {
-  error: NotFound,
+  error: [IllegalDeletion, NotFound],
   params: { taskId: TaskId },
 })
-  .middleware(AdminAccess)
+  .middleware(TaskWriteAccess)
   .annotate(OpenApi.Summary, "Delete a task");
 
 /** The board, and everything about where a card sits on it. */

@@ -13,6 +13,7 @@ import { type BoardMove, moveOnBoard } from "@/api/board-cache";
 import {
   allowedTargets,
   type BoardDrag,
+  destinationOf,
   planDrop,
 } from "@/features/board/rank";
 
@@ -90,11 +91,9 @@ const planned = (plan: BoardDrag | null): BoardMove => {
   return plan;
 };
 
-/** Every pair of columns the table refuses a person, derived rather than listed. */
-const illegalPairs = TASK_STATUSES.flatMap((from) =>
-  TASK_STATUSES.filter(
-    (to) => to !== from && !canTransition({ actorKind: "human", from, to })
-  ).map((to) => ({ from, to }))
+/** Every pair of distinct columns, which is every drag a person may now make. */
+const crossings = TASK_STATUSES.flatMap((from) =>
+  TASK_STATUSES.filter((to) => to !== from).map((to) => ({ from, to }))
 );
 
 describe("planDrop, within a column", () => {
@@ -163,16 +162,28 @@ describe("planDrop, across columns", () => {
     });
   });
 
-  test("every move the table refuses a person is refused before a request", () => {
-    expect(illegalPairs.length).toBeGreaterThan(0);
-    for (const pair of illegalPairs) {
+  test("every column reaches every other one, in either direction", () => {
+    for (const pair of crossings) {
       expect(
         planDrop({
           activeId: firstIn(pair.from).id,
           columns: board,
           overId: pair.to,
         })
-      ).toBeNull();
+      ).toMatchObject({ kind: "transition", to: pair.to });
+    }
+  });
+
+  test("the plan agrees with the status machine on every crossing", () => {
+    for (const pair of crossings) {
+      const plan = planDrop({
+        activeId: firstIn(pair.from).id,
+        columns: board,
+        overId: pair.to,
+      });
+      expect(plan !== null).toBe(
+        canTransition({ actorKind: "human", ...pair })
+      );
     }
   });
 
@@ -212,9 +223,29 @@ describe("allowedTargets", () => {
       for (const to of nextStatuses({ actorKind: "human", from })) {
         expect(allowedTargets(from).has(to)).toBe(true);
       }
-      for (const pair of illegalPairs.filter((held) => held.from === from)) {
-        expect(allowedTargets(from).has(pair.to)).toBe(false);
-      }
     }
+  });
+
+  test("dims nothing, because a person may drop a card anywhere", () => {
+    for (const from of TASK_STATUSES) {
+      expect(allowedTargets(from)).toEqual(new Set(TASK_STATUSES));
+    }
+  });
+});
+
+describe("destinationOf", () => {
+  test("a column names itself", () => {
+    for (const status of TASK_STATUSES) {
+      expect(destinationOf(board, status)).toBe(status);
+    }
+  });
+
+  test("a card names the column it sits in, so hovering one still lights it", () => {
+    expect(destinationOf(board, idOf(6))).toBe("review");
+  });
+
+  test("anything else is nowhere", () => {
+    expect(destinationOf(board, idOf(99))).toBeNull();
+    expect(destinationOf(board, "elsewhere")).toBeNull();
   });
 });

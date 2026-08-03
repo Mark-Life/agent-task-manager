@@ -20,6 +20,7 @@ export {
   AgentSessionEnded,
   ArtifactAlreadyPromoted,
   Forbidden,
+  IllegalDeletion,
   IllegalInitialStatus,
   IllegalTransition,
   InvalidInput,

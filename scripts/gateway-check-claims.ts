@@ -186,18 +186,34 @@ export const boardClaims = (caller: Caller, token: string) =>
     });
     const taskId = idOf(filed.body) as TaskId;
 
-    const illegal = yield* caller.call({
-      body: { to: "review" },
+    // Two columns forward in one move, which the machine used to refuse and now
+    // allows anybody holding this token: the board is the operator's to arrange.
+    const jumped = yield* caller.call({
+      body: { to: "done" },
       method: "POST",
       path: `/tasks/${taskId}/status`,
       token,
     });
     yield* check({
-      detail: `${illegal.status} ${failureOf(illegal.body)._tag ?? "no tag"}`,
+      detail: `${jumped.status} ${(jumped.body as { status?: string }).status ?? "no status"}`,
       ok:
-        illegal.status === CONFLICT &&
-        failureOf(illegal.body)._tag === "IllegalTransition",
-      step: "a move that is not in the status machine is 409, not 500",
+        jumped.status === OK &&
+        (jumped.body as { status?: string }).status === "done",
+      step: "ideas -> done in one move, in either direction",
+    });
+
+    const sameColumn = yield* caller.call({
+      body: { to: "done" },
+      method: "POST",
+      path: `/tasks/${taskId}/status`,
+      token,
+    });
+    yield* check({
+      detail: `${sameColumn.status} ${failureOf(sameColumn.body)._tag ?? "no tag"}`,
+      ok:
+        sameColumn.status === CONFLICT &&
+        failureOf(sameColumn.body)._tag === "IllegalTransition",
+      step: "a move to the column the card is already in is 409, not 500",
     });
 
     return { created: filed.traceId, projectId, taskId };

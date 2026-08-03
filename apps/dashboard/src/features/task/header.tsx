@@ -5,7 +5,6 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { TaskDetail } from "@workspace/api";
-import type { TaskStatus } from "@workspace/domain";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,27 +19,10 @@ import {
 import { Badge } from "@workspace/ui/components/badge";
 import { Button } from "@workspace/ui/components/button";
 import { Spinner } from "@workspace/ui/components/spinner";
-import { type ComponentProps, useCallback, useState } from "react";
+import { useCallback, useState } from "react";
 import { useDeleteTask } from "@/api/tasks";
-import { STATUS_LABELS } from "@/features/task/task-fields";
 import { TaskFormDialog } from "@/features/task/task-form";
 import { formatRelative } from "@/lib/format";
-
-/**
- * One accent carries the column that is spending a worker slot; everything else
- * is quiet. A board of five equally loud badges tells a reader nothing about
- * where their attention belongs.
- */
-const STATUS_VARIANTS = {
-  backlog: "outline",
-  done: "outline",
-  ideas: "outline",
-  in_progress: "default",
-  review: "secondary",
-} as const satisfies Record<
-  TaskStatus,
-  ComponentProps<typeof Badge>["variant"]
->;
 
 interface TaskHeaderProps {
   readonly detail: TaskDetail;
@@ -51,6 +33,10 @@ interface TaskHeaderProps {
 /**
  * What the task is, in one line, and the handful of verbs that are about the
  * record rather than the work: open its pull request, edit it, delete it.
+ *
+ * The column the task sits in is not repeated here. It is a control now rather
+ * than a label — the status selector below — and a badge beside it would be the
+ * same fact twice, one of them not clickable.
  *
  * A task sitting in progress with no live run is drawn as waiting rather than
  * running, because those are different situations for the reader — one is an
@@ -103,9 +89,6 @@ export const TaskHeader = ({ detail, onDeleted }: TaskHeaderProps) => {
       </div>
 
       <div className="flex flex-wrap items-center gap-2 text-muted-foreground text-xs">
-        <Badge variant={STATUS_VARIANTS[task.status]}>
-          {STATUS_LABELS[task.status]}
-        </Badge>
         {project === null ? null : <span>{project.name}</span>}
         <span>here {formatRelative(task.statusChangedAt)}</span>
         {liveRunId === null ? null : (

@@ -24,6 +24,7 @@ const EXPECTED_NAMES = [
   "tasks_create",
   "tasks_edit",
   "tasks_move",
+  "tasks_delete",
   "comments_list",
   "comments_add",
   "runs_status",
@@ -49,6 +50,7 @@ const EXPECTED_ENDPOINTS: Readonly<Record<string, string>> = {
   runs_status: "GET /tasks/:taskId/runs[/:runId]",
   runs_stop: "POST /tasks/:taskId/commands/stop",
   tasks_create: "POST /tasks",
+  tasks_delete: "DELETE /tasks/:taskId",
   tasks_edit: "PATCH /tasks/:taskId",
   tasks_get: "GET /tasks/:taskId",
   tasks_list: "GET /tasks",
@@ -68,6 +70,7 @@ const TASK_SCOPED = [
   "runs_rerun",
   "runs_status",
   "runs_stop",
+  "tasks_delete",
   "tasks_edit",
   "tasks_get",
   "tasks_move",
@@ -128,10 +131,17 @@ describe("the agent tool table", () => {
     }
   });
 
-  it("offers no delete, because the manager's scope cannot reach one", () => {
-    for (const tool of AGENT_TOOLS) {
-      expect(tool.endpoint.startsWith("DELETE ")).toBe(false);
-    }
+  it("offers exactly one delete, and it is a task", () => {
+    const deletes = AGENT_TOOLS.filter((tool) =>
+      tool.endpoint.startsWith("DELETE ")
+    );
+    expect(deletes.map((tool) => tool.name)).toEqual(["tasks_delete"]);
+  });
+
+  it("says in the delete's own description what goes with the task", () => {
+    const remove = agentToolByName("tasks_delete");
+    expect(remove?.description).toContain("no undo");
+    expect(remove?.description).toContain("confirm");
   });
 
   it("takes an optional runId on the run tools and nothing else", () => {
@@ -153,7 +163,7 @@ describe("the agent tool table", () => {
   });
 
   it("answers an unknown name with nothing rather than a guess", () => {
-    expect(agentToolByName("tasks_delete")).toBeUndefined();
+    expect(agentToolByName("tasks_archive")).toBeUndefined();
   });
 });
 

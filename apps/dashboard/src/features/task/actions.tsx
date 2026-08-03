@@ -1,8 +1,6 @@
 import {
-  CheckmarkCircle01Icon,
   Comment01Icon,
   InformationCircleIcon,
-  PlayIcon,
   ReloadIcon,
   StopIcon,
 } from "@hugeicons/core-free-icons";
@@ -19,44 +17,11 @@ import {
   useRerunTask,
   useStopRun,
 } from "@/api/run-commands";
-import { useTransitionTask } from "@/api/tasks";
+import { StatusSelect } from "@/features/task/status-select";
+import { failureText } from "@/lib/failure";
 
 /** How often a pending intent is re-read while waiting for the orchestrator to answer it. */
 const REFUSAL_POLL_MS = 3000;
-
-/**
- * What a failed request means, in the reader's terms.
- *
- * Every failure the contract declares carries a tag, and the tag is the only
- * part of it a person can act on — the rest names rows and actors. Anything
- * unlisted is a transport fault or a defect, which reads the same to whoever is
- * looking at the screen: it did not go through.
- */
-const FAILURE_TEXT: Record<string, string> = {
-  AgentSessionEnded: "That session has already ended.",
-  ArtifactAlreadyPromoted: "That file has already been promoted.",
-  Forbidden: "You do not have permission for that.",
-  IllegalTransition: "That move is not one this task can make from here.",
-  InvalidInput: "The server refused the contents.",
-  NotFound: "That no longer exists.",
-  PayloadTooLarge: "That file is over the size this endpoint accepts.",
-  RunAlreadyLive: "A run is already working on this task.",
-  RunNotLive: "That run has already ended.",
-};
-
-/**
- * A sentence for a failure, or null when there was none. Callers render the
- * null as nothing; the tagged union survives all the way from the endpoint, so
- * the branch here is on a value rather than on a parsed message.
- */
-export const failureText = (
-  error: { readonly _tag: string } | null | undefined
-) => {
-  if (error === null || error === undefined) {
-    return null;
-  }
-  return FAILURE_TEXT[error._tag] ?? "That did not go through.";
-};
 
 interface TaskActionsProps {
   readonly detail: TaskDetail;
@@ -65,36 +30,29 @@ interface TaskActionsProps {
 }
 
 /**
- * The verbs a task offers, which are exactly the ones the Telegram bot offers
- * for the same status.
+ * What can be done to a task from its own page: where it sits, what to do with
+ * the run on it, and saying something.
  *
- * A button whose only outcome is the gateway's rejection teaches a person
- * nothing except that the screen does not know what it is showing them, so the
- * set is chosen from the status and whether a run is live rather than shown in
- * full and disabled. Commenting is always available: it is the one thing that
- * is true of a task in every column.
+ * The column is a selector rather than a row of verbs. "Start", "Review" and
+ * "Approve" were the same write dressed as three buttons that came and went with
+ * the status, and between them they could only ever walk a card forwards — so
+ * the one move an operator actually needed, putting a card back where it
+ * belonged, was not here at all. A field showing where the task is, which can be
+ * set to anywhere else, is the whole of it.
+ *
+ * What is left beside it is not about the column. Stop and rerun steer a
+ * container and are refused by the orchestrator rather than by the board, so
+ * they stay buttons and stay chosen by whether there is a run to steer; a button
+ * whose only outcome is a rejection teaches a person nothing. Commenting is
+ * always available: it is the one thing that is true of a task in every column.
  */
 export const TaskActions = ({ detail, onComment }: TaskActionsProps) => {
   const { liveRunId, task } = detail;
-  const transition = useTransitionTask();
   const stop = useStopRun();
   const rerun = useRerunTask();
-  const { mutate: move } = transition;
   const { mutate: askStop } = stop;
   const { mutate: askRerun } = rerun;
 
-  const start = useCallback(
-    () => move({ taskId: task.id, to: "in_progress" }),
-    [move, task.id]
-  );
-  const review = useCallback(
-    () => move({ taskId: task.id, to: "review" }),
-    [move, task.id]
-  );
-  const approve = useCallback(
-    () => move({ taskId: task.id, to: "done" }),
-    [move, task.id]
-  );
   const stopRun = useCallback(
     () => askStop({ taskId: task.id }),
     [askStop, task.id]
@@ -104,38 +62,20 @@ export const TaskActions = ({ detail, onComment }: TaskActionsProps) => {
     [askRerun, task.id]
   );
 
-  const busy = transition.isPending || stop.isPending || rerun.isPending;
+  const busy = stop.isPending || rerun.isPending;
   const inProgress = task.status === "in_progress";
-  const filed = task.status === "ideas" || task.status === "backlog";
-  const failed = failureText(transition.error ?? stop.error ?? rerun.error);
+  const failed = failureText(stop.error ?? rerun.error);
 
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        {filed ? (
-          <Button disabled={busy} onClick={start}>
-            <HugeiconsIcon icon={PlayIcon} strokeWidth={2} />
-            Start
-          </Button>
-        ) : null}
-        {inProgress && liveRunId !== null ? (
+        <StatusSelect busy={busy} task={task} />
+        {liveRunId === null ? null : (
           <Button disabled={busy} onClick={stopRun} variant="destructive">
             <HugeiconsIcon icon={StopIcon} strokeWidth={2} />
             Stop
           </Button>
-        ) : null}
-        {inProgress ? (
-          <Button disabled={busy} onClick={review} variant="secondary">
-            <HugeiconsIcon icon={CheckmarkCircle01Icon} strokeWidth={2} />
-            Review
-          </Button>
-        ) : null}
-        {task.status === "review" ? (
-          <Button disabled={busy} onClick={approve}>
-            <HugeiconsIcon icon={CheckmarkCircle01Icon} strokeWidth={2} />
-            Approve
-          </Button>
-        ) : null}
+        )}
         {(inProgress && liveRunId === null) ||
         task.status === "review" ||
         task.status === "done" ? (

@@ -18,12 +18,14 @@
  */
 
 import {
+  IllegalDeletion,
   IllegalInitialStatus,
   IllegalTransition,
   InvalidInput,
   NotFound,
 } from "@workspace/api";
 import type {
+  IllegalDeletion as StoreIllegalDeletion,
   IllegalInitialStatus as StoreIllegalInitialStatus,
   IllegalTransition as StoreIllegalTransition,
   InvalidInput as StoreInvalidInput,
@@ -69,6 +71,15 @@ export const toIllegalTransition = (failure: StoreIllegalTransition) =>
       from: failure.from,
       taskId: failure.taskId,
       to: failure.to,
+    })
+  );
+
+/** This kind of actor may not erase a task, whatever its token is good for. */
+export const toIllegalDeletion = (failure: StoreIllegalDeletion) =>
+  Effect.fail(
+    new IllegalDeletion({
+      actorKind: failure.actorKind,
+      taskId: failure.taskId,
     })
   );
 

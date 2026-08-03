@@ -98,7 +98,7 @@ const taskWriteAccessLayer = Layer.effect(
   })
 );
 
-/** The destructive end. No agent's token is minted at this scope. */
+/** The destructive end — deleting a project. No agent's token is minted at this scope. */
 const adminAccessLayer = Layer.effect(
   AdminAccess,
   Effect.map(Access, (resolver) => {

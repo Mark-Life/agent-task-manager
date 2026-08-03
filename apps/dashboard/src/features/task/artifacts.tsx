@@ -39,8 +39,8 @@ import {
   usePromoteArtifact,
   useUploadArtifact,
 } from "@/api/artifacts";
-import { failureText } from "@/features/task/actions";
 import { ArtifactPreview, rendererFor } from "@/features/task/artifact-preview";
+import { failureText } from "@/lib/failure";
 import { formatRelative } from "@/lib/format";
 
 /** How many bytes go in a kilobyte, for a size a person reads rather than counts. */

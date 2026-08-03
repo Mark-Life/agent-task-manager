@@ -15,8 +15,11 @@ run's task-bound token be checked once, in the access middleware, against the pa
 **Two doors, one answer.** A browser sends a Better Auth session cookie; a machine sends a
 signed, scoped, expiring bearer token. Both resolve to the same three facts — the actor every
 write is attributed to, the scope the credential is good for, and the one workspace it can see.
-Scopes are floors, not exact matches: `read` is every GET, `task-write` is ordinary work,
-`admin` is the deletes. Tokens are signed rather than stored, so verifying one is arithmetic on
+Scopes are floors, not exact matches: `read` is every GET, `task-write` is ordinary work
+including erasing a task, `admin` is deleting a project. Who may erase a task is then a second
+question asked of the actor rather than the scope — a run's token reaches every write on its own
+card and still may not delete it, which a scope alone cannot express.
+Tokens are signed rather than stored, so verifying one is arithmetic on
 the request thread and there is no revocation short of rotating `BETTER_AUTH_SECRET` — which is
 why they are short-lived and why a run's token is bound to its own task.
 

@@ -802,10 +802,10 @@
         ],
         "security": [
           {
-            "adminToken": []
+            "sessionCookie": []
           },
           {
-            "sessionCookie": []
+            "taskWriteToken": []
           }
         ],
         "responses": {
@@ -823,11 +823,18 @@
             }
           },
           "403": {
-            "description": "Forbidden",
+            "description": "IllegalDeletion | Forbidden",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/IllegalDeletionJsonEncoding"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    }
+                  ]
                 }
               }
             }
@@ -4427,6 +4434,36 @@
           }
         ]
       },
+      "IllegalDeletionJsonEncoding": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": [
+              "IllegalDeletion"
+            ]
+          },
+          "actorKind": {
+            "type": "string",
+            "enum": [
+              "human",
+              "manager",
+              "worker_run",
+              "orchestrator",
+              "system"
+            ]
+          },
+          "taskId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "_tag",
+          "actorKind",
+          "taskId"
+        ],
+        "additionalProperties": false
+      },
       "Comment": {
         "type": "object",
         "properties": {
@@ -6657,7 +6694,7 @@
         "bearerFormat": "opaque"
       },
       "adminToken": {
-        "description": "Bearer token scoped to destructive operations — deleting a project or a task.",
+        "description": "Bearer token scoped to destructive operations — deleting a project.",
         "type": "http",
         "scheme": "Bearer",
         "bearerFormat": "opaque"

@@ -19,7 +19,7 @@ import { Skeleton } from "@workspace/ui/components/skeleton";
 import { Textarea } from "@workspace/ui/components/textarea";
 import { type ChangeEvent, useCallback, useState } from "react";
 import { commentsQuery, useAppendComment } from "@/api/comments";
-import { failureText } from "@/features/task/actions";
+import { failureText } from "@/lib/failure";
 import { formatRelative } from "@/lib/format";
 
 /** Enough of an id to recognise it again, and to tell two of them apart. */

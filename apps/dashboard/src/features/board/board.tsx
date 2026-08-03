@@ -1,16 +1,24 @@
 import {
-  closestCorners,
+  type CollisionDetection,
   DndContext,
   type DragEndEvent,
+  type DragOverEvent,
   DragOverlay,
   type DragStartEvent,
   PointerSensor,
+  pointerWithin,
+  rectIntersection,
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import type { BoardColumn, Task, TaskDetail } from "@workspace/api";
-import { type ProjectId, TASK_STATUSES, type TaskId } from "@workspace/domain";
+import {
+  type ProjectId,
+  TASK_STATUSES,
+  type TaskId,
+  type TaskStatus,
+} from "@workspace/domain";
 import {
   Empty,
   EmptyDescription,
@@ -29,7 +37,7 @@ import { TaskCardFace } from "@/features/board/card";
 import { Column, ColumnSkeleton } from "@/features/board/column";
 import { BoardFilters } from "@/features/board/filters";
 import { NewTask } from "@/features/board/new-task";
-import { allowedTargets, planDrop } from "@/features/board/rank";
+import { allowedTargets, destinationOf, planDrop } from "@/features/board/rank";
 
 /**
  * How far the pointer travels before a press becomes a drag. Small enough that
@@ -46,6 +54,27 @@ const LIVE_POLL_MS = 5000;
 
 /** One reference for "no columns yet", so nothing downstream re-derives on every render. */
 const NO_COLUMNS: readonly BoardColumn[] = [];
+
+/**
+ * What the pointer is over, and only then what it is near.
+ *
+ * The pointer decides, because a column is a tall target and a card is a small
+ * one: any strategy that measures rectangles against each other lets a card in a
+ * neighbouring column win over the column the pointer is actually inside, which
+ * is how the top half of a column came to refuse drops — the columns beside it
+ * are full of cards up there, and empty further down. Asking "which droppables
+ * contain the pointer" removes the comparison entirely; among those, dnd-kit
+ * prefers the smallest, so hovering a card still resolves to that card and
+ * hovering a column's empty space resolves to the column.
+ *
+ * The fallback covers the pointer being between two columns or outside the
+ * board, where nothing contains it and the greatest overlap with the dragged
+ * card is the best available guess.
+ */
+const overOrNear: CollisionDetection = (args) => {
+  const under = pointerWithin(args);
+  return under.length > 0 ? under : rectIntersection(args);
+};
 
 /** What the board needs from whoever mounted it: the filter, and where a card leads. */
 interface BoardProps {
@@ -96,12 +125,17 @@ const Columns = ({ children }: { readonly children: ReactNode }) => (
 /**
  * The board, and the gesture that moves work through it.
  *
- * A drag is answered locally first: the status machine decides whether the drop
- * is legal, the mutation writes the new position into the cache, and only then
- * does the request leave. Dropping a card into *in progress* is not confirmed
- * by a dialog — that move is itself the instruction to spend a worker slot, and
- * a confirmation would only ask the operator to repeat the gesture they just
- * made.
+ * A drag is answered locally first: the mutation writes the new position into
+ * the cache and only then does the request leave. Every column reaches every
+ * other one in either direction, so what the status machine still refuses a
+ * person is nothing — it is asked all the same, in one place, rather than the
+ * board deciding for itself that it agrees.
+ *
+ * Dropping a card into *in progress* is not confirmed by a dialog: that move is
+ * itself the instruction to spend a worker slot, and a confirmation would only
+ * ask the operator to repeat the gesture they just made. Dragging one *out* of
+ * it while a run is live asks that run to stop, which is the gateway's doing and
+ * the same row the Stop button writes.
  */
 export const Board = ({
   onOpenTask,
@@ -109,6 +143,7 @@ export const Board = ({
   projectId,
 }: BoardProps) => {
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [overStatus, setOverStatus] = useState<TaskStatus | null>(null);
   const board = useQuery({
     ...boardQuery(projectId),
     refetchInterval: draggingId === null ? BOARD_POLL_MS : false,
@@ -151,15 +186,31 @@ export const Board = ({
 
   const onDragStart = useCallback((event: DragStartEvent) => {
     setDraggingId(String(event.active.id));
+    setOverStatus(null);
   }, []);
 
   const onDragCancel = useCallback(() => {
     setDraggingId(null);
+    setOverStatus(null);
   }, []);
+
+  // Which column would take the card, so it can say so over its whole height
+  // rather than only where the pointer happens to be.
+  const onDragOver = useCallback(
+    (event: DragOverEvent) => {
+      setOverStatus(
+        event.over === null
+          ? null
+          : destinationOf(columns, String(event.over.id))
+      );
+    },
+    [columns]
+  );
 
   const onDragEnd = useCallback(
     (event: DragEndEvent) => {
       setDraggingId(null);
+      setOverStatus(null);
       if (event.over === null) {
         return;
       }
@@ -208,9 +259,10 @@ export const Board = ({
 
       {board.data === undefined ? null : (
         <DndContext
-          collisionDetection={closestCorners}
+          collisionDetection={overOrNear}
           onDragCancel={onDragCancel}
           onDragEnd={onDragEnd}
+          onDragOver={onDragOver}
           onDragStart={onDragStart}
           sensors={sensors}
         >
@@ -218,6 +270,7 @@ export const Board = ({
             {TASK_STATUSES.map((status) => (
               <Column
                 droppable={targets === null || targets.has(status)}
+                highlighted={overStatus === status}
                 key={status}
                 liveTaskIds={liveTaskIds}
                 onOpenTask={onOpenTask}

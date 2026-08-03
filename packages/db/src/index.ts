@@ -98,6 +98,7 @@ export { RunCommandRepo } from "./repositories/run-command";
 export { RunEventRepo, RunEventTooLarge } from "./repositories/run-event";
 export { AgentSessionEnded, AgentSessionRepo } from "./repositories/session";
 export {
+  IllegalDeletion,
   IllegalInitialStatus,
   IllegalTransition,
   type TaskCreate,

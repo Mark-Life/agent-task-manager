@@ -30,6 +30,7 @@ const SURFACE = [
   "ChatThreadRepo",
   "CommentRepo",
   "CurrentActor",
+  "IllegalDeletion",
   "IllegalInitialStatus",
   "IllegalTransition",
   "InvalidInput",
