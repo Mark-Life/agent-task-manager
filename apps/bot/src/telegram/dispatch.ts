@@ -23,6 +23,14 @@
  * and given the button that stops the turn in flight; both are in `./answer`,
  * because they are what the bot *says* rather than what it decides.
  *
+ * **Compose is the one thing that is a list in this process.** A chat with an
+ * open compose buffer holds its messages instead of storing them — resolved the
+ * same way, transcribed the same way, and then handed to `./compose` rather than
+ * to the store. Nothing runs until the *Send* button, and what that writes is
+ * one row for the whole batch, through the same append every other message takes.
+ * The buffer is checked before the armed comment and before the write, because
+ * those are the two things it has to come first of.
+ *
  * **Nothing here holds a grammy context past the reply it is sending.** Every
  * call downstream takes plain values — a chat id, a thread — because a context
  * captured before a five-minute turn answers into a conversation that has moved
@@ -35,15 +43,29 @@ import {
   type ChatThreadRepo,
   RunRepo,
 } from "@workspace/db";
-import type { ChatThread, TaskId } from "@workspace/domain";
+import type {
+  ChatThread,
+  TaskId,
+  UserId,
+  WorkspaceId,
+} from "@workspace/domain";
 import { TelegramMessageId } from "@workspace/domain";
-import { Effect, FiberSet, type Redacted } from "effect";
+import { Clock, Effect, FiberSet, type Redacted } from "effect";
 import type { Bot } from "grammy";
 import { CurrentChatProgress, observeChat } from "../chat-event";
 import type { TranscribeService } from "../transcribe";
 import { noteQueued, type QueueNotices } from "./answer";
 import { Board } from "./board";
 import type { BotService } from "./bot-service";
+import {
+  COMPOSE_EXPIRED_TEXT,
+  COMPOSE_TIMED_OUT_TEXT,
+  type ComposeBuffers,
+  type ComposePiece,
+  closeCompose,
+  composeRow,
+  showCompose,
+} from "./compose";
 import type { BotContext } from "./context";
 import { swallow } from "./helpers";
 import {
@@ -103,6 +125,8 @@ export type DispatchServices =
 export interface DispatcherOptions {
   readonly api: Bot<BotContext>["api"];
   readonly botToken: Redacted.Redacted<string>;
+  /** Where a chat's held messages wait for its *Send* button. */
+  readonly compose: ComposeBuffers;
   /** Where the "still working" line for each thread is remembered. */
   readonly notices: QueueNotices;
   readonly pending: PendingComments;
@@ -134,7 +158,7 @@ const userMessageRow = (input: {
 export const makeDispatcher = Effect.fnUntraced(function* (
   options: DispatcherOptions
 ) {
-  const { api, botToken, notices, pending } = options;
+  const { api, botToken, compose, notices, pending } = options;
   const board = yield* Board;
   const messages = yield* ChatMessageRepo;
   const runs = yield* RunRepo;
@@ -171,6 +195,131 @@ export const makeDispatcher = Effect.fnUntraced(function* (
         ? "Comment posted."
         : "That comment did not reach the board."
     );
+  });
+
+  /**
+   * Say whether a turn was already running when this write landed.
+   *
+   * Asked after the write, so a turn that claimed the thread in between is
+   * seen. The other way round, a message would look like it starts a turn and
+   * then sit silently behind one.
+   */
+  const noteIfQueued = Effect.fnUntraced(function* (input: {
+    readonly chatId: number;
+    readonly thread: ChatThread;
+  }) {
+    const { chatId, thread } = input;
+    const live = yield* runs.liveForThread({
+      threadId: thread.id,
+      workspaceId: thread.workspaceId,
+    });
+    if (live === null) {
+      return null;
+    }
+    yield* observeChat({ outcome: "queued", runId: live.id });
+    yield* noteQueued({ chatId, notices, threadId: thread.id });
+    return live.id;
+  });
+
+  /**
+   * Write a held batch as one row — what the *Send* button does.
+   *
+   * Everything a batch is, it is here: one append, so one insert, so one
+   * trigger, so one turn. The row is filed under the last message it contains,
+   * because that is the last thing the person actually sent and the one a reply
+   * in the chat sits below.
+   *
+   * Nothing after the append may fail this effect, and that is the point rather
+   * than tidiness: a failure is what puts the batch back in the buffer for the
+   * person to send again, so a failure raised *after* the write would be a
+   * second turn on the same words. Asking whether a turn was already running is
+   * therefore best-effort here, where the same question fails the update on the
+   * ordinary path — nothing retries an ordinary message.
+   */
+  const submitCompose = Effect.fn("bot.compose.submit")(function* (input: {
+    readonly chatId: number;
+    readonly pieces: readonly ComposePiece[];
+    readonly userId: UserId;
+    readonly workspaceId: WorkspaceId;
+  }) {
+    const { chatId, pieces } = input;
+    const thread = yield* ensureThread({
+      chatId: telegramChatIdOf(chatId),
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+    });
+    const row = composeRow(pieces);
+    yield* observeChat({
+      promptChars: row.body.length,
+      provider: thread.provider,
+      threadId: thread.id,
+    });
+
+    yield* messages.append({
+      ...row,
+      role: "user",
+      telegramChatId: thread.chatId,
+      telegramMessageId: TelegramMessageId.make(
+        pieces.at(-1)?.telegramMessageId ?? 0
+      ),
+      threadId: thread.id,
+      workspaceId: thread.workspaceId,
+    });
+
+    const queuedBehind = yield* noteIfQueued({ chatId, thread }).pipe(
+      Effect.orElseSucceed(() => null)
+    );
+    return { chars: row.body.length, queuedBehind, thread } as const;
+  });
+
+  /**
+   * Hold a resolved message in the chat's compose buffer, and say whether it
+   * was held — false meaning "carry on and store it the ordinary way".
+   *
+   * Two things fall through rather than being swallowed. A session nobody added
+   * to for the idle window is gone, and the message that found it out is told
+   * so and then handled normally. And a message that misses the buffer it
+   * peeked at — the *Send* button was tapped while this voice note was still
+   * being transcribed — is stored rather than dropped, which is the only
+   * behaviour that never loses words.
+   */
+  const capture = Effect.fnUntraced(function* (input: {
+    readonly chatId: number;
+    readonly ctx: BotContext;
+    readonly message: ResolvedIntake;
+  }) {
+    const { chatId, ctx } = input;
+    const now = yield* Clock.currentTimeMillis;
+    const state = compose.peek({ chatId, now });
+    if (state.kind === "idle") {
+      return false;
+    }
+    if (state.kind === "expired") {
+      // The buttons on the abandoned message are taken away as well as
+      // answered: a live *Send* over a buffer that no longer exists is the one
+      // thing left in the chat still claiming to hold somebody's words.
+      yield* closeCompose({
+        api,
+        chatId,
+        messageId: state.session.anchorMessageId,
+        text: COMPOSE_TIMED_OUT_TEXT,
+      });
+      yield* reply(ctx, COMPOSE_EXPIRED_TEXT);
+      return false;
+    }
+
+    const held = compose.add({ chatId, now, piece: input.message });
+    if (held === null) {
+      return false;
+    }
+    yield* showCompose({
+      api,
+      chatId,
+      messageId: held.anchorMessageId,
+      waiting: held.pieces.length,
+    });
+    yield* observeChat({ outcome: "composing" });
+    return true;
   });
 
   /** One inbound message, from classification to stored row. */
@@ -239,6 +388,12 @@ export const makeDispatcher = Effect.fnUntraced(function* (
       updateKind: message.intakeKind,
     });
 
+    // Compose comes first, because it is the mode that says nothing else
+    // happens.
+    if (yield* capture({ chatId, ctx, message })) {
+      return;
+    }
+
     const armed = pending.take(chatId);
     if (armed !== null) {
       yield* postComment({
@@ -253,20 +408,7 @@ export const makeDispatcher = Effect.fnUntraced(function* (
     // The write *is* the dispatch: the insert trigger publishes on
     // `atm_chat_dispatch` and the orchestrator claims the thread from there.
     yield* messages.append(userMessageRow({ message, thread }));
-
-    // Asked after the write, so a turn that claimed the thread in between is
-    // seen. The other way round, a message would look like it starts a turn and
-    // then sit silently behind one.
-    const live = yield* runs.liveForThread({
-      threadId: thread.id,
-      workspaceId: thread.workspaceId,
-    });
-    if (live === null) {
-      return;
-    }
-
-    yield* observeChat({ outcome: "queued", runId: live.id });
-    yield* noteQueued({ chatId, notices, threadId: thread.id });
+    yield* noteIfQueued({ chatId, thread });
   });
 
   /**
@@ -285,7 +427,7 @@ export const makeDispatcher = Effect.fnUntraced(function* (
       )
     );
 
-  return { handle, handleUpdate } as const;
+  return { handle, handleUpdate, submitCompose } as const;
 });
 
 /** The router, derived so a caller cannot restate its shape wrongly. */

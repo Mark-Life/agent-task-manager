@@ -44,16 +44,22 @@ export type ChatUpdateKind = (typeof CHAT_UPDATE_KINDS)[number];
 /**
  * The endings the base union cannot express. A sender who is not on the
  * allow-list was turned away rather than failed; an update the bot declined to
- * act on — an expired button, a photo — was answered rather than crashed; and a
+ * act on — an expired button, a photo — was answered rather than crashed; a
  * message that arrived while its conversation was mid-turn was stored and left
- * for the next one. Folding any of them into `errored` is how a misconfigured
- * allow-list becomes indistinguishable from a broken handler.
+ * for the next one; and a message sent into an open compose buffer was held in
+ * this process and not stored at all. Folding any of them into `errored` is how
+ * a misconfigured allow-list becomes indistinguishable from a broken handler.
+ *
+ * `composing` and `queued` are the two endings where nothing was dispatched, and
+ * they are kept apart because only one of them wrote a row: a person asking why
+ * ten messages produced no turn is asking which of the two happened.
  *
  * `done` is the ordinary ending, and on an inbound message it means the bot
  * accepted it — not that a turn finished. A turn is an `atm.run` row and counts
  * itself.
  */
 export const CHAT_EXTRA_OUTCOMES = [
+  "composing",
   "not_allowed",
   "queued",
   "rejected",
@@ -73,7 +79,7 @@ export const CHAT_OUTCOMES = [
 export type ChatOutcome = (typeof CHAT_OUTCOMES)[number];
 
 /**
- * Updates handled. The ceiling is six kinds times seven endings times three
+ * Updates handled. The ceiling is six kinds times eight endings times three
  * provider values, and it cannot grow without one of those tuples growing.
  */
 const chatUpdatesTotal = boundedCounter("atm_chat_updates_total", {

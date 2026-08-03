@@ -8,7 +8,14 @@
  * account nobody allow-listed and everything below it can read `ctx.identity`.
  * The commands are third, because the intake handler claims every message a
  * command did not — registered the other way round, `/tasks` reaches the manager
- * as the word "tasks".
+ * as the word "tasks", and `/compose` would be collected by the buffer it was
+ * meant to open.
+ *
+ * **Three pieces of per-chat state are built here and shared by name.** The
+ * queue notices, the armed comments and the compose buffers are each one map
+ * per process, created once and handed to whichever handlers need them —
+ * compose to all three of the router, the commands and the taps, because the
+ * mode is opened by a command, fed by the router and released by a button.
  *
  * **The update is handled in a fiber grammy does not wait for.** grammy's
  * built-in poller runs updates one at a time (`for (const update of updates)
@@ -43,6 +50,7 @@ import { makeQueueNotices } from "./telegram/answer";
 import { BotService } from "./telegram/bot-service";
 import { registerCallbacks } from "./telegram/callbacks";
 import { publishBotCommands, registerCommands } from "./telegram/commands";
+import { makeComposeBuffers } from "./telegram/compose";
 import type { BotContext } from "./telegram/context";
 import { makeDispatcher, makePendingComments } from "./telegram/dispatch";
 import { registerIntake } from "./telegram/intake";
@@ -149,21 +157,35 @@ export const registerHandlers = Effect.fnUntraced(function* (
       ).then(() => undefined),
   });
 
+  const compose = makeComposeBuffers();
   const notices = makeQueueNotices();
   const pending = makePendingComments();
   const dispatcher = yield* makeDispatcher({
     api: telegram.api,
     botToken: wiring.botToken,
+    compose,
     notices,
     pending,
   });
 
-  yield* registerCommands({ bot });
-  yield* registerCallbacks({ bot, pending });
+  yield* registerCommands({ bot, compose, pending });
+  yield* registerCallbacks({
+    bot,
+    compose,
+    pending,
+    submitCompose: dispatcher.submitCompose,
+  });
   // Last: it claims every message the commands above did not.
   registerIntake(bot, dispatcher.handleUpdate);
 
-  return { dispatcher, notices, pending, runUpdate, telegram } as const;
+  return {
+    compose,
+    dispatcher,
+    notices,
+    pending,
+    runUpdate,
+    telegram,
+  } as const;
 });
 
 /**

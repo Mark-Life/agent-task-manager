@@ -56,7 +56,10 @@ export interface RenderableMessage
  *
  * The intake kind is named only where it changes how the words should be read:
  * a forward is somebody else's words quoted by the person, and a voice note was
- * dictated, which is why it rambles and why its punctuation is a guess.
+ * dictated, which is why it rambles and why its punctuation is a guess. A
+ * composed message is several of those released together, each already headed
+ * with its own number and origin inside the body — so what the label adds is
+ * that it is one thing to answer rather than a person repeating themselves.
  */
 const speakerLabelOf = (message: RenderableMessage) => {
   const speaker = SPEAKER[message.role];
@@ -65,6 +68,9 @@ const speakerLabelOf = (message: RenderableMessage) => {
   }
   if (message.intakeKind === "voice") {
     return `${speaker} (voice note, transcribed):`;
+  }
+  if (message.intakeKind === "compose") {
+    return `${speaker} (several messages, sent together — answer them as one):`;
   }
   return `${speaker}:`;
 };

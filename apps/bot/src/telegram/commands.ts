@@ -3,12 +3,18 @@
  *
  * A command is the surface a person reaches for when they know what they want,
  * and there are only three kinds of them here. **Conversation** — `/new`,
- * `/threads`, `/switch`, `/history` — is the bot's own state, held in Postgres
- * and reached through the thread repository. **Board** — `/tasks`, `/board`,
- * `/stop`, `/rerun`, `/next` — is not the bot's, and every one of them is a
- * gateway call under a freshly minted token; nothing here writes a task row or
- * touches a container. **Orientation** — `/start`, `/help`, `/status` — says
- * where you are.
+ * `/compose`, `/threads`, `/switch`, `/history` — is the bot's own state, held
+ * in Postgres and reached through the thread repository, except for `/compose`,
+ * whose buffer is this process's. **Board** — `/tasks`, `/board`, `/stop`,
+ * `/rerun`, `/next` — is not the bot's, and every one of them is a gateway call
+ * under a freshly minted token; nothing here writes a task row or touches a
+ * container. **Orientation** — `/start`, `/help`, `/status` — says where you
+ * are.
+ *
+ * Commands keep working while a chat is composing, on purpose: the buffer holds
+ * what a person is *saying*, and `/stop` or `/tasks` is not that. It is the
+ * intake handler below these that a compose buffer intercepts, which is why
+ * nothing in this file has to know about one — except `/compose` itself.
  *
  * The lists themselves are drawn in `./views`, because a tapped *Next* has to
  * redraw exactly what the command drew and both go through the same function
@@ -28,15 +34,25 @@ import {
   THREAD_TITLE_MAX_CHARS,
 } from "@workspace/db";
 import { TaskId } from "@workspace/domain";
-import { DateTime, Effect, FiberSet, Option, Schema } from "effect";
+import { Clock, DateTime, Effect, FiberSet, Option, Schema } from "effect";
 import type { Api, Bot, InlineKeyboard } from "grammy";
 import { CurrentChatProgress, observeChat } from "../chat-event";
 import { actorFor, Board } from "./board";
 import type { PageKey } from "./callback-data";
+import {
+  COMPOSE_MOVED_TEXT,
+  type ComposeBuffers,
+  closeCompose,
+  composeKeyboard,
+  composeText,
+  showCompose,
+} from "./compose";
 import type { BotContext } from "./context";
+import type { PendingComments } from "./dispatch";
 import { bold, code, italic } from "./format";
 import { escapeHtml, formatRelativeTime } from "./helpers";
 import { mainKeyboard } from "./keyboard";
+import { sendText } from "./send";
 import {
   ensureThread,
   startThread,
@@ -60,6 +76,10 @@ export const BOT_COMMANDS = [
   { command: "tasks", description: "Tasks, newest column first" },
   { command: "board", description: "The board, column by column" },
   { command: "new", description: "Start a new conversation" },
+  {
+    command: "compose",
+    description: "Collect several messages, send them as one",
+  },
   { command: "threads", description: "Your conversations" },
   { command: "switch", description: "Switch to another conversation" },
   { command: "history", description: "What was said in this conversation" },
@@ -75,6 +95,7 @@ export const HELP_TEXT = [
   "",
   bold("Conversation"),
   `${code("/new")} — start a fresh conversation, with no session behind it`,
+  `${code("/compose")} — collect several messages and send them as one turn`,
   `${code("/threads")} — your conversations, newest first`,
   `${code("/switch")} — make another conversation the current one`,
   `${code("/history")} — what was said here`,
@@ -136,6 +157,10 @@ const parseTaskId = Schema.decodeUnknownOption(TaskId);
 /** What registering the commands takes. */
 export interface CommandOptions {
   readonly bot: Bot<BotContext>;
+  /** The per-chat compose buffers, which `/compose` opens. */
+  readonly compose: ComposeBuffers;
+  /** The armed comments, which opening compose spends. */
+  readonly pending: PendingComments;
 }
 
 /** What the command handlers need from the layer stack. */
@@ -155,7 +180,7 @@ export type CommandServices =
 export const registerCommands = Effect.fnUntraced(function* (
   options: CommandOptions
 ) {
-  const { bot } = options;
+  const { bot, compose, pending } = options;
   const board = yield* Board;
   const runs = yield* RunRepo;
   const run = yield* FiberSet.makeRuntimePromise<CommandServices>();
@@ -318,6 +343,60 @@ export const registerCommands = Effect.fnUntraced(function* (
           ctx,
           "New conversation, with no session behind it. The old one is still in /threads."
         );
+      })
+    )
+  );
+
+  /**
+   * Open a compose buffer, or bring an open one's buttons back within reach.
+   *
+   * A second `/compose` after twenty forwards is somebody who has scrolled past
+   * the anchor, not somebody starting over — so the words are kept and a fresh
+   * anchor is sent at the bottom, with the old one's buttons stripped. Two live
+   * send buttons over one buffer is a tap whose effect depends on how far the
+   * chat has scrolled.
+   */
+  bot.command("compose", (ctx) =>
+    runCommand(
+      ctx,
+      "compose",
+      Effect.gen(function* () {
+        const chatId = ctx.chat?.id;
+        if (chatId === undefined) {
+          return;
+        }
+        // An armed *Comment* would otherwise consume the first message of the
+        // batch, or worse, the one sent after it was released.
+        pending.take(chatId);
+
+        const now = yield* Clock.currentTimeMillis;
+        const sent = yield* sendText({
+          api: ctx.api,
+          chatId,
+          send: { ...HTML, reply_markup: composeKeyboard(0) },
+          text: composeText(0),
+        }).pipe(Effect.orElseSucceed(() => []));
+
+        const anchorMessageId = sent.at(-1)?.message_id;
+        if (anchorMessageId === undefined) {
+          // No anchor means no buttons, and a buffer nobody could release.
+          return;
+        }
+        const displaced = compose.open({ anchorMessageId, chatId, now });
+        if (displaced !== null) {
+          yield* closeCompose({
+            api: ctx.api,
+            chatId,
+            messageId: displaced.anchorMessageId,
+            text: COMPOSE_MOVED_TEXT,
+          });
+          yield* showCompose({
+            api: ctx.api,
+            chatId,
+            messageId: anchorMessageId,
+            waiting: displaced.pieces.length,
+          });
+        }
       })
     )
   );

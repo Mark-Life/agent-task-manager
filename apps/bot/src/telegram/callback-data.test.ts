@@ -4,6 +4,7 @@ import { Option } from "effect";
 import {
   CALLBACK_DATA_MAX_BYTES,
   CALLBACK_VERSION,
+  COMPOSE_VERBS,
   decodeCallbackData,
   encodeCallbackData,
   MAX_PAGE,
@@ -53,6 +54,17 @@ describe("encodeCallbackData", () => {
     );
   });
 
+  test.each(COMPOSE_VERBS.map((verb) => [verb] as const))(
+    "round-trips %s, which carries no argument at all",
+    (verb) => {
+      const encoded = encodeCallbackData({ kind: "compose", verb });
+      expect(encoded).toBe(`${CALLBACK_VERSION}:${verb}`);
+      expect(decodeCallbackData(encoded)).toEqual(
+        Option.some({ kind: "compose", verb })
+      );
+    }
+  );
+
   test("every button fits Telegram's 64-byte cap", () => {
     for (const verb of TASK_VERBS) {
       const encoded = encodeCallbackData({
@@ -81,6 +93,8 @@ describe("decodeCallbackData", () => {
     ["a page that is not a number", `${CALLBACK_VERSION}:pg:threads:x`],
     ["a negative page", `${CALLBACK_VERSION}:pg:threads:-1`],
     ["a page past the cap", `${CALLBACK_VERSION}:pg:threads:${MAX_PAGE + 1}`],
+    ["an argument on an argument-less verb", `${CALLBACK_VERSION}:cmsnd:1`],
+    ["an empty argument on one", `${CALLBACK_VERSION}:cmsnd:`],
   ])("refuses %s", (_name, raw) => {
     expect(Option.isNone(decodeCallbackData(raw))).toBe(true);
   });

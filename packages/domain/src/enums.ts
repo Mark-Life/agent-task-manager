@@ -194,12 +194,18 @@ export const CHAT_INTAKE_KINDS = [
   "text",
   "voice",
   "forward",
+  "compose",
   "command",
   "callback",
   "api",
 ] as const;
 
-/** How a user message reached us. `api` is anything that came over HTTP rather than through Telegram. */
+/**
+ * How a user message reached us. `api` is anything that came over HTTP rather
+ * than through Telegram. `compose` is several messages the sender batched and
+ * released as one — the row holds all of them, with the attribution the
+ * per-message columns cannot carry written into the body.
+ */
 export const ChatIntakeKind = Schema.Literals(CHAT_INTAKE_KINDS);
 export type ChatIntakeKind = typeof ChatIntakeKind.Type;
 
