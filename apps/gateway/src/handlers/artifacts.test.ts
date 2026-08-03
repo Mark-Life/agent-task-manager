@@ -38,7 +38,7 @@ import {
   withActor,
 } from "@workspace/db";
 import type { Project, Task, WorkspaceId } from "@workspace/domain";
-import { Actor } from "@workspace/domain";
+import { Actor, UserId } from "@workspace/domain";
 import { projectArtifactsDirOf, taskArtifactsDirOf } from "@workspace/sandbox";
 import { Effect, Layer, ManagedRuntime, Schema, Stream } from "effect";
 import {
@@ -61,6 +61,15 @@ class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
 const CONTENT_HASH = /^sha256:[0-9a-f]{64}$/;
 
 const caller = Actor.cases.system.make({ reason: APPLICATION_NAME });
+
+/**
+ * Who tears the fixtures down. Erasing a task is owner-only, so the cleanup
+ * asks as a person even though everything else here writes as the system.
+ */
+const remover = {
+  kind: "human",
+  userId: UserId.make(APPLICATION_NAME),
+} as const;
 
 const runtime = ManagedRuntime.make(
   Layer.mergeAll(
@@ -135,7 +144,7 @@ afterAll(async () => {
       yield* tasks.delete({ id: task.id, workspaceId });
       yield* tasks.delete({ id: later.id, workspaceId });
       yield* projects.delete({ id: project.id, workspaceId });
-    }).pipe(withActor(caller))
+    }).pipe(withActor(remover))
   );
   await runtime.dispose();
   rmSync(dataRoot, { force: true, recursive: true });

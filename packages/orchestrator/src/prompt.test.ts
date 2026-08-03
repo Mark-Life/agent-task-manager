@@ -116,6 +116,15 @@ const actor: Actor = {
   runId,
 };
 
+/**
+ * Who tears the fixture down. Erasing a task is owner-only, so the teardown
+ * asks as a person rather than as the loop that made it.
+ */
+const remover: Actor = {
+  kind: "human",
+  userId: UserId.make(APPLICATION_NAME),
+};
+
 /** This database has never been seeded, so there is no workspace to hang rows off. */
 class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
   "PromptTest.NoWorkspace",
@@ -245,7 +254,9 @@ afterAll(async () => {
       const tasks = yield* TaskRepo;
       const [workspace] = yield* (yield* WorkspaceRepo).list();
       if (workspace !== undefined) {
-        yield* tasks.delete({ id, workspaceId: workspace.id });
+        yield* tasks
+          .delete({ id, workspaceId: workspace.id })
+          .pipe(withActor(remover));
       }
     }).pipe(withActor(actor), Effect.provide(store))
   );

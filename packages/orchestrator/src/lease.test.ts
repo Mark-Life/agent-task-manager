@@ -36,6 +36,7 @@ import {
   newThreadId,
   type RunSubject,
   type TaskId,
+  UserId,
 } from "@workspace/domain";
 import { hostRunLayout } from "@workspace/harness";
 import { ConfigProvider, Effect, Fiber, Latch, Layer, Schedule } from "effect";
@@ -425,6 +426,9 @@ describe.skipIf(databaseUrl === undefined)("reconciling lost runs", () => {
 
   const actor = Actor.cases.system.make({ reason: "lease test" });
 
+  /** Erasing a task is owner-only, so the teardown asks as a person. */
+  const remover = Actor.cases.human.make({ userId: UserId.make("lease-test") });
+
   test("closes a run nobody holds as lost, and spares one that is held", async () => {
     const result = await runWithStore(
       Effect.gen(function* () {
@@ -492,10 +496,10 @@ describe.skipIf(databaseUrl === undefined)("reconciling lost runs", () => {
 
         yield* tasks
           .delete({ id: abandoned.task.id, workspaceId })
-          .pipe(withActor(actor));
+          .pipe(withActor(remover));
         yield* tasks
           .delete({ id: guarded.task.id, workspaceId })
-          .pipe(withActor(actor));
+          .pipe(withActor(remover));
 
         return { closed, lost, spared };
       })

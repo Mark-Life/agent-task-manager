@@ -45,6 +45,7 @@ import {
   type RunId,
   type Task,
   type TaskId,
+  UserId,
   type WorkspaceId,
 } from "@workspace/domain";
 import { Context, DateTime, Effect, Exit, Layer, Schema, Scope } from "effect";
@@ -75,6 +76,14 @@ const store = storeLayer({ applicationName: APPLICATION_NAME });
 
 /** Whoever writes here. `system` so no user row has to exist for the test. */
 const actor = Actor.cases.system.make({ reason: APPLICATION_NAME });
+
+/**
+ * Who tears the fixtures down. Erasing a task is owner-only, so the teardown
+ * asks as a person even though everything else here writes as the system.
+ */
+const remover = Actor.cases.human.make({
+  userId: UserId.make(APPLICATION_NAME),
+});
 
 /** Runs a program that needs the store and an actor to write as. */
 const runStore = <A, E>(
@@ -169,7 +178,9 @@ afterAll(async () => {
       for (const id of createdTaskIds.splice(0)) {
         // Sessions, runs, run events and commands all hang off the task by a
         // cascading key, so one delete takes the whole fixture.
-        yield* tasks.delete({ id, workspaceId }).pipe(Effect.ignore);
+        yield* tasks
+          .delete({ id, workspaceId })
+          .pipe(withActor(remover), Effect.ignore);
       }
     })
   );

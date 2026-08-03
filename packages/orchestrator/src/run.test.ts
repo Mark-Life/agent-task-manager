@@ -504,8 +504,10 @@ afterAll(async () => {
       Effect.gen(function* () {
         const tasks = yield* TaskRepo;
         yield* Effect.forEach(created, (ref) =>
+          // Erasing a task is owner-only, so the teardown asks as a person
+          // rather than as the loop that made the fixtures.
           withActor(
-            Actor.cases.orchestrator.make({ loopInstance: LOOP_INSTANCE })
+            Actor.cases.human.make({ userId: UserId.make(LOOP_INSTANCE) })
           )(tasks.delete(ref)).pipe(Effect.ignore)
         );
       })

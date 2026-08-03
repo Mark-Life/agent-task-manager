@@ -44,7 +44,7 @@ import type {
   Task,
   WorkspaceId,
 } from "@workspace/domain";
-import { Actor, CostUsd } from "@workspace/domain";
+import { Actor, CostUsd, UserId } from "@workspace/domain";
 import type { AgentEvent } from "@workspace/harness";
 import {
   AgentEventRecord,
@@ -83,6 +83,14 @@ class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
 
 const loop = Actor.cases.orchestrator.make({ loopInstance: APPLICATION_NAME });
 const seeder = Actor.cases.system.make({ reason: "ingest-test" });
+
+/**
+ * Who tears the fixtures down. Erasing a task is owner-only, so the teardown
+ * asks as a person rather than as the loop or the seeder.
+ */
+const remover = Actor.cases.human.make({
+  userId: UserId.make(APPLICATION_NAME),
+});
 
 const runtime = ManagedRuntime.make(
   Layer.mergeAll(
@@ -396,8 +404,12 @@ afterAll(async () => {
   await runtime.runPromise(
     Effect.gen(function* () {
       const tasks = yield* TaskRepo;
-      yield* tasks.delete({ id: taskOf(streamed).id, workspaceId });
-      yield* tasks.delete({ id: taskOf(restored).id, workspaceId });
+      yield* withActor(remover)(
+        Effect.all([
+          tasks.delete({ id: taskOf(streamed).id, workspaceId }),
+          tasks.delete({ id: taskOf(restored).id, workspaceId }),
+        ])
+      );
     })
   );
   await runtime.dispose();

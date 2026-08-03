@@ -30,7 +30,7 @@ import type {
   TaskStatus,
   WorkspaceId,
 } from "@workspace/domain";
-import { Actor, parseTraceparent } from "@workspace/domain";
+import { Actor, parseTraceparent, UserId } from "@workspace/domain";
 import { DateTime, Effect, Layer, Schema, Tracer } from "effect";
 import {
   type DispatchRequest,
@@ -86,6 +86,14 @@ const actor = Actor.cases.orchestrator.make({ loopInstance: APPLICATION_NAME });
 
 /** Whoever wrote the intent. `system` so no user row has to exist for the test. */
 const asker = Actor.cases.system.make({ reason: APPLICATION_NAME });
+
+/**
+ * Who tears the fixtures down. Erasing a task is owner-only, so the teardown
+ * asks as a person rather than as the loop that made them.
+ */
+const remover = Actor.cases.human.make({
+  userId: UserId.make(APPLICATION_NAME),
+});
 
 /** A task, as the thing a command names. A thread takes the same shape. */
 const taskSubject = (id: TaskId): RunSubject => ({ id, kind: "task" });
@@ -166,7 +174,9 @@ afterAll(async () => {
       for (const id of createdTaskIds.splice(0)) {
         // Comments, sessions, runs, run events and commands all hang off the
         // task by a cascading key, so one delete takes the whole fixture.
-        yield* tasks.delete({ id, workspaceId }).pipe(Effect.ignore);
+        yield* tasks
+          .delete({ id, workspaceId })
+          .pipe(withActor(remover), Effect.ignore);
       }
     })
   );

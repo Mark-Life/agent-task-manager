@@ -23,7 +23,7 @@ import type {
   TaskId,
   WorkspaceId,
 } from "@workspace/domain";
-import { Actor } from "@workspace/domain";
+import { Actor, UserId } from "@workspace/domain";
 import { DateTime, Effect, Layer, ManagedRuntime, Schema } from "effect";
 import { CurrentActor, withActor } from "../actor";
 import { storeLayer } from "../store";
@@ -45,6 +45,15 @@ class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
 ) {}
 
 const caller = Actor.cases.system.make({ reason: APPLICATION_NAME });
+
+/**
+ * Who tears the fixtures down. Erasing a task is owner-only, so the cleanup
+ * asks as a person even though everything else here writes as the system.
+ */
+const remover = {
+  kind: "human",
+  userId: UserId.make("db-artifact-test"),
+} as const;
 
 const runtime = ManagedRuntime.make(
   Layer.mergeAll(
@@ -179,7 +188,7 @@ afterAll(async () => {
       yield* tasks.delete({ id: taskA.id, workspaceId });
       yield* tasks.delete({ id: taskB.id, workspaceId });
       yield* projects.delete({ id: project.id, workspaceId });
-    }).pipe(withActor(caller))
+    }).pipe(withActor(remover))
   );
   await runtime.dispose();
 });
