@@ -212,6 +212,15 @@ export const orchestratorConfig = Effect.gen(function* () {
     )
   ) as Record<SessionProvider, string>;
 
+  // The operator's own skills directory, mounted read-only inside every
+  // container's agent home so a turn is given the same skills the operator
+  // wrote for themselves, and given them again the moment they are edited.
+  // Absent is the default and shares nothing: a run reaches no host directory
+  // that was not named here.
+  const skillsDir = yield* Config.string("ATM_SKILLS_DIR").pipe(
+    Config.withDefault(null)
+  );
+
   // Decoded through the domain's own union, so a typo is a startup failure
   // naming the legal values rather than a dispatch that picks a harness nobody
   // asked for.
@@ -244,6 +253,7 @@ export const orchestratorConfig = Effect.gen(function* () {
     retryMaxMs,
     runTimeoutMs,
     sandboxKind,
+    skillsDir,
   } as const;
 });
 

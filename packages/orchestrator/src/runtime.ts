@@ -409,6 +409,7 @@ const make = Effect.gen(function* () {
         gatewayUrl: config.gatewayUrl,
         onClose: collect,
         sandboxKind: config.sandboxKind,
+        skillsDir: config.skillsDir,
         timeoutMs: timeoutFor(context.attached),
         tokenTtlMs: tokenTtlFor({
           configured: config.agentTokenTtlMs,

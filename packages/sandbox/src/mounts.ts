@@ -9,8 +9,9 @@
  * closed by construction, and is unit-testable without a daemon: a mount added
  * by hand at a call site is a hole nobody reviews.
  *
- * Six mounts a run always gets and one it gets when it runs our own entrypoint,
- * and the reasons are each their own.
+ * Six mounts a run always gets, one it gets when the install shares a skills
+ * directory and one when it runs our own entrypoint, and the reasons are each
+ * their own.
  *
  * The run directory carries the run's comment marker, its turn spec and its
  * event ledger, and it is mounted whole at {@link CONTAINER_RUN_DIR} rather than
@@ -46,7 +47,22 @@
  * act performed by the gateway, on the host, against a database row; that
  * separation *is* the audit trail, and a writable mount erases it.
  *
- * The sixth is the bundled turn entrypoint, read-only, and it is a file rather
+ * The operator's own skills directory is mounted read-only at
+ * {@link CONTAINER_SKILLS_DIR} when the install names one, and it is the only
+ * mount that is a bind inside another bind. That is the point of it: a provider
+ * reads its personal skills from a fixed name under its config directory, so
+ * the directory has to appear *inside* the agent home or it is not found. The
+ * daemon mounts a destination before anything nested under it, which is what
+ * makes the ordering safe; the nesting buys the one thing a sibling mount
+ * cannot. Read-only, because a run reads skills and an install that let a
+ * container rewrite them would be letting one run edit the instructions every
+ * later run is given.
+ *
+ * Mounted rather than copied for the same reason as everything else here: the
+ * operator edits the skills in their own directory, and the next container sees
+ * the edit without a sync step that can be forgotten.
+ *
+ * The last is the bundled turn entrypoint, read-only, and it is a file rather
  * than a directory. It is not in the image on purpose: the image carries bun,
  * node, git and the agent CLIs, which move on a weekly rebuild, while the
  * entrypoint is this repository's own code and changes every commit — so an
@@ -124,6 +140,15 @@ export const CONTAINER_EVENT_LOG_DIR = join(
  */
 export const CONTAINER_AGENT_HOME_DIR = "/agent-home";
 
+/**
+ * Where a run finds the skills the operator shares with it. Under the agent
+ * home and named `skills`, because that is where a provider looks for the
+ * personal skills of whoever it is running as — the path is the provider's, not
+ * ours, which is why it is derived from {@link CONTAINER_AGENT_HOME_DIR} rather
+ * than chosen.
+ */
+export const CONTAINER_SKILLS_DIR = join(CONTAINER_AGENT_HOME_DIR, "skills");
+
 /** The ledger directory under an already-resolved host run directory. */
 export const eventLogDirOf = (runDir: string) =>
   join(runDir, EVENT_LOG_SEGMENT);
@@ -140,6 +165,7 @@ export const MOUNT_PURPOSES = [
   "task_artifacts",
   "project_artifacts",
   "global_artifacts",
+  "skills",
   "entrypoint",
 ] as const;
 
@@ -196,10 +222,37 @@ export interface MountExtras {
    * the image already has — a shell, in the checks that prove the plumbing.
    */
   readonly entrypointPath: string | null;
+  /**
+   * The operator's skills directory on the host, mounted read-only at
+   * {@link CONTAINER_SKILLS_DIR}. Null on an install that shares none, which is
+   * the default: a run reaches nothing of the host's until an operator names
+   * the directory it may read.
+   */
+  readonly skillsDir: string | null;
 }
 
 /** What a container that brings its own command gets: the five run mounts. */
-export const NO_MOUNT_EXTRAS: MountExtras = { entrypointPath: null };
+export const NO_MOUNT_EXTRAS: MountExtras = {
+  entrypointPath: null,
+  skillsDir: null,
+};
+
+/**
+ * The skills mount, or nothing. One function for both mount sets: what a
+ * conversation and a task may read of the host's skills is the same answer, and
+ * two copies of it is where they would come to differ.
+ */
+const skillsMounts = (extras: MountExtras): readonly Mount[] =>
+  extras.skillsDir === null
+    ? []
+    : [
+        {
+          containerPath: CONTAINER_SKILLS_DIR,
+          hostPath: extras.skillsDir,
+          purpose: "skills",
+          readOnly: true,
+        },
+      ];
 
 /**
  * The exact mount set for one run. Pure, total, and the only place the set is
@@ -259,6 +312,7 @@ export const mountsFor = (
     purpose: "global_artifacts",
     readOnly: true,
   });
+  mounts.push(...skillsMounts(extras));
   if (extras.entrypointPath !== null) {
     mounts.push({
       containerPath: CONTAINER_ENTRYPOINT_PATH,
@@ -292,6 +346,10 @@ export type ManagerMountSources = Pick<
  * optional would let a worker run dispatched with a missing path fall through
  * to this shape silently. Separate functions mean the caller names which kind
  * of turn it is starting, and both remain closed by construction.
+ *
+ * The skills directory is shared with a conversation on the same terms as with
+ * a run: the manager is the role that reads the board and writes the briefs, so
+ * the operator's own instructions are the most use to it of anywhere.
  *
  * The workspace is still mounted, and it is still read-write. The manager works
  * over HTTP and needs no checkout, but a scratch directory is where a CLI puts
@@ -327,6 +385,7 @@ export const managerMountsFor = (
       purpose: "global_artifacts",
       readOnly: true,
     },
+    ...skillsMounts(extras),
   ];
   if (extras.entrypointPath !== null) {
     mounts.push({

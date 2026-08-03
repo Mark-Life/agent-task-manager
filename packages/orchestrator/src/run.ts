@@ -164,6 +164,13 @@ export interface ExecuteRunInput {
    */
   readonly sandboxKind: SandboxKind;
   /**
+   * The operator's skills directory on the host, mounted read-only inside the
+   * agent home, or null on an install that shares none. Read from the loop's
+   * settings rather than from the run: it is one directory for the whole host,
+   * like the entrypoint bundle and unlike everything else a run is given.
+   */
+  readonly skillsDir: string | null;
+  /**
    * How long the whole turn — checkout, prompt and stream — may take before it
    * is torn down as {@link TimedOut}.
    *
@@ -191,9 +198,13 @@ const directoriesFor = Effect.fnUntraced(function* (input: {
   readonly context: DispatchContext;
   readonly dataRoot: string;
   readonly sandboxKind: SandboxKind;
+  readonly skillsDir: string | null;
 }) {
   const { context } = input;
-  const extras = { entrypointPath: entrypointBundlePathOf(input.dataRoot) };
+  const extras = {
+    entrypointPath: entrypointBundlePathOf(input.dataRoot),
+    skillsDir: input.skillsDir,
+  };
 
   if (context.attached.role === "manager") {
     const dirs = yield* materializeThreadRun({
@@ -282,6 +293,7 @@ export const executeRun = (input: ExecuteRunInput) =>
       context,
       dataRoot: input.dataRoot,
       sandboxKind: input.sandboxKind,
+      skillsDir: input.skillsDir,
     });
     yield* Ref.update(progress, (current) => ({
       ...current,
@@ -541,7 +553,12 @@ export const executeRun = (input: ExecuteRunInput) =>
 export interface PerformRunInput
   extends Pick<
     ExecuteRunInput,
-    "agentHomeDir" | "gatewayUrl" | "sandboxKind" | "timeoutMs" | "tokenTtlMs"
+    | "agentHomeDir"
+    | "gatewayUrl"
+    | "sandboxKind"
+    | "skillsDir"
+    | "timeoutMs"
+    | "tokenTtlMs"
   > {
   readonly claim: RunClaim;
   readonly env?: Readonly<Record<string, string>>;
@@ -575,7 +592,12 @@ export interface RunClosed {
 export interface RunOpenedInput<R = never>
   extends Pick<
     ExecuteRunInput,
-    "agentHomeDir" | "gatewayUrl" | "sandboxKind" | "timeoutMs" | "tokenTtlMs"
+    | "agentHomeDir"
+    | "gatewayUrl"
+    | "sandboxKind"
+    | "skillsDir"
+    | "timeoutMs"
+    | "tokenTtlMs"
   > {
   readonly context: DispatchContext;
   readonly dataRoot: string;
@@ -675,6 +697,7 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
         gatewayUrl: input.gatewayUrl,
         progress,
         sandboxKind: input.sandboxKind,
+        skillsDir: input.skillsDir,
         timeoutMs: input.timeoutMs,
         tokenTtlMs: input.tokenTtlMs,
       }).pipe(
@@ -716,6 +739,7 @@ export const performRun = (input: PerformRunInput) =>
       env: input.env,
       gatewayUrl: input.gatewayUrl,
       sandboxKind: input.sandboxKind,
+      skillsDir: input.skillsDir,
       timeoutMs: input.timeoutMs,
       tokenTtlMs: input.tokenTtlMs,
     });

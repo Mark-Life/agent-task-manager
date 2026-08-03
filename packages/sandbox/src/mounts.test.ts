@@ -14,6 +14,7 @@ import {
   CONTAINER_AGENT_HOME_DIR,
   CONTAINER_ARTIFACT_DIR,
   CONTAINER_EVENT_LOG_DIR,
+  CONTAINER_SKILLS_DIR,
   CONTAINER_WORKSPACE_DIR,
   type ManagerMountSources,
   type Mount,
@@ -78,13 +79,35 @@ describe("mountsFor", () => {
   test("the entrypoint bundle is mounted read-only, and only when there is one", () => {
     expect(byPurpose(mountsFor(sources), "entrypoint")).toBeUndefined();
 
-    const mounts = mountsFor(sources, { entrypointPath: "/data/bin/turn.js" });
+    const mounts = mountsFor(sources, {
+      entrypointPath: "/data/bin/turn.js",
+      skillsDir: null,
+    });
     const entrypoint = byPurpose(mounts, "entrypoint");
     expect(entrypoint?.hostPath).toBe("/data/bin/turn.js");
     expect(entrypoint?.containerPath).toBe(CONTAINER_ENTRYPOINT_PATH);
     // A container that could rewrite the file it is running would be rewriting
     // it for every other run on the host: one bundle serves them all.
     expect(entrypoint?.readOnly).toBe(true);
+  });
+
+  test("the operator's skills are mounted read-only, and only when shared", () => {
+    expect(byPurpose(mountsFor(sources), "skills")).toBeUndefined();
+
+    const mounts = mountsFor(sources, {
+      entrypointPath: null,
+      skillsDir: "/home/op/.agents/skills",
+    });
+    const skills = byPurpose(mounts, "skills");
+    expect(skills?.hostPath).toBe("/home/op/.agents/skills");
+    expect(skills?.containerPath).toBe(CONTAINER_SKILLS_DIR);
+    // One directory serves every container on the host, and a run that could
+    // write it would be editing the instructions every later run is given.
+    expect(skills?.readOnly).toBe(true);
+  });
+
+  test("skills land inside the agent home, which is where a provider looks", () => {
+    expect(CONTAINER_SKILLS_DIR).toBe(`${CONTAINER_AGENT_HOME_DIR}/skills`);
   });
 
   test("nothing resembling the docker socket is ever mounted", () => {
@@ -176,6 +199,7 @@ describe("managerMountsFor", () => {
     // reintroduces one, which is what a reviewer of the security boundary asks.
     const purposes = managerMountsFor(managerSources, {
       entrypointPath: "/data/bin/turn.js",
+      skillsDir: null,
     }).map((mount) => mount.purpose);
     expect(purposes).not.toContain("task_artifacts");
     expect(purposes).not.toContain("project_artifacts");
@@ -191,10 +215,21 @@ describe("managerMountsFor", () => {
   test("the entrypoint is mounted read-only where the harness looks for it", () => {
     const mounts = managerMountsFor(managerSources, {
       entrypointPath: "/data/bin/turn.js",
+      skillsDir: null,
     });
     const entrypoint = byPurpose(mounts, "entrypoint");
     expect(entrypoint?.containerPath).toBe(CONTAINER_ENTRYPOINT_PATH);
     expect(entrypoint?.readOnly).toBe(true);
+  });
+
+  test("a conversation is given the operator's skills on the same terms", () => {
+    const mounts = managerMountsFor(managerSources, {
+      entrypointPath: null,
+      skillsDir: "/home/op/.agents/skills",
+    });
+    const skills = byPurpose(mounts, "skills");
+    expect(skills?.containerPath).toBe(CONTAINER_SKILLS_DIR);
+    expect(skills?.readOnly).toBe(true);
   });
 
   test("the container sees its run and workspace where every other turn does", () => {
