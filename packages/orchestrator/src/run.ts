@@ -103,6 +103,7 @@ import {
   observeTurn,
   type TurnProgress,
   terminusOfFailure,
+  terminusWithBoardAccess,
 } from "./turn-progress";
 
 /** Encoder for one line of the run's event file, built once rather than per event. */
@@ -615,9 +616,13 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
     const { context } = input;
     const progress = yield* Ref.make(EMPTY_TURN_PROGRESS);
     const closed = yield* Ref.make<TerminalReport | null>(null);
+    // The ending as the close actually filed it, which is not always the one
+    // the turn handed over — see `terminusWithBoardAccess`. Kept so the value
+    // this function returns and the row it wrote say the same thing.
+    const filed = yield* Ref.make<RunTerminus | null>(null);
 
     /** Closes the run from whatever the turn ended as, including a cause. */
-    const closeFrom = (ending: RunTerminus) =>
+    const closeFrom = (given: RunTerminus) =>
       Effect.gen(function* () {
         // First, because everything after it can take time and because the
         // durable copy is what makes a re-ingest weeks later read the same
@@ -629,7 +634,7 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
         yield* preserveTranscript({
           agentHomeDir: input.agentHomeDir,
           context,
-          providerSessionId: ending.providerSessionId,
+          providerSessionId: given.providerSessionId,
         }).pipe(
           Effect.tapError((cause) =>
             Effect.logWarning("transcript not copied into the run directory", {
@@ -640,6 +645,16 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
         );
 
         const state = yield* Ref.get(progress);
+        // A turn that ended cleanly having lost the board did not end cleanly,
+        // and this is the one place that can say so: the model never failed,
+        // so nothing below the close will ever raise it. Applied before the
+        // close so the run row, the crash comment and the wide event all read
+        // the same ending.
+        const ending = terminusWithBoardAccess({
+          progress: state,
+          terminus: given,
+        });
+        yield* Ref.set(filed, ending);
         // Two authors for one fact: the loop watching the stream, and a
         // provider that wires the comment tool in-process and creates the
         // marker itself. Either is enough to spend the fallback.
@@ -648,6 +663,7 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
           branch: state.branch,
           commentPosted: state.commentPosted || marked,
           context,
+          dataRoot: input.dataRoot,
           terminus: ending,
         });
         yield* Ref.set(closed, report);
@@ -697,7 +713,11 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
     return {
       context,
       report: yield* Ref.get(closed),
-      terminus,
+      // What the close actually filed, falling back to what the turn produced
+      // on the one path where the close never ran. A caller reading a `done`
+      // here while the row says the board was lost would be the same silent
+      // success this whole path exists to remove.
+      terminus: (yield* Ref.get(filed)) ?? terminus,
     } satisfies RunOutcomeReport;
   }).pipe(Effect.withSpan("Run.opened"));
 

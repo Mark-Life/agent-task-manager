@@ -13,6 +13,12 @@
 
 import type { AgentEvent } from "@workspace/harness";
 import { clipError } from "@workspace/telemetry";
+import {
+  BOARD_ACCESS_HELD,
+  type BoardAccess,
+  boardFailureOf,
+  observeBoardAccess,
+} from "./board-access";
 import type { RunTerminus } from "./dispatch-context";
 import { describeFailure } from "./errors";
 import { isCommentTool } from "./terminal";
@@ -24,6 +30,12 @@ const UNNAMED_ERROR = "Unknown";
  * What one turn has said so far, and what it means for how the run ends.
  */
 export interface TurnProgress {
+  /**
+   * Whether the run could still write to the board, as its own tool calls
+   * proved it. Read at the close: a run that ended unable to write ends failed
+   * rather than quietly clean — see `./board-access`.
+   */
+  readonly boardAccess: BoardAccess;
   /** The branch the checkout pushed, learned at materialization. */
   readonly branch: string | null;
   /** True once a comment tool has answered successfully. */
@@ -49,6 +61,7 @@ export interface TurnProgress {
 
 /** A turn that has not said anything yet. The seed the lifecycle starts from. */
 export const EMPTY_TURN_PROGRESS: TurnProgress = {
+  boardAccess: BOARD_ACCESS_HELD,
   branch: null,
   commentPosted: false,
   eventsSeen: 0,
@@ -112,6 +125,36 @@ export const terminusOfFailure = (
 };
 
 /**
+ * The ending a run actually had, once what it could not write is accounted for.
+ *
+ * A run that spent its last hour being refused by the board still reports
+ * `done`: the model was never blocked, it simply narrated the refusals and
+ * stopped. That is the failure this whole path exists to stop being invisible,
+ * so a clean finish with no board access is rewritten as the failure it was —
+ * which is what puts the reason on the card, through the same crash comment
+ * every other failure takes.
+ *
+ * Only a clean finish is rewritten. A run that already failed has a reason of
+ * its own and it is the more useful one — a container that was OOM-killed also
+ * stopped writing to the board, and reporting that as a credential problem
+ * sends the reader somewhere there is nothing to find. A lost run is left alone
+ * for the same reason: `lost` is already the loudest thing a row can say.
+ */
+export const terminusWithBoardAccess = (input: {
+  readonly progress: TurnProgress;
+  readonly terminus: RunTerminus;
+}): RunTerminus => {
+  const { progress, terminus } = input;
+  if (terminus.kind !== "finished") {
+    return terminus;
+  }
+  const failure = boardFailureOf(progress.boardAccess);
+  return failure === null
+    ? terminus
+    : { ...terminus, ...failure, kind: "failed" };
+};
+
+/**
  * What one event changes about the run. Pure, and total over the harness's
  * union by way of its default: most kinds are timeline entries and nothing
  * else, and only the five below say something about how the run ends.
@@ -120,7 +163,15 @@ export const observeTurn = (
   progress: TurnProgress,
   event: AgentEvent
 ): TurnProgress => {
-  const seen = { ...progress, eventsSeen: progress.eventsSeen + 1 };
+  const seen = {
+    ...progress,
+    // Folded on every event rather than in the `tool_result` branch below,
+    // because that branch is about the comment tool specifically and this is
+    // about all of them — including the calls a run makes after it has already
+    // commented, which are exactly the ones a late expiry takes out.
+    boardAccess: observeBoardAccess(progress.boardAccess, event),
+    eventsSeen: progress.eventsSeen + 1,
+  };
   switch (event.kind) {
     case "session_init":
       return { ...seen, providerSessionId: event.providerSessionId };

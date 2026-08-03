@@ -942,6 +942,11 @@ const make = Effect.gen(function* () {
         branch: null,
         commentPosted: false,
         context,
+        // A run whose loop process died is the case with the most to salvage:
+        // it wrote no comment, and whatever it left in its artifacts directory
+        // is all there is of it. The handoff is read here for the same reason
+        // it is read on the ordinary path.
+        dataRoot: config.dataRoot,
         terminus,
       });
       yield* emitLostRun({

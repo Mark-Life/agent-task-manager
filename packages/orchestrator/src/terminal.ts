@@ -58,6 +58,7 @@ import {
   sessionIdOf,
   workspaceIdOf,
 } from "./dispatch-context";
+import { readHandoff } from "./handoff";
 import { clipToBytes } from "./mapping";
 import type { WorkerAttachment } from "./subject";
 
@@ -139,6 +140,23 @@ const fallbackCommentBody = (text: string) => {
   return clipped.length === text.length ? clipped : clipped + TRUNCATION_NOTE;
 };
 
+/**
+ * Says the comment came out of a file rather than off the wire.
+ *
+ * Worth a line because the two are not the same claim. A comment the agent
+ * posted is the agent choosing to say that; a handoff is a file the loop found
+ * and attached, and a reader deciding whether to trust it wants to know which
+ * they are looking at. The path is named so the artifact is findable beside it.
+ */
+const handoffNote = (path: string) =>
+  `_Attached from \`${path}\` — this run could not post it itself._\n\n`;
+
+/** A handoff as the card shows it: the note, then the file, clipped as one body. */
+const handoffCommentBody = (input: {
+  readonly body: string;
+  readonly path: string;
+}) => handoffNote(input.path) + fallbackCommentBody(input.body);
+
 /** Where this run's marker file lives on the host. */
 const markerPathOf = (context: DispatchContext) =>
   commentMarkerPathOf(context.layout);
@@ -190,6 +208,13 @@ export interface RunClosure {
   /** Whether the run posted a comment of its own. Decides the fallback. */
   readonly commentPosted: boolean;
   readonly context: DispatchContext;
+  /**
+   * Where the artifacts tree lives, which is where a run that could not reach
+   * the board left its handoff. Passed in rather than read off the context: the
+   * context carries the run's own layout, and the artifact folders are siblings
+   * of it rather than anything under it.
+   */
+  readonly dataRoot: string;
   readonly terminus: RunTerminus;
 }
 
@@ -206,6 +231,13 @@ export interface TerminalReport {
   readonly commentPosted: boolean;
   readonly errorCommented: boolean;
   readonly fallbackCommented: boolean;
+  /**
+   * Whether the fallback comment came off disk rather than out of the stream.
+   * Counted separately because it is the one that says the board write path
+   * failed and the recovery worked — the number an operator wants is how often
+   * that happens, not how often a comment was posted for a run.
+   */
+  readonly handoffAttached: boolean;
   readonly outcome: RunOutcome;
   readonly runClosed: boolean;
   readonly sessionEnded: boolean;
@@ -225,6 +257,7 @@ const FALLBACK_COMMENT: CommentKind = "fallback";
 interface BoardWrites {
   readonly errorCommented: boolean;
   readonly fallbackCommented: boolean;
+  readonly handoffAttached: boolean;
   readonly transitioned: boolean;
 }
 
@@ -236,6 +269,7 @@ interface BoardWrites {
 const NO_BOARD_WRITES: BoardWrites = {
   errorCommented: false,
   fallbackCommented: false,
+  handoffAttached: false,
   transitioned: true,
 };
 
@@ -273,22 +307,51 @@ const closeOnTask = Effect.fnUntraced(function* (input: {
       ).pipe(bestEffort("posting the crash comment"))
     : null;
 
-  // The braces to the stop hook's belt. Only when the run posted nothing of its
-  // own, and only when it actually said something — an empty final message is a
-  // run that had nothing to add, not a comment worth collapsing in the UI.
-  const wantsFallback =
-    !closure.commentPosted && terminus.finalText.trim().length > 0;
-  const fallbackComment = wantsFallback
-    ? yield* asActor(
-        comments.append({
-          author: { kind: "agent", runId: context.runId, sessionId },
-          body: fallbackCommentBody(terminus.finalText),
-          kind: FALLBACK_COMMENT,
-          taskId,
-          workspaceId,
-        })
-      ).pipe(bestEffort("posting the fallback comment"))
-    : null;
+  // The braces to the stop hook's belt, from whichever source still has the
+  // run's words. Only when the run posted nothing of its own.
+  //
+  // The handoff is read first and wins, because the case the two are competing
+  // over is the one it was written for: a run that lost the board wrote the
+  // file *because* it could not post, and its final message is then the
+  // narration of that failure rather than the work. A run that never lost the
+  // board writes no handoff, so this costs one `stat` on the ordinary path.
+  //
+  // Read even when there is nothing to fall back to otherwise — a run killed
+  // mid-sentence has no final message at all, and its handoff is the only
+  // thing left of it.
+  const handoff = closure.commentPosted
+    ? null
+    : yield* readHandoff({ dataRoot: closure.dataRoot, taskId }).pipe(
+        bestEffort("reading the handoff off disk")
+      );
+
+  // An empty final message is a run that had nothing to add, not a comment
+  // worth collapsing in the UI. A handoff is never empty — `readHandoff`
+  // answers null for a blank file.
+  const fallbackBody = (() => {
+    if (closure.commentPosted) {
+      return null;
+    }
+    if (handoff !== null) {
+      return handoffCommentBody(handoff);
+    }
+    return terminus.finalText.trim().length > 0
+      ? fallbackCommentBody(terminus.finalText)
+      : null;
+  })();
+
+  const fallbackComment =
+    fallbackBody === null
+      ? null
+      : yield* asActor(
+          comments.append({
+            author: { kind: "agent", runId: context.runId, sessionId },
+            body: fallbackBody,
+            kind: FALLBACK_COMMENT,
+            taskId,
+            workspaceId,
+          })
+        ).pipe(bestEffort("posting the fallback comment"));
 
   // The one move a run may make, and it is the same move for all three
   // endings. `after` is deliberately absent: the card goes to the bottom of
@@ -300,6 +363,7 @@ const closeOnTask = Effect.fnUntraced(function* (input: {
   return {
     errorCommented: errorComment !== null,
     fallbackCommented: fallbackComment !== null,
+    handoffAttached: handoff !== null && fallbackComment !== null,
     transitioned: moved !== null,
   } satisfies BoardWrites;
 });
@@ -416,6 +480,7 @@ export const closeRun = Effect.fn("Run.close")(function* (closure: RunClosure) {
     commentPosted: closure.commentPosted,
     errorCommented: board.errorCommented,
     fallbackCommented: board.fallbackCommented,
+    handoffAttached: board.handoffAttached,
     outcome,
     runClosed: closed !== null,
     sessionEnded: ended !== null,
