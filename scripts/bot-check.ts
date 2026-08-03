@@ -7,11 +7,12 @@
  * The bot's own handlers are registered exactly as `apps/bot/src/index.ts`
  * registers them, on a real grammy `Bot`, and driven with synthetic updates
  * through `bot.handleUpdate` — the same entry point long polling uses. What is
- * substituted is the two things that would leave the machine: every Telegram API
- * call is answered by a transformer installed on `bot.api`, so `getMe`, a reply
- * and a callback answer are recorded rather than sent; and the board client is a
- * layer that records the calls a tapped button makes, because the gateway is a
- * second process.
+ * substituted is the three things that would leave the machine: every Telegram
+ * API call is answered by a transformer installed on `bot.api`, so `getMe`, a
+ * reply and a callback answer are recorded rather than sent; the board client is
+ * a layer that records the calls a tapped button makes, because the gateway is a
+ * second process; and the transcriber hears one fixed sentence, because Groq is
+ * a paid API and what the voice claim is about is where the words end up.
  *
  * Nothing here runs an agent, and after the cut nothing in `apps/bot` can: a
  * message becomes a `chat_message` row, the insert trigger wakes the
@@ -23,7 +24,7 @@
  * the real access gate, the real router, the real thread repository, and the
  * real `atm.chat` ledger read back off the disk.
  *
- * Seven claims:
+ * The claims:
  *
  * **The door.** An account nobody allow-listed is refused with one sentence and
  * leaves one row saying `not_allowed` with no user on it. A refusal that vanishes
@@ -31,6 +32,10 @@
  *
  * **The conversation.** A text message from an allow-listed account opens a
  * thread, stores the message, and leaves a row naming the thread.
+ *
+ * **The voice note.** A voice message comes back as the words that were heard
+ * in it, and is stored as the transcript. The sender of a voice note has no
+ * other way to see what arrived.
  *
  * **The queue.** A message sent while the thread has a live turn is stored all
  * the same and answered with one line carrying a *Force send* button; a second
@@ -41,8 +46,9 @@
  * same queue a human's Stop on a task goes through, and the only way this
  * process can end a turn.
  *
- * **The answer.** A finished turn's row is delivered into the conversation and
- * the queued line is taken down with it.
+ * **The answer.** A turn that is still closing itself out is waited for, and its
+ * row is delivered into the conversation with the queued line taken down beside
+ * it — never as "the turn ended without an answer".
  *
  * **The switch.** `/new` opens a second conversation and takes over as current;
  * a *Switch* button on the first makes it current again — the callback decoded
@@ -118,6 +124,7 @@ import {
 } from "../apps/bot/src/telegram/answer";
 import { Board } from "../apps/bot/src/telegram/board";
 import { encodeCallbackData } from "../apps/bot/src/telegram/callback-data";
+import { TranscribeService } from "../apps/bot/src/transcribe";
 import { CheckFailed, chatRowsFor, check } from "./bot-check-claims";
 import { ensureWorkspace } from "./store/workspace";
 
@@ -142,6 +149,13 @@ const DENIED_TELEGRAM_USER = 700_000_002;
 /** How long a forked update fiber gets to finish before a claim gives up on it. */
 const SETTLE_TIMEOUT = "20 seconds";
 
+/**
+ * How long the answer claim leaves the turn mid-close before writing what it
+ * said. Longer than one read of the run row, so a delivery that did not wait
+ * cannot pass by luck.
+ */
+const ANSWER_WRITE_DELAY = "1500 millis";
+
 /** How often the ledger and the database are asked whether it has got there yet. */
 const POLL = "100 millis";
 
@@ -156,6 +170,18 @@ const SPINNING_CALLS = 8;
 
 /** The chat id is minted from the clock, kept inside Telegram's signed 32-bit group range. */
 const CHAT_ID_RANGE = 1_000_000_000;
+
+/** What `getFile` answers for the voice note this check sends. */
+const VOICE_FILE_PATH = "voice/file_1.oga";
+
+/** What the stand-in transcriber hears in it. */
+const VOICE_TRANSCRIPT = "test, test, one, two, three";
+
+/**
+ * The "audio" the file download answers with. A few bytes: nothing decodes
+ * them, because the transcriber that would is substituted too.
+ */
+const VOICE_FILE_BYTES = new TextEncoder().encode("ogg");
 
 /** One Telegram API call this check intercepted instead of making. */
 interface ApiCall {
@@ -187,6 +213,12 @@ const apiResultFor = (method: string, payload: Record<string, unknown>) => {
   if (method === "getMe") {
     return botInfo;
   }
+  if (method === "getFile") {
+    return {
+      file_id: String(payload.file_id ?? ""),
+      file_path: VOICE_FILE_PATH,
+    };
+  }
   if (method === "sendMessage" || method === "editMessageText") {
     return {
       chat: { id: Number(payload.chat_id ?? 0), type: "private" },
@@ -211,6 +243,47 @@ const recordingTransformer = (calls: ApiCall[]): Transformer =>
     calls.push({ method, payload });
     return Promise.resolve({ ok: true, result: apiResultFor(method, payload) });
   }) as unknown as Transformer;
+
+/**
+ * A transcriber that hears one fixed sentence.
+ *
+ * Groq is a paid API and a key this deployment may not hold, and what the claim
+ * is about is not Whisper's accuracy — it is that whatever came back reaches
+ * the chat the voice note was sent from.
+ */
+const stubTranscribeLayer = Layer.succeed(TranscribeService, {
+  available: true,
+  transcribe: () =>
+    Effect.succeed({
+      chars: VOICE_TRANSCRIPT.length,
+      durationMs: 42,
+      text: VOICE_TRANSCRIPT,
+    }),
+} as unknown as Context.Service.Shape<typeof TranscribeService>);
+
+/**
+ * The one HTTP call `apps/bot` makes outside grammy: the voice file behind a
+ * file id. Every other URL goes to the real fetch, so nothing else this process
+ * does is affected, and the swap is released with the scope that took it.
+ */
+const withVoiceFileFetch = Effect.acquireRelease(
+  Effect.sync(() => {
+    const real = globalThis.fetch;
+    globalThis.fetch = ((input: unknown, init?: unknown) => {
+      const url = String(
+        input instanceof Request ? input.url : (input as string | URL)
+      );
+      return url.includes("/file/bot")
+        ? Promise.resolve(new Response(VOICE_FILE_BYTES))
+        : (real as (a: unknown, b?: unknown) => Promise<Response>)(input, init);
+    }) as typeof globalThis.fetch;
+    return real;
+  }),
+  (real) =>
+    Effect.sync(() => {
+      globalThis.fetch = real;
+    })
+);
 
 /** One board call this check intercepted instead of making. */
 interface BoardCall {
@@ -346,6 +419,23 @@ const messageUpdate = (options: {
       from: { first_name: "Check", id: options.fromId, is_bot: false },
       message_id: options.messageId,
       text: options.text,
+    },
+    update_id: options.messageId,
+  }) as Update;
+
+/** A voice note as Telegram would deliver it. */
+const voiceUpdate = (options: {
+  readonly chatId: number;
+  readonly fromId: number;
+  readonly messageId: number;
+}) =>
+  ({
+    message: {
+      chat: { first_name: "Check", id: options.chatId, type: "private" },
+      date: Math.floor(Date.now() / MS_PER_SECOND),
+      from: { first_name: "Check", id: options.fromId, is_bot: false },
+      message_id: options.messageId,
+      voice: { duration: 3, file_id: "AgADvoice", file_unique_id: "u" },
     },
     update_id: options.messageId,
   }) as Update;
@@ -603,6 +693,47 @@ const wiredClaims = (options: {
       step: "the row spends nothing: what a turn costs is the turn's own row",
     });
 
+    // The voice note. Sent before a turn is live on the thread, so what comes
+    // back is the echo and nothing else.
+    const beforeVoice = calls.length;
+    yield* Effect.promise(() =>
+      telegram.bot.handleUpdate(
+        voiceUpdate({
+          chatId,
+          fromId: ALLOWED_TELEGRAM_USER,
+          messageId: 4,
+        })
+      )
+    );
+    const echoed = yield* eventually({
+      effect: Effect.sync(() => calls.slice(beforeVoice)),
+      holds: (since) =>
+        since.some((call) =>
+          String(call.payload.text ?? "").includes(VOICE_TRANSCRIPT)
+        ),
+      step: "a voice note is answered with what was heard in it",
+    });
+    yield* check({
+      detail: `the bot said ${JSON.stringify(echoed.find((call) => String(call.payload.text ?? "").includes(VOICE_TRANSCRIPT))?.payload.text)}`,
+      ok: echoed.some((call) =>
+        String(call.payload.text ?? "").includes(VOICE_TRANSCRIPT)
+      ),
+      step: "the transcript comes back into the chat the voice note came from",
+    });
+    const spokenRow = yield* eventually({
+      effect: messages.recent({ limit: 10, threadId: opened.id, workspaceId }),
+      holds: (rows) => rows.some((row) => row.body === VOICE_TRANSCRIPT),
+      step: "the transcript is stored as the person's turn",
+    });
+    const voiceRow = spokenRow.find((row) => row.body === VOICE_TRANSCRIPT);
+    yield* check({
+      detail: `intake ${String(voiceRow?.intakeKind)}, transcriptChars ${String(voiceRow?.transcriptChars)}`,
+      ok:
+        voiceRow?.intakeKind === "voice" &&
+        voiceRow?.transcriptChars === VOICE_TRANSCRIPT.length,
+      step: "the stored row says it was a voice note and how long the transcript was",
+    });
+
     // The queue. A turn is opened the way the loop opens one, because after the
     // cut this process cannot.
     const turn = yield* openTurn({
@@ -715,23 +846,41 @@ const wiredClaims = (options: {
       step: "the stop names the conversation, not a task and not a container",
     });
 
-    // The answer.
-    yield* closeTurn({ runId: turn.id, workspaceId }).pipe(
-      Effect.provide(turnStoreLayer)
-    );
+    // The answer, delivered against a turn that is still closing itself out.
+    //
+    // This is the order the loop writes in and the order the bot is woken in:
+    // the terminal run event is appended by the ingest first, and the answer and
+    // the run's own outcome land after it. Delivering here while the run row
+    // still says `running` is the whole point of the claim — read eagerly, the
+    // chat says "the turn ended running without an answer" about a turn that
+    // answered.
     const spoken = "here is what I did";
-    yield* messages.append({
-      body: spoken,
-      role: "manager",
-      runId: turn.id,
-      threadId: opened.id,
-      workspaceId,
-    });
     const beforeAnswer = calls.length;
-    yield* deliverAnswer({
-      notices,
-      run: { id: turn.id, workspaceId },
-    });
+    const closingOut = Effect.sleep(ANSWER_WRITE_DELAY).pipe(
+      Effect.andThen(
+        messages.append({
+          body: spoken,
+          role: "manager",
+          runId: turn.id,
+          threadId: opened.id,
+          workspaceId,
+        })
+      ),
+      // After the message, because that is the contract `closeChatTurn` keeps:
+      // a run that reads as ended has its answer beside it already.
+      Effect.andThen(
+        closeTurn({ runId: turn.id, workspaceId }).pipe(
+          Effect.provide(turnStoreLayer)
+        )
+      )
+    );
+    yield* Effect.all(
+      [
+        closingOut,
+        deliverAnswer({ notices, run: { id: turn.id, workspaceId } }),
+      ],
+      { concurrency: "unbounded" }
+    );
     const delivered = calls.slice(beforeAnswer);
     yield* check({
       detail: `the bot said ${JSON.stringify(delivered.find((call) => call.method === "sendMessage")?.payload.text)}`,
@@ -741,6 +890,13 @@ const wiredClaims = (options: {
           String(call.payload.text ?? "").includes(spoken)
       ),
       step: "the finished turn's own row is what the conversation is answered with",
+    });
+    yield* check({
+      detail: `${delivered.filter((call) => String(call.payload.text ?? "").includes("without an answer")).length} answerless lines sent`,
+      ok: delivered.every(
+        (call) => !String(call.payload.text ?? "").includes("without an answer")
+      ),
+      step: "a turn still closing out is waited for, not called answerless",
     });
     yield* check({
       detail: `${delivered.filter((call) => call.method === "deleteMessage").length} queued lines taken down`,
@@ -860,15 +1016,22 @@ const botCheck = Effect.gen(function* () {
   const chatId = -1 * (Date.now() % CHAT_ID_RANGE);
 
   const boardCalls: BoardCall[] = [];
-  yield* wiredClaims({
-    boardCalls,
-    chatId,
-    wiring: booted.wiring,
-    workspaceId: booted.workspaceId,
-  }).pipe(
-    Effect.provide(appLayer(booted.wiring, stubBoardLayer(boardCalls))),
-    Effect.scoped
-  );
+  yield* Effect.gen(function* () {
+    yield* withVoiceFileFetch;
+    yield* wiredClaims({
+      boardCalls,
+      chatId,
+      wiring: booted.wiring,
+      workspaceId: booted.workspaceId,
+    }).pipe(
+      Effect.provide(
+        appLayer(booted.wiring, {
+          board: stubBoardLayer(boardCalls),
+          transcribe: stubTranscribeLayer,
+        })
+      )
+    );
+  }).pipe(Effect.scoped);
 
   yield* Effect.logInfo(
     `every claim held; read the updates back with EVENT_LOG_DIR=${CHECK_EVENT_DIR} bun run logs`

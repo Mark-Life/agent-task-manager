@@ -54,6 +54,17 @@ export const RUN_EVENT_CHANNEL = "atm_run_event";
 /** How often the unsent claims are looked at, and the channel's own repair. */
 export const DEFAULT_NOTIFY_REPAIR_INTERVAL_MS = 60_000;
 
+/**
+ * How many notices are worked on at once.
+ *
+ * Every notice waits for the close-out it was woken by — a couple of seconds
+ * for a task's notice, longer for a conversation whose answer is still being
+ * written — and one lane would mean a busy afternoon delivering each of those
+ * waits end to end. Bounded rather than unbounded because each lane is a
+ * database read and a Telegram send, and the pool behind them is small.
+ */
+const NOTICE_CONCURRENCY = 8;
+
 /** The first reconnect delay after the listening connection drops. */
 const RECONNECT_BASE_MS = 1000;
 
@@ -182,7 +193,7 @@ export const runNotifyListener = Effect.fnUntraced(function* (options: {
       })
     ),
     Stream.retry(reconnectSchedule),
-    Stream.mapEffect(onNotice)
+    Stream.mapEffect(onNotice, { concurrency: NOTICE_CONCURRENCY })
   );
 
   // `Stream.tick` emits immediately, so a restart's first act is to look at

@@ -24,6 +24,13 @@
  * bot hears the run's terminal event, reads the answer row the turn wrote, and
  * sends it. A model's own markdown is escaped rather than parsed — a code fence
  * that Telegram refuses is an answer nobody sees at all.
+ *
+ * **The terminal event is not the last write of the turn.** It is appended by
+ * the ingest while the container is still shutting down, and the run's outcome
+ * and the manager's message land after it. A reader that answered the instant
+ * it was woken would find a run still marked `running` and a conversation with
+ * nothing in it, and would say so — "the turn ended running without an answer",
+ * about a turn that answered. So both reads settle: see `../settle`.
  */
 
 import { ChatMessageRepo, ChatThreadRepo, RunRepo } from "@workspace/db";
@@ -36,6 +43,7 @@ import type {
 } from "@workspace/domain";
 import { Effect } from "effect";
 import { InlineKeyboard } from "grammy";
+import { settle, settledRun } from "../settle";
 import { BotService } from "./bot-service";
 import { encodeCallbackData } from "./callback-data";
 import { formatFooter, italic } from "./format";
@@ -206,12 +214,37 @@ export type AnswerServices =
 const ANSWER_LOOKBACK = 10;
 
 /**
+ * How long the answer row itself is waited for, once the run has settled.
+ *
+ * The loop writes the message before it closes the run row, so by the time a
+ * run reads as ended its answer is already there — this window is the allowance
+ * for a loop that has not been restarted onto that ordering yet, and it is
+ * short because the only thing on the other side of it is one insert.
+ */
+const ANSWER_WINDOW_MS = 2000;
+
+/** The newest thing the manager said on this run, or null if it said nothing. */
+const answerIn = (input: {
+  readonly messages: readonly ChatMessage[];
+  readonly runId: RunId;
+}) =>
+  [...input.messages]
+    .reverse()
+    .find((row) => row.role === "manager" && row.runId === input.runId) ?? null;
+
+/**
  * Render one finished manager turn into the conversation it belongs to.
  *
  * Called from the run-event listener when a run with no task reaches a terminal
  * event. Answers with the Telegram message id it sent, or null where there was
  * nothing to say it into — a thread opened from the dashboard has no chat, and
  * that is a thread the dashboard reads rather than a failure.
+ *
+ * Both reads wait for the close-out rather than racing it. The run is read
+ * until it is no longer live, so the economics under the answer are the run's
+ * own and not a row still saying `running`; the conversation is then read until
+ * the manager's message is in it. A turn that genuinely said nothing costs the
+ * second window and is reported as what it was.
  */
 export const deliverAnswer = Effect.fn("bot.answer.deliver")(function* (input: {
   readonly notices: QueueNotices;
@@ -222,7 +255,17 @@ export const deliverAnswer = Effect.fn("bot.answer.deliver")(function* (input: {
   const messages = yield* ChatMessageRepo;
   const telegram = yield* BotService;
 
-  const run = yield* runs.byId(input.run);
+  const run = yield* settledRun({
+    runId: input.run.id,
+    runs,
+    workspaceId: input.run.workspaceId,
+  });
+  if (run === null) {
+    yield* Effect.logWarning("no run row behind a finished turn", {
+      runId: input.run.id,
+    });
+    return null;
+  }
   if (run.threadId === null) {
     return null;
   }
@@ -237,15 +280,19 @@ export const deliverAnswer = Effect.fn("bot.answer.deliver")(function* (input: {
   const chatId = Number(thread.chatId);
   yield* clearQueued({ chatId, notices: input.notices, threadId: thread.id });
 
-  const recent = yield* messages.recent({
-    limit: ANSWER_LOOKBACK,
-    threadId: thread.id,
-    workspaceId: thread.workspaceId,
+  const answer = yield* settle({
+    read: messages
+      .recent({
+        limit: ANSWER_LOOKBACK,
+        threadId: thread.id,
+        workspaceId: thread.workspaceId,
+      })
+      .pipe(
+        Effect.map((recent) => answerIn({ messages: recent, runId: run.id }))
+      ),
+    settled: (found) => found !== null,
+    windowMs: ANSWER_WINDOW_MS,
   });
-  const answer =
-    [...recent]
-      .reverse()
-      .find((row) => row.role === "manager" && row.runId === run.id) ?? null;
 
   const sent = yield* sendText({
     api: telegram.api,

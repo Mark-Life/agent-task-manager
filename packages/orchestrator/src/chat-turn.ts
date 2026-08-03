@@ -239,6 +239,12 @@ export interface ChatTurnClosure {
  * indistinguishable from a bot that died, and because the message the person
  * asked stays unread either way: the watermark advanced when the prompt was
  * built, so the next turn is about whatever they say next.
+ *
+ * **Called before the run row closes**, and that ordering is a contract rather
+ * than a preference: the interface delivering this message into Telegram is
+ * woken by the run's terminal event and waits for the run to stop reading as
+ * live before it looks for the row. Written after the close, the answer is a
+ * row nobody was still waiting for.
  */
 export const closeChatTurn = Effect.fn("Run.closeChat")(function* (
   closure: ChatTurnClosure
