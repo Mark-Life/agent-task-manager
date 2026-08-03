@@ -551,6 +551,8 @@ const RUN_SETTINGS = {
   // No gateway, so no board tools and no token: what is under test here is the
   // container, and the credential has its own claims in `./agent-token`.
   gatewayUrl: null,
+  // Nothing of the operator's own is shared with a test's container.
+  skillsDir: null,
   tokenTtlMs: 900_000,
 } as const;
 

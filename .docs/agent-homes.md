@@ -42,6 +42,13 @@ transcript into the one tree, so a run can read every other run's conversation. 
 capability the manager needs and a leak for a worker, accepted for v1. Nothing prunes
 `projects/-workspace/` either — that tree grows one JSONL per run forever.
 
+**Sharing your own skills.** Set `ATM_SKILLS_DIR` to the directory you keep your skills in — on
+this host `~/.agents/skills` — and every container gets it read-only at `/agent-home/skills`,
+which is where Claude looks for personal skills once `CLAUDE_CONFIG_DIR` points at the agent
+home. It is a mount and not a copy: edit a skill and the next turn has it. Create the mountpoint
+once, `mkdir -p <agent home>/skills`, so the daemon does not create it as root inside a
+directory that is yours.
+
 Override either path with `ATM_AGENT_HOME_DIR_CLAUDE` / `ATM_AGENT_HOME_DIR_CODEX`. They are
 deliberately not spelled `CLAUDE_CONFIG_DIR` / `CODEX_HOME`: those two relocate the config
 directory of whatever process exports them, including your own shell's.

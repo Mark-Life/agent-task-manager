@@ -28,6 +28,7 @@ const config: OrchestratorConfig = {
   retryMaxMs: 1008,
   runTimeoutMs: 1009,
   sandboxKind: "local",
+  skillsDir: "/tmp/atm-banner-test/skills",
 };
 
 const input = {

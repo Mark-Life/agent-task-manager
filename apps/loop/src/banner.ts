@@ -75,6 +75,8 @@ export const bannerFields = (input: BannerInput) => ({
   sandbox: input.config.sandboxKind,
   service: SERVICE_NAME,
   shutdownGraceMs: input.shutdownGraceMs,
+  /** Null on an install that shares none of the operator's own skills. */
+  skills: input.config.skillsDir,
 });
 
 /** What the banner's message says, before the fields are annotated onto it. */

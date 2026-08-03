@@ -16,6 +16,13 @@ audit trail. Never the docker socket — that one mount turns a sandbox into hos
 container that runs our own turn entrypoint gets one more, read-only: the bundled entrypoint
 at `/opt/atm/turn.js` (see below).
 
+**The operator's skills, when there are any.** `ATM_SKILLS_DIR` names one host directory,
+mounted **ro** at `/agent-home/skills` — inside the agent home, because that is where a provider
+looks for the personal skills of whoever it is running as. It is the one bind inside another
+bind, and the nesting is what makes it work at all; the daemon mounts a destination before
+anything under it. Unset shares nothing, which is the default. Mounted rather than copied, so an
+edit on the host is in the next container with no sync step.
+
 A chat turn has no task and no project, so it gets four: the run directory, the agent home, a
 scratch `/workspace` released with the run, and the global promoted folder read-only. Nothing
 it writes to `/workspace` outlives the container, and the prompt says so.
