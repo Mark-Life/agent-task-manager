@@ -22,7 +22,9 @@ import {
   makeProviderRegistry,
   ProviderRegistry,
 } from "./provider";
+import { STOP_HOOK_COMMAND_ENV_VAR } from "./stop-hook";
 import {
+  containerStopHookCommand,
   TURN_EXIT_CODE,
   TURN_SPEC_ENV_VAR,
   TURN_SPEC_FLAG,
@@ -141,9 +143,9 @@ describe("runTurn", () => {
   });
 
   /** Runs the entrypoint over a real directory against a scripted provider. */
-  const run = (provider: AgentProvider) => {
+  const run = (provider: AgentProvider, spec?: TurnSpec) => {
     const specPath = join(runDir, "turn-spec.json");
-    writeFileSync(specPath, JSON.stringify(specFor(runDir)));
+    writeFileSync(specPath, JSON.stringify(spec ?? specFor(runDir)));
     return Effect.runPromise(
       runTurn({ specPath }).pipe(
         Effect.provide(
@@ -191,6 +193,37 @@ describe("runTurn", () => {
     } finally {
       process.env.PATH = previousPath;
       Reflect.deleteProperty(process.env, CLAUDE_CLI_PATH_ENV_VAR);
+    }
+  });
+
+  /**
+   * The bug this pair is about: a manager turn answering in a conversation was
+   * handed the worker's stop hook, refused for not commenting on a task it does
+   * not have, and spent its next turn saying so to the person in the chat.
+   */
+  it("registers the stop hook for a turn that has a task", async () => {
+    Reflect.deleteProperty(process.env, STOP_HOOK_COMMAND_ENV_VAR);
+    try {
+      await run(scripted([SESSION_INIT, TERMINUS]));
+      expect(process.env[STOP_HOOK_COMMAND_ENV_VAR]).toBe(
+        containerStopHookCommand()
+      );
+    } finally {
+      Reflect.deleteProperty(process.env, STOP_HOOK_COMMAND_ENV_VAR);
+    }
+  });
+
+  it("registers no stop hook for a turn with no task, whatever the image left set", async () => {
+    const spec = specFor(runDir);
+    process.env[STOP_HOOK_COMMAND_ENV_VAR] = "bun /opt/atm/turn.js --stop-hook";
+    try {
+      await run(scripted([SESSION_INIT, TERMINUS]), {
+        ...spec,
+        identity: { ...spec.identity, taskId: null },
+      });
+      expect(process.env[STOP_HOOK_COMMAND_ENV_VAR]).toBeUndefined();
+    } finally {
+      Reflect.deleteProperty(process.env, STOP_HOOK_COMMAND_ENV_VAR);
     }
   });
 

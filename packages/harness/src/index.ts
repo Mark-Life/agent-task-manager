@@ -139,6 +139,7 @@ export {
   COMMENT_MARKER_FILE,
   commentMarkerPath,
   commentMarkerPathOf,
+  commentRuleApplies,
   decideStop,
   NO_COMMENT_REFUSAL,
   parseStopHookPayload,

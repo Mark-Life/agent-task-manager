@@ -23,7 +23,7 @@ import {
 } from "@workspace/domain";
 import { DateTime } from "effect";
 import type { PromptMode, RunPlacement } from "./render";
-import { SHARED_RULES } from "./rules";
+import { ARTIFACT_RULES, SHARED_RULES } from "./rules";
 import { buildWorkerPrompt, commentLabelOf } from "./worker";
 
 const at = DateTime.makeUnsafe("2026-08-02T10:00:00.000Z");
@@ -134,6 +134,7 @@ describe("a fresh session's prompt", () => {
     expect(text).toContain(
       "- Read-only reference material: `/artifacts/project` (this project) and `/artifacts/global`."
     );
+    expect(text).toContain(ARTIFACT_RULES);
     expect(text).toContain(SHARED_RULES);
   });
 

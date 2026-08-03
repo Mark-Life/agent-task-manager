@@ -18,6 +18,13 @@
  * and Codex additionally rejects a block whose reason is empty. One schema
  * covers both, with the differences typed as optional rather than papered over.
  *
+ * **The rule is about a turn that has a task.** A manager turn answers in a
+ * conversation and has no card to comment on, so the hook is never registered
+ * on one — see {@link commentRuleApplies}, which is what the entrypoint asks
+ * before it names the command. {@link decideStop} itself stays unconditional:
+ * it is the rule for a turn the rule applies to, and a second "does this
+ * count" test inside it would be the same question answered in two places.
+ *
  * Everything here is pure. The decision takes a parsed payload and a boolean;
  * reading stdin, the marker file and the clock belongs to the executable in
  * `scripts/`, so the rule itself can be tested without a provider.
@@ -34,6 +41,7 @@ import { join } from "node:path";
 import { Option, Schema } from "effect";
 import { trimmedOrNull } from "./env";
 import { containerRunLayout, type RunLayout } from "./paths";
+import type { TurnSpecIdentity } from "./turn-spec";
 
 /**
  * The file whose existence means this run posted a comment.
@@ -78,6 +86,26 @@ export const commentMarkerPath = (
 ) =>
   trimmedOrNull(env[COMMENT_MARKER_ENV_VAR]) ??
   commentMarkerPathOf(containerRunLayout);
+
+/**
+ * Whether this turn is one the comment rule is about at all.
+ *
+ * The rule is "post a comment on your task", and a manager turn has no task: it
+ * answers in a conversation, and the orchestrator writes that answer back when
+ * the turn ends. Registering the hook on one produces a refusal the agent has
+ * no way to obey — {@link NO_COMMENT_REFUSAL} arrives as its next prompt, names
+ * a task that does not exist, and the turn is spent explaining that it will not
+ * post onto an unrelated card to satisfy a hook. That is what a person reading
+ * the chat sees, and it is the whole of this bug.
+ *
+ * Read off the turn's own identity rather than off a role flag, because
+ * `taskId` being null *is* the fact the rule turns on: there is nothing to
+ * comment on. A container started by hand with a taskless spec gets the same
+ * answer for the same reason.
+ */
+export const commentRuleApplies = (
+  identity: Pick<TurnSpecIdentity, "taskId">
+) => identity.taskId !== null;
 
 /**
  * Names the command each provider registers as its stop hook. The path of the

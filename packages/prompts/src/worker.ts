@@ -39,7 +39,7 @@ import {
   section,
   speech,
 } from "./render";
-import { SHARED_RULES, WORKER_RULES } from "./rules";
+import { ARTIFACT_RULES, SHARED_RULES, WORKER_RULES } from "./rules";
 
 /**
  * How much of a session id goes in a label. Enough to tell two sessions on one
@@ -148,6 +148,7 @@ const freshPrompt = (input: WorkerPromptInput) => {
     section("Acceptance criteria", task.acceptance),
     section("Project", projectSection(project)),
     section("Where you are working", placementSection({ placement, repoUrl })),
+    ARTIFACT_RULES,
     SHARED_RULES,
     section(
       "The conversation on this task so far",

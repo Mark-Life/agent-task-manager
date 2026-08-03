@@ -7,10 +7,21 @@
  * has to be a rollback of them. An operator editing an agent's instructions
  * underneath a running deployment is a change with no diff and no author.
  *
- * Three blocks, and the split is the whole of what a role is allowed to change.
+ * Four blocks, and the split is the whole of what a role is allowed to change.
  * {@link SHARED_RULES} is true of anything this system runs in a container.
- * {@link WORKER_RULES} and {@link MANAGER_RULES} are the per-role text, and
- * they are the only per-role text there is.
+ * {@link ARTIFACT_RULES} is true of a run that has an artifacts folder, which
+ * is every worker and no manager. {@link WORKER_RULES} and
+ * {@link MANAGER_RULES} are the per-role text, and they are the only per-role
+ * text there is.
+ *
+ * **A manager is told none of the worker's ending.** It has no card, no
+ * artifacts folder and no comment to post, and the two rules that say otherwise
+ * — the artifacts paragraph and the stop hook's comment rule — are worker rules
+ * in both directions: the text below is only given to a worker, and
+ * `commentRuleApplies` in `@workspace/harness` is what stops the hook from
+ * being registered on a turn with no task. A manager that is handed either one
+ * spends its turn explaining that it will not post onto an unrelated card,
+ * which is a real conversation that happened and the reason this split exists.
  *
  * Three of the manager's rules are board policy and not phrasing, and each is
  * enforced somewhere else as well as stated here — prompt text is guidance, and
@@ -39,19 +50,33 @@
 /**
  * What is true of every run, whatever it was started to do.
  *
- * The directories are named per run in the placement section, because their
- * paths change; the policy about them is here, because it does not. Stating
- * either in both places is how two spellings of one rule start to disagree.
+ * Both halves hold for a manager as much as for a worker: an answer in a
+ * conversation is written down like a comment is, and a sentence narrating that
+ * a card moved is noise in a chat window for the same reason it is noise in a
+ * thread.
  */
-export const SHARED_RULES = `## What survives this run
-
-You have one writable artifacts directory and two read-only ones. Anything worth keeping goes in the writable one; everything outside it is scratch and dies with the container.
-
-## What counts as finishing
+export const SHARED_RULES = `## What counts as finishing
 
 What you write down is the deliverable. Say what you did, what changed, and what the next reader needs to know — someone who was not here has only your words.
 
 Lifecycle facts are not part of that. That a run started, that a card moved, that a command was queued: the system records each of those with a time and an author, and a sentence repeating one costs a reader a line and tells them nothing.`;
+
+/**
+ * What is true of a run that has somewhere to leave output, which is every
+ * worker run and no manager one.
+ *
+ * The directories are named per run in the placement section, because their
+ * paths change; the policy about them is here, because it does not. Stating
+ * either in both places is how two spellings of one rule start to disagree.
+ *
+ * Kept out of {@link SHARED_RULES} because it is simply false of a manager
+ * turn: that run's only writable directory is its scratch directory, nothing is
+ * promoted out of it, and telling it that anything worth keeping goes there is
+ * telling it to file its work somewhere nobody will ever read.
+ */
+export const ARTIFACT_RULES = `## What survives this run
+
+You have one writable artifacts directory and two read-only ones. Anything worth keeping goes in the writable one; everything outside it is scratch and dies with the container.`;
 
 /**
  * The rule the stop hook enforces, in its positive form.
@@ -110,6 +135,12 @@ To change what a running agent is doing, add a comment with \`comments_add\` and
 ## How you are recorded
 
 Every change you make is written down as yours, tied to this conversation. You cannot make an anonymous edit and you do not need to ask permission to be attributed.
+
+## How a turn of yours ends
+
+You are not working on a card. This conversation is the work, and your reply is written into it the moment you stop — there is nothing you have to post, move or file first, and a turn where you only read the board and answered is a finished turn.
+
+\`comments_add\` writes onto a card, to brief the agent that will run it. It is for that and nothing else: never post there to record that you answered here, and never pick a card to write onto because you feel something ought to be written down.
 
 ## How you answer
 
