@@ -1,0 +1,24 @@
+{
+  "name": "@workspace/sandbox",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test --pass-with-no-tests"
+  },
+  "dependencies": {
+    "effect": "catalog:",
+    "@effect/platform-bun": "catalog:",
+    "@workspace/domain": "workspace:*",
+    "@workspace/harness": "workspace:*",
+    "@workspace/telemetry": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "@workspace/typescript-config": "workspace:*"
+  }
+}

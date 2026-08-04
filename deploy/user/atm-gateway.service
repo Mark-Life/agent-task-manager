@@ -1,0 +1,78 @@
+# The HTTP gateway, as a systemd *user* service.
+#
+# The counterpart to ../atm-gateway.service, for the other way of running this:
+# from a checkout the operator owns and edits, under their own login, rather
+# than from /opt under a `nologin` service account. That is the right shape
+# while the system is still being built — a code change is a restart, not a
+# deploy — and the wrong one once it is not, because everything the gateway can
+# reach is everything the operator can reach.
+#
+# Install:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/user/*.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now atm-gateway atm-loop
+#
+# `loginctl enable-linger <user>` is what keeps these running when nobody is
+# logged in; without it they stop with the last session and never come back
+# after a reboot.
+
+[Unit]
+Description=Agent Task Manager gateway (user)
+Documentation=file:%h/projects/agent-task-manager/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/agent-task-manager
+
+# Configuration is files, never lines in this unit. Postgres binds loopback and
+# these are the only place its password is written, so they are 0600 and under
+# the operator's own config directory. The `-` on the second means a host with
+# nothing gateway-specific to say need not create an empty file to boot.
+#
+# The checkout's own .env is still read, by the process rather than by systemd,
+# and only for names nothing here sets — the loader does not override. Anything
+# that decides how this service behaves belongs in these files, so the two
+# never disagree about one.
+EnvironmentFile=%h/.config/agent-task-manager/common.env
+EnvironmentFile=-%h/.config/agent-task-manager/gateway.env
+
+ExecStart=%h/.bun/bin/bun run apps/gateway/src/main.ts
+
+Restart=always
+RestartSec=2s
+
+# A signal is not a failure. This process shuts down through Effect's
+# interrupt path and exits 128+signal — 130 for SIGINT, 143 for SIGTERM — so
+# without this every `systemctl stop` leaves the unit `failed`, and a status
+# anyone reads afterwards says something went wrong when nothing did. Observed
+# on the host: stopping the loop exited 130 and systemd reported
+# `Failed with result 'exit-code'`.
+SuccessExitStatus=130 143
+
+# Longer than GATEWAY_SHUTDOWN_GRACE_MS, so the process's own watchdog is what
+# ends a stuck shutdown and says why. If systemd wins this race the log says
+# only that it sent SIGKILL.
+TimeoutStopSec=25s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=atm-gateway
+
+# `full` rather than `strict`: the checkout, the data root and the agent homes
+# all live under this user's home, and `strict` would make every one of them
+# read-only. What is left is still worth having — /usr and /etc cannot be
+# written by anything this starts.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=default.target

@@ -4,15 +4,20 @@
   "type": "module",
   "private": true,
   "exports": {
-    "./web": "./src/web.ts"
+    "./web": "./src/web.ts",
+    "./server": "./src/server.ts"
   },
   "dependencies": {
     "@t3-oss/env-nextjs": "^0.13.11",
     "dotenv": "^17.4.2",
-    "zod": "^4.4.3"
+    "zod": "catalog:",
+    "effect": "catalog:"
   },
   "devDependencies": {
-    "@workspace/typescript-config": "workspace:*",
-    "typescript": "^6.0.3"
+    "@workspace/typescript-config": "workspace:*"
+  },
+  "scripts": {
+    "test": "bun test --pass-with-no-tests",
+    "typecheck": "tsc --noEmit"
   }
 }

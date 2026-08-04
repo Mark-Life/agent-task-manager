@@ -1,3 +1,29 @@
 {
-  "type": "module"
+  "name": "@workspace/scripts",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test --pass-with-no-tests"
+  },
+  "dependencies": {
+    "@effect/platform-bun": "catalog:",
+    "@workspace/api": "workspace:*",
+    "@workspace/db": "workspace:*",
+    "@workspace/domain": "workspace:*",
+    "@workspace/env": "workspace:*",
+    "@workspace/harness": "workspace:*",
+    "@workspace/agent-tools": "workspace:*",
+    "@workspace/orchestrator": "workspace:*",
+    "@workspace/sandbox": "workspace:*",
+    "@workspace/telemetry": "workspace:*",
+    "@workspace/token": "workspace:*",
+    "effect": "catalog:",
+    "grammy": "catalog:"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "@workspace/typescript-config": "workspace:*"
+  }
 }

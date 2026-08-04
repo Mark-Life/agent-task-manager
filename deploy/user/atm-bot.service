@@ -1,0 +1,59 @@
+# The Telegram bot, as a systemd *user* service.
+#
+# There is no system-wide counterpart to this one. The bot holds no state, runs
+# no agent and starts no container — it is intake and rendering over the same
+# HTTP contract the dashboard uses — so it is the one process here that costs
+# nothing to leave stopped, and this file exists to be enabled on the day a
+# token does.
+#
+# It does not start without TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWLIST, and it
+# should not: a bot with an empty allowlist answers nobody, and one with no
+# token cannot connect. Both belong in bot.env, which is why it is the third
+# environment file and not a set of lines in loop.env.
+#
+#   systemctl --user enable --now atm-bot
+#
+# The allowlist is `telegramUserId:workspaceId:userId`, comma separated.
+# `bun run user:add` prints the last two for an account; the first is the
+# numeric id Telegram knows you by.
+
+[Unit]
+Description=Agent Task Manager Telegram bot (user)
+Documentation=file:%h/projects/agent-task-manager/.docs/bot.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/agent-task-manager
+
+EnvironmentFile=%h/.config/agent-task-manager/common.env
+EnvironmentFile=%h/.config/agent-task-manager/bot.env
+
+ExecStart=%h/.bun/bin/bun run apps/bot/src/main.ts
+
+Restart=always
+RestartSec=5s
+
+# A signal is not a failure. This process shuts down through Effect's
+# interrupt path and exits 128+signal — 130 for SIGINT, 143 for SIGTERM — so
+# without this every `systemctl stop` leaves the unit `failed`, and a status
+# anyone reads afterwards says something went wrong when nothing did. Observed
+# on the host: stopping the loop exited 130 and systemd reported
+# `Failed with result 'exit-code'`.
+SuccessExitStatus=130 143
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=atm-bot
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=default.target

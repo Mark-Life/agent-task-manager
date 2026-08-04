@@ -1,0 +1,67 @@
+# The orchestrator loop, as a systemd *user* service.
+#
+# The counterpart to ../atm-loop.service. See ./atm-gateway.service for what
+# this way of running the system is for and when to stop using it.
+#
+# One instance per host, and only one: two loops against one database both
+# reclaim leases at boot and both believe they own the containers they find.
+# Running this unit while the system-wide one is also enabled is the way that
+# happens by accident.
+#
+# The operator's own login is already in the `docker` group, which is what lets
+# this start a run's container. There is no SupplementaryGroups= line for the
+# same reason there is no User= — a user service is the operator, with the
+# operator's groups, and cannot be given more.
+
+[Unit]
+Description=Agent Task Manager orchestrator loop (user)
+Documentation=file:%h/projects/agent-task-manager/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/agent-task-manager
+
+# This is the file with the agent credentials in it, which is why the gateway
+# does not read it.
+EnvironmentFile=%h/.config/agent-task-manager/common.env
+EnvironmentFile=-%h/.config/agent-task-manager/loop.env
+
+ExecStart=%h/.bun/bin/bun run apps/loop/src/main.ts
+
+Restart=always
+RestartSec=5s
+
+# A signal is not a failure. This process shuts down through Effect's
+# interrupt path and exits 128+signal — 130 for SIGINT, 143 for SIGTERM — so
+# without this every `systemctl stop` leaves the unit `failed`, and a status
+# anyone reads afterwards says something went wrong when nothing did. Observed
+# on the host: stopping the loop exited 130 and systemd reported
+# `Failed with result 'exit-code'`.
+SuccessExitStatus=130 143
+
+# Longer than LOOP_SHUTDOWN_GRACE_MS. Stopping the loop means stopping every
+# container it is holding and releasing every lease it took; a SIGKILL through
+# the middle of that leaves rows that claim a run is live and a container that
+# nobody will ever reap.
+TimeoutStopSec=60s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=atm-loop
+
+# Kept for the same reason as the system unit's, and worth as little: a process
+# that can talk to the docker socket can undo all of it. It still bounds the
+# damage from a bug in this process itself, which is the failure that is
+# actually likely.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=default.target

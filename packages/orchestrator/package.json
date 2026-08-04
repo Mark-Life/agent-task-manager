@@ -1,0 +1,31 @@
+{
+  "name": "@workspace/orchestrator",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test --pass-with-no-tests"
+  },
+  "dependencies": {
+    "effect": "catalog:",
+    "@effect/platform-bun": "catalog:",
+    "@effect/sql-pg": "catalog:",
+    "@workspace/agent-tools": "workspace:*",
+    "@workspace/db": "workspace:*",
+    "@workspace/domain": "workspace:*",
+    "@workspace/harness": "workspace:*",
+    "@workspace/prompts": "workspace:*",
+    "@workspace/sandbox": "workspace:*",
+    "@workspace/telemetry": "workspace:*",
+    "@workspace/token": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "@workspace/api": "workspace:*",
+    "@workspace/typescript-config": "workspace:*"
+  }
+}

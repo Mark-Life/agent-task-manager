@@ -1,0 +1,249 @@
+/**
+ * Reading Claude's subscription allowance without spending any of it.
+ *
+ * The endpoint is the same passive one the Claude CLI reads to show remaining
+ * quota: a GET returns the rolling windows and generates nothing, so polling it
+ * is free. It is also undocumented, which is why every field access below
+ * degrades rather than throws — a body that changed shape has to read as "could
+ * not tell", never as "drained", because the two have opposite consequences.
+ *
+ * The token is re-read from disk every poll and never cached. The Claude SDK
+ * rotates it on its own cadence, and a cached one simply 401s after expiry —
+ * which lands as unavailable, distinct from a drain.
+ *
+ * Field spellings are pinned to a captured live response in
+ * `fixtures/claude-oauth-usage.json`, and the tests read that file rather than a
+ * hand-written object: the endpoint's shape is the load-bearing assumption here,
+ * so the fixture is the assumption written down.
+ */
+
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { Effect, Schema } from "effect";
+import type { FileSystem } from "effect/FileSystem";
+import type { HttpClient } from "effect/unstable/http";
+import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import {
+  type ProviderUsage,
+  type QuotaWindow,
+  UNAVAILABLE_USAGE,
+  type WindowUsage,
+} from "./types";
+
+/** The passive OAuth usage endpoint. */
+const OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+
+/**
+ * The beta tag the endpoint requires. Overridable rather than inlined because
+ * it is an undocumented contract Anthropic can rotate, and rotating it should be
+ * a config change and not a release.
+ */
+export const OAUTH_BETA_HEADER = "oauth-2025-04-20";
+
+/** Where the Claude CLI keeps the credentials it refreshes. */
+const CLAUDE_AUTH_PATH = join(homedir(), ".claude", ".credentials.json");
+
+/** A window is drained at 100%; the provider reports no explicit flag of its own. */
+const FULL_UTILIZATION = 100;
+
+/** Every weekly window key carries this prefix: account-wide, per-model, per-feature. */
+const WEEKLY_PREFIX = "seven_day";
+
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+const asRecord = (value: unknown) =>
+  value !== null && typeof value === "object"
+    ? (value as Readonly<Record<string, unknown>>)
+    : null;
+
+/**
+ * One window of the flat body. `utilization` is already 0–100 here, so nothing
+ * is rescaled; `resets_at` is an ISO string, and a garbled one degrades the
+ * reset to null rather than the whole read. A window that is absent or malformed
+ * reads as "this window is not limiting", which is the steady state — most of
+ * the per-model windows are `null` unless that bucket itself is limited.
+ */
+const parseWindow = (raw: unknown): WindowUsage | null => {
+  const window = asRecord(raw);
+  if (window === null || !isFiniteNumber(window.utilization)) {
+    return null;
+  }
+  const resetsAt =
+    typeof window.resets_at === "string"
+      ? Date.parse(window.resets_at)
+      : Number.NaN;
+  return {
+    resetsAtMs: Number.isNaN(resetsAt) ? null : resetsAt,
+    utilizationPercent: window.utilization,
+  };
+};
+
+/**
+ * The most-constraining weekly window. `ProviderUsage` carries one long-window
+ * slot while the endpoint reports an account-wide `seven_day` plus per-model and
+ * per-feature siblings, so they are scanned by prefix rather than by an
+ * allow-list — a bucket added upstream folds into the worst reading instead of
+ * slipping past a list nobody updated.
+ */
+const parseWeekly = (root: Readonly<Record<string, unknown>>) => {
+  let worst: WindowUsage | null = null;
+  for (const key of Object.keys(root)) {
+    if (!key.startsWith(WEEKLY_PREFIX)) {
+      continue;
+    }
+    const window = parseWindow(root[key]);
+    if (
+      window !== null &&
+      (worst === null || window.utilizationPercent > worst.utilizationPercent)
+    ) {
+      worst = window;
+    }
+  }
+  return worst;
+};
+
+/**
+ * Whether the paid-overflow bucket is already drawing credits. Treated as a hard
+ * drain: overflow only spends once a subscription window is full, so a run
+ * started here is a run billed by the card rather than covered by the plan, and
+ * spilling into that silently is the failure worth pausing for.
+ */
+const isOverflowActive = (root: Readonly<Record<string, unknown>>) => {
+  const extra = asRecord(root.extra_usage);
+  return (
+    extra !== null &&
+    extra.is_enabled === true &&
+    isFiniteNumber(extra.used_credits) &&
+    extra.used_credits > 0
+  );
+};
+
+/**
+ * The body as the gate reads it. Pure and total: a non-object body is
+ * unavailable, and everything below that degrades field by field.
+ *
+ * There is no `limit_reached` flag to read, so a drain is inferred three ways —
+ * a window pinned at 100%, or the overflow bucket already spending. The reached
+ * window picks the resume time: a full week wins because it is the longest wait,
+ * and overflow with neither window self-reporting full defaults to the short
+ * window so the gate re-checks in hours rather than idling for a week.
+ */
+export const parseOauthUsage = (raw: unknown): ProviderUsage => {
+  const root = asRecord(raw);
+  if (root === null) {
+    return UNAVAILABLE_USAGE;
+  }
+  const primary = parseWindow(root.five_hour);
+  const secondary = parseWeekly(root);
+  const primaryFull =
+    primary !== null && primary.utilizationPercent >= FULL_UTILIZATION;
+  const secondaryFull =
+    secondary !== null && secondary.utilizationPercent >= FULL_UTILIZATION;
+  const overflow = isOverflowActive(root);
+
+  let reachedWindow: QuotaWindow | null = null;
+  if (secondaryFull) {
+    reachedWindow = "secondary";
+  } else if (primaryFull || overflow) {
+    reachedWindow = "primary";
+  }
+
+  return {
+    available: true,
+    limitReached: primaryFull || secondaryFull || overflow,
+    primary,
+    reachedWindow,
+    secondary,
+  };
+};
+
+/**
+ * The read could not produce a signal. Typed rather than thrown, and the reason
+ * is the discriminant that tells a gate which disabled itself apart from a
+ * provider that is genuinely out.
+ */
+export class ClaudeUsageUnavailable extends Schema.TaggedErrorClass<ClaudeUsageUnavailable>()(
+  "Quota.ClaudeUsageUnavailable",
+  {
+    cause: Schema.Unknown,
+    reason: Schema.Literals(["auth-read", "auth-parse", "no-token"]),
+  }
+) {}
+
+/** The credentials file, as much of it as this needs. */
+interface ClaudeAuth {
+  readonly claudeAiOauth?: { readonly accessToken?: unknown };
+}
+
+const readToken = (fs: FileSystem, authPath: string) =>
+  fs.readFileString(authPath).pipe(
+    Effect.mapError(
+      (cause) => new ClaudeUsageUnavailable({ cause, reason: "auth-read" })
+    ),
+    Effect.flatMap((text) =>
+      Effect.try({
+        catch: (cause) =>
+          new ClaudeUsageUnavailable({ cause, reason: "auth-parse" }),
+        try: () => JSON.parse(text) as ClaudeAuth,
+      })
+    ),
+    Effect.flatMap((auth) => {
+      const token = auth.claudeAiOauth?.accessToken;
+      return typeof token === "string" && token.length > 0
+        ? Effect.succeed(token)
+        : Effect.fail(
+            new ClaudeUsageUnavailable({ cause: null, reason: "no-token" })
+          );
+    })
+  );
+
+/** Overrides, all of them for a test or for a rotated beta tag. */
+export interface ClaudeUsageOptions {
+  readonly authPath?: string;
+  readonly betaHeader?: string;
+  readonly url?: string;
+}
+
+/** What the reader is handed once, at gate construction. */
+export interface ClaudeUsageInput {
+  readonly fs: FileSystem;
+  readonly http: HttpClient.HttpClient;
+  readonly options?: ClaudeUsageOptions;
+}
+
+/**
+ * Reads the live allowance. Always succeeds: credentials failures and HTTP
+ * failures alike collapse to {@link UNAVAILABLE_USAGE}, so the gate fails open
+ * with an alert rather than failing the dispatch it was asked about. Only a 200
+ * body can produce a drain.
+ */
+export const fetchClaudeUsage = ({
+  fs,
+  http,
+  options,
+}: ClaudeUsageInput): Effect.Effect<ProviderUsage> =>
+  readToken(fs, options?.authPath ?? CLAUDE_AUTH_PATH).pipe(
+    Effect.flatMap((token) =>
+      http.execute(
+        HttpClientRequest.get(options?.url ?? OAUTH_USAGE_URL).pipe(
+          HttpClientRequest.bearerToken(token),
+          HttpClientRequest.acceptJson,
+          HttpClientRequest.setHeaders({
+            "anthropic-beta": options?.betaHeader ?? OAUTH_BETA_HEADER,
+          })
+        )
+      )
+    ),
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.flatMap((response) => response.json),
+    Effect.map(parseOauthUsage),
+    // Logged at info carrying the cause: the reason discriminant is what tells a
+    // stale token apart from a real drain, so it has to survive a log filter.
+    // The loud warning belongs to the gate, which knows it is failing open.
+    Effect.catchCause((cause) =>
+      Effect.logInfo("quota: claude usage read failed", cause).pipe(
+        Effect.as(UNAVAILABLE_USAGE)
+      )
+    )
+  );

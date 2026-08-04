@@ -1,0 +1,75 @@
+# The orchestrator loop, as a service.
+#
+# One instance per host, and only one: two loops against one database both
+# reclaim leases at boot and both believe they own the containers they find.
+# `systemctl enable` on a second host pointed at the same Postgres is the way
+# that happens by accident.
+#
+# Not deployed from here: install it as described in README.md. Verified only by
+# `systemd-analyze verify`.
+
+[Unit]
+Description=Agent Task Manager orchestrator loop
+Documentation=file:/opt/agent-task-manager/deploy/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+# Harder than the gateway's dependency on it: this process is the sole owner of
+# container lifecycle, so a daemon that is not there is not a degraded loop, it
+# is a loop that can do nothing.
+Requires=docker.service
+
+[Service]
+Type=simple
+User=atm
+Group=atm
+# The docker socket is what lets this process start a run's container. It is
+# also root on this host by any measure — anything in the `docker` group can
+# mount `/` into a container it controls. That is the cost of the sandbox
+# design, and it is why the loop's environment file carries the agent
+# credentials and the gateway's does not.
+SupplementaryGroups=docker
+WorkingDirectory=/opt/agent-task-manager
+
+EnvironmentFile=/etc/agent-task-manager/common.env
+EnvironmentFile=-/etc/agent-task-manager/loop.env
+
+ExecStart=/usr/local/bin/bun run apps/loop/src/main.ts
+
+Restart=always
+RestartSec=5s
+
+# A signal is not a failure. This process shuts down through Effect's
+# interrupt path and exits 128+signal — 130 for SIGINT, 143 for SIGTERM — so
+# without this every `systemctl stop` leaves the unit `failed`, and a status
+# anyone reads afterwards says something went wrong when nothing did. Observed
+# on the host: stopping the loop exited 130 and systemd reported
+# `Failed with result 'exit-code'`.
+SuccessExitStatus=130 143
+
+# Longer than LOOP_SHUTDOWN_GRACE_MS. Stopping the loop means stopping every
+# container it is holding and releasing every lease it took; a SIGKILL through
+# the middle of that leaves rows that claim a run is live and a container that
+# nobody will ever reap.
+TimeoutStopSec=60s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=atm-loop
+
+# Same shape as the gateway's, minus the illusion that it buys much: a process
+# that can talk to the docker socket can undo all of it. It is kept because it
+# still bounds the damage from a bug in this process itself, which is the
+# failure that is actually likely.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/agent-task-manager
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

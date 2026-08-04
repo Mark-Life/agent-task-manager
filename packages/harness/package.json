@@ -1,0 +1,25 @@
+{
+  "name": "@workspace/harness",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test --pass-with-no-tests"
+  },
+  "dependencies": {
+    "effect": "catalog:",
+    "@effect/platform-bun": "catalog:",
+    "@anthropic-ai/claude-agent-sdk": "catalog:",
+    "@openai/codex-sdk": "catalog:",
+    "@workspace/domain": "workspace:*",
+    "@workspace/telemetry": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "@workspace/typescript-config": "workspace:*"
+  }
+}

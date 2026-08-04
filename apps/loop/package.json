@@ -1,0 +1,24 @@
+{
+  "name": "loop",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test --pass-with-no-tests"
+  },
+  "dependencies": {
+    "@effect/platform-bun": "catalog:",
+    "@workspace/db": "workspace:*",
+    "@workspace/domain": "workspace:*",
+    "@workspace/harness": "workspace:*",
+    "@workspace/orchestrator": "workspace:*",
+    "@workspace/sandbox": "workspace:*",
+    "@workspace/telemetry": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:",
+    "@workspace/typescript-config": "workspace:*"
+  }
+}

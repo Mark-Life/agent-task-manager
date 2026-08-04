@@ -1,0 +1,138 @@
+# Caddy in front of the gateway, and over the dashboard's static bundle.
+#
+# Caddy owns both domains, their certificates and the browser's side of the
+# conversation; the gateway owns everything behind it, so the only way in is
+# through this file.
+#
+# Every value comes from the environment, because a Caddyfile with a hostname in
+# it is a Caddyfile that cannot be copied to a second host. Systemd gives Caddy
+# its environment the same way it gives the gateway one — see README.md.
+#
+#   ATM_DOMAIN             api.atm.example.com — the gateway's address, required
+#   ATM_ACME_EMAIL         where Let's Encrypt sends expiry warnings, required
+#   ATM_GATEWAY_ORIGIN     127.0.0.1:3100 — where the gateway listens
+#   ATM_DASHBOARD_ORIGIN   https://atm.example.com — the SPA's exact origin
+#   ATM_DASHBOARD_DOMAIN   atm.example.com — the same host without the scheme
+#   ATM_DASHBOARD_ROOT     absolute path to the built SPA's `dist`
+#
+# There is no global options block, and the ACME email is set per site instead.
+# That is what lets this file be *imported* into a Caddyfile that already serves
+# something else — a global block is only legal at the top of the main file, so
+# one here would make the only safe way to install this replacing whatever the
+# host was already serving.
+#
+# Validated with `caddy validate`. See the bottom of README.md for what has and
+# has not answered a real request.
+
+{$ATM_DOMAIN} {
+	tls {$ATM_ACME_EMAIL}
+
+	log {
+		output file /var/log/caddy/atm.log
+		format json
+	}
+
+	# Compression by content type rather than by default. `encode` with no
+	# matcher will happily gzip a `text/event-stream`, and a compressed SSE
+	# stream is one that arrives in whatever chunks the compressor felt like —
+	# which looks exactly like a run that has gone quiet.
+	encode zstd gzip {
+		match {
+			header Content-Type application/json*
+			header Content-Type text/html*
+			header Content-Type text/plain*
+		}
+	}
+
+	# The dashboard is served from Cloudflare and the gateway from here,
+	# so every call the SPA makes is cross-origin and carries a session cookie.
+	# `Allow-Origin` is one exact origin, never `*`: a wildcard and
+	# `Allow-Credentials` together are refused by every browser, and the refusal
+	# reads as an unexplained network error.
+	@dashboard header Origin {$ATM_DASHBOARD_ORIGIN}
+	header @dashboard {
+		Access-Control-Allow-Origin {$ATM_DASHBOARD_ORIGIN}
+		Access-Control-Allow-Credentials true
+		Vary Origin
+	}
+
+	# Preflight is answered here because the API has no OPTIONS routes at all —
+	# an `OPTIONS /projects` against the gateway is a 404 (checked), and a 404
+	# preflight fails the request the browser was about to make.
+	#
+	# `traceparent` and `b3` are on the allow list because the dashboard's typed
+	# client stamps both on every call, a plain board read included — neither is
+	# CORS-safelisted, so leaving them out preflights every request and then
+	# fails it. They are also the point: the gateway parents its request span on
+	# the inbound `traceparent`, so this is what makes a browser click and the
+	# run it starts one trace.
+	@preflight {
+		method OPTIONS
+		header Origin {$ATM_DASHBOARD_ORIGIN}
+	}
+	handle @preflight {
+		header {
+			Access-Control-Allow-Origin {$ATM_DASHBOARD_ORIGIN}
+			Access-Control-Allow-Credentials true
+			Access-Control-Allow-Methods "GET, POST, PATCH, PUT, DELETE, OPTIONS"
+			Access-Control-Allow-Headers "Authorization, Content-Type, traceparent, b3"
+			Access-Control-Max-Age 86400
+			Vary Origin
+		}
+		respond 204
+	}
+
+	# Run events. Caddy already stops buffering when it sees
+	# `text/event-stream`, and this says so out loud anyway: the route is named,
+	# so nobody has to infer that one path in this API behaves differently from
+	# the other thirty-one. `-1` flushes every write straight through.
+	@runEvents path_regexp ^/tasks/[^/]+/runs/[^/]+/events/stream$
+	handle @runEvents {
+		reverse_proxy {$ATM_GATEWAY_ORIGIN} {
+			flush_interval -1
+		}
+	}
+
+	# Everything else, including the spec at /openapi.json and the reference UI
+	# at /docs. Both are public on purpose: a connector configures itself from
+	# the document, and the operations it describes still refuse an unauthorized
+	# caller. Put an `@internal` matcher here if that ever stops being true.
+	handle {
+		reverse_proxy {$ATM_GATEWAY_ORIGIN}
+	}
+}
+
+# The dashboard: a directory of files, and no process behind it at all.
+#
+# It is a single-page app, so every route the user can reach by typing a URL —
+# a task's page, the board — is served by the same `index.html` and resolved by
+# the router in the browser. `try_files` is what makes a reload of
+# /tasks/<id> return the app instead of a 404.
+#
+# This host and the gateway's are two origins, which is why the block above
+# answers CORS. Serving both from one origin would remove that, at the cost of
+# teaching Caddy which of /tasks and /projects is a page and which is the API —
+# an ambiguity the dev server resolves by reading `Accept`, and one worth
+# keeping out of a front door.
+{$ATM_DASHBOARD_DOMAIN} {
+	tls {$ATM_ACME_EMAIL}
+
+	log {
+		output file /var/log/caddy/atm-dashboard.log
+		format json
+	}
+
+	encode zstd gzip
+
+	root * {$ATM_DASHBOARD_ROOT}
+
+	# Vite fingerprints everything under /assets, so a file at one of these
+	# paths never changes — a new build writes a new name. Anything else,
+	# `index.html` above all, must be revalidated or a deploy is invisible
+	# until the browser feels like asking again.
+	@fingerprinted path /assets/*
+	header @fingerprinted Cache-Control "public, max-age=31536000, immutable"
+
+	try_files {path} /index.html
+	file_server
+}

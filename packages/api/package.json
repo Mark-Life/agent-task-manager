@@ -4,16 +4,23 @@
   "type": "module",
   "private": true,
   "exports": {
-    "./router": "./src/router.ts",
-    "./client": "./src/client.ts"
+    ".": "./src/index.ts",
+    "./api": "./src/api.ts",
+    "./groups/*": "./src/groups/*.ts",
+    "./schemas/*": "./src/schemas/*.ts",
+    "./errors": "./src/errors.ts",
+    "./security": "./src/security.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test --pass-with-no-tests"
   },
   "dependencies": {
-    "@orpc/client": "^1.14.8",
-    "@orpc/server": "^1.14.8",
-    "zod": "^4.4.3"
+    "effect": "catalog:",
+    "@workspace/domain": "workspace:*"
   },
   "devDependencies": {
-    "@workspace/typescript-config": "workspace:*",
-    "typescript": "^6.0.3"
+    "@types/bun": "catalog:",
+    "@workspace/typescript-config": "workspace:*"
   }
 }
