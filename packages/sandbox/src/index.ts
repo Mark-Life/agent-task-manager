@@ -87,6 +87,16 @@ export {
   type TaskArtifactsInput,
   taskArtifactsDirOf,
 } from "./artifacts";
+// Who a run's commits are attributed to, resolved from the token. Exported for
+// a check script that wants to print the identity a loop would boot with,
+// rather than for the loop itself — `workspaceLayer` reads it on its own.
+export {
+  committerFromUser,
+  GITHUB_USER_URL,
+  noReplyEmailFor,
+  type ResolveCommitterOptions,
+  resolveCommitter,
+} from "./committer";
 export { dockerSandbox, dockerSandboxLayer } from "./docker";
 export {
   CloneFailed,

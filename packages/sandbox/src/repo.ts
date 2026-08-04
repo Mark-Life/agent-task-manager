@@ -74,13 +74,25 @@ export interface Committer {
 }
 
 /**
- * The identity commits get by default.
+ * The identity commits get when there is nobody to name.
  *
  * Set at all because a container has no `~/.gitconfig`: git refuses to commit
  * without a name and an address, and an agent that discovers that on its first
- * commit spends the rest of the turn trying to fix it. A `.invalid` address is
- * deliberate — the commits are the agent's, and pointing them at a real mailbox
- * would attribute them to a person who did not write them.
+ * commit spends the rest of the turn trying to fix it.
+ *
+ * It is no longer what a run normally commits as. `./committer` reads the
+ * account behind `ATM_GITHUB_TOKEN` and hands that identity down, because an
+ * address no account can claim is a commit GitHub cannot link to anyone: no
+ * avatar, no profile, no contribution credit, and a blame that names a string.
+ * The token already pushes the branch and opens the pull request as that
+ * person, so the author field agreeing with the pusher is the honest reading
+ * rather than a new claim — and the model's own `Co-Authored-By` trailer stays
+ * on the commit to record who actually wrote it.
+ *
+ * `.invalid` is still deliberate here. This is the identity for a run with no
+ * credential or a lookup that failed, where the alternative is guessing at a
+ * person, and a reserved TLD is the shape of "nobody" that no mail server will
+ * ever try to deliver to.
  */
 export const DEFAULT_COMMITTER: Committer = {
   email: "agent@atm.invalid",
@@ -496,13 +508,19 @@ const platformLayer = Layer.mergeAll(BunFileSystem.layer, Git.layer);
  * or a command runner of its own. The checkout's `headSha` and the
  * mirror-created flag are dropped here — a caller that wants them for an event
  * calls {@link materializeRepo} directly and provides the layer itself.
+ *
+ * The committer is optional so this still satisfies the clone seam's own type,
+ * which knows about a repo and a directory and nothing about identities. What
+ * fills it is the layer in `./workspace`, once, from the token.
  */
 export const cloneIntoWorkspace = (input: {
+  /** Null or absent takes {@link DEFAULT_COMMITTER}. */
+  readonly committer?: Committer | null;
   readonly repo: RepoSource;
   readonly targetDir: string;
 }) =>
   materializeRepo({
-    committer: null,
+    committer: input.committer ?? null,
     repo: input.repo,
     workspaceDir: input.targetDir,
   }).pipe(Effect.asVoid, Effect.provide(platformLayer));

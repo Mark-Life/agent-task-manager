@@ -41,6 +41,7 @@ import { agentHomeLoginHint, runDirOf } from "@workspace/harness";
 import { Effect, Layer } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { type ArtifactLocation, ensureArtifactDir } from "./artifacts";
+import { resolveCommitter } from "./committer";
 import { type CloneFailed, MountSourceMissing } from "./errors";
 import { eventLogDirOf, type MountPurpose } from "./mounts";
 import { cloneIntoWorkspace } from "./repo";
@@ -302,7 +303,20 @@ export const localWorkspaceLayer = (options: LocalWorkspaceOptions) =>
 /**
  * What a deployment runs: local directories, and checkouts cloned from the
  * host-side bare mirror by `./repo`.
+ *
+ * The committer is resolved here, at layer build, and closed over for the life
+ * of the process. That is the only place it can be read once: the clone seam
+ * answers with `Scope` alone and cannot ask a service who it is, and a lookup
+ * inside the clone would put a GitHub request on the path of every dispatch for
+ * an answer that cannot change while the loop runs. A build that cannot reach
+ * GitHub still produces a materializer — {@link resolveCommitter} is total —
+ * so this is never the reason a loop fails to boot.
  */
-export const workspaceLayer = localWorkspaceLayer({
-  clone: cloneIntoWorkspace,
-});
+export const workspaceLayer = Layer.effect(
+  Workspace,
+  Effect.flatMap(resolveCommitter(), (committer) =>
+    makeLocalWorkspace({
+      clone: (input) => cloneIntoWorkspace({ ...input, committer }),
+    })
+  )
+);
