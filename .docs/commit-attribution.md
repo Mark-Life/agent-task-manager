@@ -1,11 +1,18 @@
-# Why run commits say "Agent Task Manager"
+# Who a run's commits belong to
 
-One line of policy, and nothing else: `packages/sandbox/src/repo.ts:85-88` sets
-every run checkout's `user.name` and `user.email` to
-`Agent Task Manager <agent@atm.invalid>`, and no caller ever overrides it. The
-credential the run pushes with already belongs to the human — it is a GitHub CLI
-OAuth token for `Mark-Life` — so the *pusher* is the person and only the commit's
-author and committer fields say otherwise.
+Run commits used to say `Agent Task Manager <agent@atm.invalid>`, which GitHub
+can link to nobody. They now say whoever owns `ATM_GITHUB_TOKEN`, at that
+account's no-reply address, resolved once per loop boot from the token itself.
+This note is the investigation that decided it, and it records the state before
+and after — the "before" matters, because most of it is still true and it is
+what the options were weighed against.
+
+One line of policy caused it, and nothing else: `packages/sandbox/src/repo.ts`
+set every run checkout's `user.name` and `user.email` to the agent, and no
+caller overrode it. The credential the run pushes with already belongs to the
+human — it is a GitHub CLI OAuth token for `Mark-Life` — so the *pusher* was
+always the person, and only the commit's author and committer fields said
+otherwise.
 
 File references are to the `mvp` branch, which is where the system lives. `main`
 is still the scaffold.
@@ -14,20 +21,23 @@ is still the scaffold.
 
 `materializeRepo` writes three `git config --local` values into the run's
 checkout on the host, before the directory is mounted into the container
-(`packages/sandbox/src/repo.ts:454-465`): the credential helper, `user.name`,
-`user.email`. It takes a `committer` in its input (`repo.ts:383-389`) and falls
-back to `DEFAULT_COMMITTER` when that is null (`repo.ts:420`).
+(`packages/sandbox/src/repo.ts:466-477`): the credential helper, `user.name`,
+`user.email`. It takes a `committer` in its input (`repo.ts:397`) and falls back
+to `DEFAULT_COMMITTER` when that is null (`repo.ts:432`).
 
-Nothing ever passes one. The only production caller is `cloneIntoWorkspace`
-(`repo.ts:500-508`), which hardcodes `committer: null`, and it is reached through
-the workspace materializer's clone seam (`packages/sandbox/src/workspace.ts:307`).
-So the seam for a per-run identity exists and is unfed.
+That seam existed and was unfed. The only production caller,
+`cloneIntoWorkspace` (`repo.ts:516`), hardcoded `committer: null`, and it is
+reached through the workspace materializer's clone seam
+(`packages/sandbox/src/workspace.ts`). It is now fed by `workspaceLayer`
+(`workspace.ts:315`), which resolves the identity at layer build and closes over
+it — see [What changed](#what-changed).
 
-The `.invalid` address is deliberate, and the comment above `DEFAULT_COMMITTER`
-(`repo.ts:76-84`) argues the case: a container has no `~/.gitconfig`, git refuses
-to commit without an identity, and pointing the commits at a real mailbox would
-attribute them to a person who did not write them. Changing this is a reversal of
-a stated policy, not a bug fix.
+`DEFAULT_COMMITTER` (`repo.ts:97`) is still `Agent Task Manager
+<agent@atm.invalid>`, now as the fallback for a run with no credential. Its
+comment used to argue against a real address at all: the commits are the
+agent's, and pointing them at a real mailbox would attribute them to a person
+who did not write them. That is the policy this reverses, and the comment now
+states the one in force.
 
 Nothing else sets an identity. The image ships none on purpose (`docker/README.md`,
 "No git identity ... policy, not tooling"); confirmed inside this run's container,
@@ -89,10 +99,10 @@ A trailer is text in the commit message and does not touch the author field.
 GitHub parses it to add extra avatars, but only for addresses that belong to an
 account, and Anthropic's no-reply does not — so it links to nothing.
 
-## Author, committer, pusher — what each one shows today
+## Author, committer, pusher — what each one showed
 
-Author and committer are both `Agent Task Manager <agent@atm.invalid>`: unlinked,
-uncredited, unsigned. The pusher is `Mark-Life`, and so is the PR.
+Author and committer were both `Agent Task Manager <agent@atm.invalid>`:
+unlinked, uncredited, unsigned. The pusher is `Mark-Life`, and so is the PR.
 
 Then the merge changes the answer. GitHub's squash re-authors the result to the PR
 author and preserves the original as a trailer. `06753b1` on `mvp` — the squash of
@@ -108,7 +118,7 @@ and it would reach trunk only under a merge-commit or rebase merge strategy.
 ## Options
 
 **A. Set the author per run from the user's GitHub identity.** Pass a real
-`Committer` down the seam that already exists (`repo.ts:383-389` → `repo.ts:420`).
+`Committer` down the seam that already exists (`repo.ts:397` → `repo.ts:432`).
 The identity needs no new credential: `GET /user` with the token in hand returns
 login, id, and public email, and the no-reply form
 `{id}+{login}@users.noreply.github.com` is derivable from the first two with no
@@ -137,7 +147,7 @@ as A, no new credential, and it is honest — the human gets an avatar on the co
 and contribution credit, the author field still says who wrote the code. The
 weakness is enforcement. The agent writes its own commit messages, so this is
 either prompt guidance (`packages/prompts/src/render.ts`) or a `commit-msg` hook
-written into the checkout beside the config at `repo.ts:454`. Guidance is a
+written into the checkout beside the config at `repo.ts:466`. Guidance is a
 request; the hook is enforced but will surprise an agent that reads back what it
 just committed.
 
@@ -159,18 +169,38 @@ what the squash merge already writes to trunk. The trailer keeps the record
 straight about a model having written it, and the commit body already names the
 task.
 
-Cost: a small change in `repo.ts` plus a cached `GET /user` on the host, a fallback
-when no token is configured, and a rewrite of the comment at `repo.ts:76-84`, which
-currently argues the opposite. No new credentials. Revisit when a second person
-uses the board, at which point per-requester attribution needs a GitHub identity
-per user that the schema does not have today.
-
 Not recommended now: signing. It would take an SSH signing key inside the
 container — a credential model-generated code can read — for a badge that trunk
 already gets from GitHub's own squash signature.
 
-## Follow-up
+## What changed
 
-Proposed as a separate task rather than shipped here, since it reverses the stated
-policy at `repo.ts:76-84` and wants a decision, not just a diff: "Author run
-commits as the requesting user's GitHub no-reply identity."
+A is what shipped, after the policy call it needed.
+
+`packages/sandbox/src/committer.ts` resolves the identity: `GET /user` with
+`ATM_GITHUB_TOKEN`, then `{id}+{login}@users.noreply.github.com` and the
+account's display name, falling back to its login. The id leads the address
+because a login can be renamed and the numeric prefix cannot.
+
+`workspaceLayer` (`packages/sandbox/src/workspace.ts:315`) calls it once, at
+layer build, and closes over the answer for the life of the process. That is the
+only place it can be read once: the clone seam answers with `Scope` alone and
+cannot ask a service who it is, and a lookup inside the clone would put a GitHub
+request on the path of every dispatch for an answer that cannot change while the
+loop runs. `cloneIntoWorkspace` (`repo.ts:516`) takes the committer it is handed.
+
+The lookup is total and capped at ten seconds. No token, a 401, an endpoint that
+is down, a body that changed shape: every one of them logs at info and takes
+`DEFAULT_COMMITTER`, so a GitHub that is not answering costs one boot a short
+delay and a process that commits as the agent — never a loop that will not start
+or a dispatch that fails. The identity a boot settled on is logged once, which is
+where an operator asking "why do the commits say that" should look first.
+
+What did not change: the credential, the push path, the trailer, and signing.
+Commits are still unsigned, the model's `Co-Authored-By` still records who wrote
+them, and the merge still re-authors to the PR author.
+
+Revisit when a second person uses the board. The token is workspace-wide, so
+this attributes to its owner rather than to whoever filed the card, and real
+per-requester attribution needs a GitHub identity per user that the schema does
+not hold.

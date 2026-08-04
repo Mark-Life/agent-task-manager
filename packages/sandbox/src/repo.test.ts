@@ -290,6 +290,32 @@ describe("materialization", () => {
     expect(upstream).toBeNull();
   });
 
+  /**
+   * The seam the identity travels down. A commit made in this checkout is the
+   * named account's, which is what makes it link to a profile on GitHub rather
+   * than render as a string.
+   */
+  test("commits as the committer it was given", async () => {
+    const workspaceDir = join(root, "workspace-named");
+    const committer = {
+      email: "88837967+Mark-Life@users.noreply.github.com",
+      name: "Andrey Markin",
+    };
+    await run(materializeRepo({ committer, repo: sourceFor(), workspaceDir }));
+
+    // Without the fixture's own `-c` overrides, so the identity under test is
+    // the checkout's own rather than one this line supplied.
+    const checkoutGit = (...args: string[]) =>
+      execFileSync("git", args, { cwd: workspaceDir, encoding: "utf8" }).trim();
+    writeFileSync(join(workspaceDir, "touched.txt"), "work\n");
+    checkoutGit("add", "touched.txt");
+    checkoutGit("commit", "-m", "work");
+
+    expect(checkoutGit("log", "-1", "--format=%an <%ae>")).toBe(
+      `${committer.name} <${committer.email}>`
+    );
+  });
+
   test("a refreshed mirror is what the next run clones", async () => {
     const source = sourceFor();
     await run(
