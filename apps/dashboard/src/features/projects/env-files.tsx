@@ -82,6 +82,12 @@ interface EditorProps {
  * The content is fetched only when this opens, under its own key, so a project
  * screen that is merely listing paths never holds a secret in memory.
  *
+ * The textarea is sized by the dialog and not by what was pasted into it. The
+ * shared control ships `field-sizing-content`, which grows a field to its widest
+ * line — and one connection string is wider than any screen, so the box, the
+ * save button and the cancel button all leave the viewport together. Fixed
+ * sizing plus `break-all` keeps a long secret wrapped inside the dialog.
+ *
  * The path is fixed once a file exists. It is the natural key, so changing it
  * would be filing a second file rather than renaming one, and doing that
  * silently would leave the old file still being written into every run.
@@ -178,7 +184,7 @@ const EnvFileEditor = ({
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="env-content">Contents</Label>
             <Textarea
-              className="font-mono text-xs"
+              className="field-sizing-fixed w-full max-w-full break-all font-mono text-xs"
               disabled={loading}
               id="env-content"
               onChange={onContent}
