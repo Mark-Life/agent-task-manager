@@ -83,9 +83,13 @@ export const TaskWriteToken = scopedToken(
   "Bearer token scoped to writes. A run's token is bound to its own task and is refused on any other."
 );
 
-/** A token that may also destroy: deleting a project, and nothing else needs it. */
+/**
+ * A token that may destroy, and the one that may read a stored secret. Deleting
+ * a project is the destructive half; a project's environment files are the
+ * other, and they are here because a run's credential must never reach them.
+ */
 export const AdminToken = scopedToken(
-  "Bearer token scoped to destructive operations — deleting a project."
+  "Bearer token scoped to destructive operations and to stored secrets — deleting a project, and a project's environment files."
 );
 
 /**
@@ -170,9 +174,17 @@ export class TaskWriteAccess extends HttpApiMiddleware.Service<
 }) {}
 
 /**
- * The destructive end, which is now one operation: deleting a project. The
- * store refuses one that still has tasks filed under it, so what this guards is
- * the workspace's own furniture rather than anybody's work.
+ * The destructive end and the confidential one. Deleting a project is the
+ * first: the store refuses one that still has tasks filed under it, so what
+ * that guards is the workspace's own furniture rather than anybody's work.
+ *
+ * A project's environment files are the second, and they are here for a
+ * different reason. Their content is a stored secret, an agent's own credential
+ * is a `task-write` token bound to one task, and admin is the one scope that
+ * ceiling can never reach — so "a run cannot ask the board for a project's
+ * secrets" is enforced by the actor's ceiling rather than by a check inside a
+ * handler. A run is given its own project's files on disk, by the loop, which
+ * is the only path they travel.
  */
 export class AdminAccess extends HttpApiMiddleware.Service<
   AdminAccess,

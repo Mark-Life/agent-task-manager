@@ -120,7 +120,7 @@ Read from `.env` at the repo root. These matter before anything runs:
 | Var | | |
 | --- | --- | --- |
 | `DATABASE_URL` | required | `postgres://user:password@localhost:5432/agent_task_manager` |
-| `BETTER_AUTH_SECRET` | required by all three | one value shared: the gateway verifies the tokens the loop and bot mint |
+| `BETTER_AUTH_SECRET` | required by all three | one value shared: the gateway verifies the tokens the loop and bot mint, and both derive the key a project's env files are sealed with |
 | `TELEGRAM_BOT_TOKEN` | required by the bot | from @BotFather |
 | `TELEGRAM_ALLOWLIST` | required by the bot | `telegramUserId:workspaceId:userId`, comma separated |
 | `DASHBOARD_ORIGIN` | required by the dashboard | its exact origin, `http://localhost:5173` locally |
@@ -148,7 +148,7 @@ ours.
 | `prompts` | What each role is told, and the unread watermark behind it. |
 | `agent-tools` | The board's own contract, served to an agent as an MCP server. |
 | `orchestrator` | Dispatch, leases, the pool, run lifecycle, ingest — for both roles alike. |
-| `api` `token` | The HTTP contract and the scoped bearer token. Types, no handlers. |
+| `api` `token` | The HTTP contract, the scoped bearer token, and the sealer for stored secrets. |
 | `telemetry` `env` | Wide events and configuration. |
 | `apps/loop` | Runs the orchestrator. |
 | `apps/gateway` | Serves the contract, SSE, auth, artifacts. |
@@ -165,7 +165,7 @@ the [data model](.docs/plan/03-data-model.md), the
 
 How each part actually behaves: [agent homes](.docs/agent-homes.md),
 [harness](.docs/harness.md), [sandbox](.docs/sandbox.md),
-[orchestrator](.docs/orchestrator.md), [gateway](.docs/gateway.md), [bot](.docs/bot.md),
-[event ledger](.docs/telemetry.md).
+[project env files](.docs/project-env.md), [orchestrator](.docs/orchestrator.md),
+[gateway](.docs/gateway.md), [bot](.docs/bot.md), [event ledger](.docs/telemetry.md).
 
 Monorepo conventions, editor setup and shadcn components: [`.docs/monorepo.md`](.docs/monorepo.md).

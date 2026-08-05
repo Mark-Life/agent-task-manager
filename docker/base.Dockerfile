@@ -176,9 +176,14 @@ RUN set -eu; \
 # finds an empty readable directory instead of a permission error from a path it
 # never chose. `/run` is absent on purpose: Debian already ships it, and the
 # run directory is mounted over it.
+#
+# `/cache` is the shared package store. Only the mount point is made here; the
+# per-manager subdirectories under it are created by whichever tool runs, which
+# is what lets a fifth package manager be one more variable rather than another
+# image build.
 RUN set -eu; \
-  mkdir -p /workspace /artifacts/task /artifacts/project /artifacts/global; \
-  chown -R "${AGENT_UID}:${AGENT_GID}" /workspace /artifacts
+  mkdir -p /workspace /cache /artifacts/task /artifacts/project /artifacts/global; \
+  chown -R "${AGENT_UID}:${AGENT_GID}" /workspace /cache /artifacts
 
 # Git refuses to operate on a repository owned by another uid, which is the
 # right default on a shared machine and wrong here: the workspace is a bind

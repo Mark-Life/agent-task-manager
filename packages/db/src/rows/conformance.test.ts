@@ -20,6 +20,7 @@ import type {
   ChatThread,
   Comment,
   Project,
+  ProjectEnvFile,
   Run,
   RunCommand,
   RunEvent,
@@ -37,6 +38,7 @@ import type {
 import type { decodeComment } from "./comment";
 import { conforms, type Decoded } from "./conformance";
 import type { decodeProject } from "./project";
+import type { decodeProjectEnvFile } from "./project-env";
 import type { decodeRun } from "./run";
 import type { decodeRunCommand } from "./run-command";
 import type { decodeRunEvent } from "./run-event";
@@ -45,6 +47,14 @@ import type { decodeWorkspace } from "./workspace";
 
 test("a decoded project is a Project", () => {
   expect(conforms<Decoded<typeof decodeProject>, Project>(true)).toBe(true);
+});
+
+// The one decoder that drops columns rather than mapping them: the sealed blob
+// and its key version are storage, and the entity is what is left.
+test("a decoded project env file is a ProjectEnvFile", () => {
+  expect(
+    conforms<Decoded<typeof decodeProjectEnvFile>, ProjectEnvFile>(true)
+  ).toBe(true);
 });
 
 test("a decoded task is a Task", () => {

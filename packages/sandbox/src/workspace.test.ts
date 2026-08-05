@@ -5,13 +5,17 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunFileSystem } from "@effect/platform-bun";
 import {
+  type EnvFilePath,
   newProjectId,
   newRunId,
   newTaskId,
@@ -116,10 +120,15 @@ const refusingClone: CloneIntoWorkspace = (input) =>
     })
   );
 
-const materializeInput = (repo: RepoSource | null, projectId = null) =>
+const materializeInput = (
+  repo: RepoSource | null,
+  projectId = null,
+  envFiles: MaterializeInput["envFiles"] = []
+) =>
   ({
     agentHomeDir,
     dataRoot,
+    envFiles,
     identity,
     projectId,
     provider: "claude",
@@ -246,6 +255,153 @@ describe("materialize", () => {
     expect(existsSync(projectArtifactsDirOf({ dataRoot, projectId }))).toBe(
       true
     );
+  });
+});
+
+/** The permission bits as `chmod` prints them, without reaching for a mask. */
+const modeOf = (path: string) => statSync(path).mode.toString(8).slice(-3);
+
+describe("the project's env files", () => {
+  // Cast rather than constructed through the schema, because two of the cases
+  // below are paths the schema refuses — and the point of those is that the
+  // materializer refuses them too, rather than trusting the brand it was handed.
+  const envFile = (path: string, content: string) => [
+    { content, path: path as EnvFilePath },
+  ];
+
+  test("land in the checkout, owner-readable and nothing more", async () => {
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null, null, envFile(".env", "DATABASE_URL=x\n")),
+      use: (workspace) => {
+        const path = join(workspace.workspaceDir, ".env");
+        return {
+          mode: modeOf(path),
+          text: readFileSync(path, "utf8"),
+        };
+      },
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (!Exit.isSuccess(exit)) {
+      return;
+    }
+    expect(exit.value.used.text).toBe("DATABASE_URL=x\n");
+    expect(exit.value.used.mode).toBe("600");
+    expect(exit.value.materialized.envFiles.paths).toEqual([".env"]);
+  });
+
+  test("get their parent directories made for them", async () => {
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(
+        null,
+        null,
+        envFile("apps/web/.env.local", "PORT=3000\n")
+      ),
+      use: (workspace) =>
+        readFileSync(
+          join(workspace.workspaceDir, "apps/web/.env.local"),
+          "utf8"
+        ),
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (!Exit.isSuccess(exit)) {
+      return;
+    }
+    expect(exit.value.used).toBe("PORT=3000\n");
+  });
+
+  // The checkout is a sibling of every other run's under one service account's
+  // data root, and it now holds credentials.
+  test("are written into a checkout no other account can enter", async () => {
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null, null, envFile(".env", "A=1\n")),
+      use: (workspace) => modeOf(workspace.workspaceDir),
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.used).toBe("700");
+    }
+  });
+
+  test("are excluded from the checkout's git, so `git add .` cannot stage one", async () => {
+    seedOrigin();
+    const exit = await withWorkspace({
+      clone: gitClone,
+      input: materializeInput(
+        repoSource,
+        null,
+        envFile(".env", "SECRET=shh\n")
+      ),
+      use: (workspace) => {
+        const exclude = readFileSync(
+          join(workspace.workspaceDir, ".git/info/exclude"),
+          "utf8"
+        );
+        // git's own answer, not ours: whether the file would be added.
+        const added = execFileSync("git", ["add", "--dry-run", "--all", "."], {
+          cwd: workspace.workspaceDir,
+          stdio: "pipe",
+        }).toString();
+        return { added, exclude };
+      },
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (!Exit.isSuccess(exit)) {
+      return;
+    }
+    expect(exit.value.used.exclude).toContain(".env");
+    expect(exit.value.used.added).not.toContain(".env");
+    expect(exit.value.materialized.envFiles.excluded).toBe(true);
+  });
+
+  test("a checkout with no repo has nothing to exclude from, and that is not a failure", async () => {
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null, null, envFile(".env", "A=1\n")),
+      use: () => null,
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.materialized.envFiles.excluded).toBe(false);
+    }
+  });
+
+  test("a path that escapes the checkout fails the run rather than writing", async () => {
+    const outside = join(root, "escaped");
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null, null, envFile("../escaped", "A=1\n")),
+      use: () => null,
+    });
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(existsSync(outside)).toBe(false);
+  });
+
+  // A repository can ship a directory as a symlink, and every segment of the
+  // path is still an ordinary name — which is the one case the pure rule cannot
+  // see.
+  test("a parent that resolves through a symlink out of the checkout is refused", async () => {
+    const target = join(root, "escape-target");
+    mkdirSync(target, { recursive: true });
+    const exit = await withWorkspace({
+      clone: (input) =>
+        Effect.sync(() => {
+          symlinkSync(target, join(input.targetDir, "apps"));
+        }),
+      input: materializeInput(repoSource, null, envFile("apps/.env", "A=1\n")),
+      use: () => null,
+    });
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    expect(existsSync(join(target, ".env"))).toBe(false);
   });
 });
 

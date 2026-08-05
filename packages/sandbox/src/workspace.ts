@@ -32,7 +32,9 @@
  * only in the checkout was scratch, and keeping it would mean a data root that
  * grows by a repo per run. The run directory outlives the scope on purpose: the
  * transcript and the event ledger are read off it after the container is gone,
- * and the artifact folders outlive it because they are the point.
+ * and the artifact folders outlive it because they are the point. So does the
+ * package store: a cache released with the run is a cache that is cold every
+ * time, which is the cost this whole mount exists to remove.
  */
 
 import { join } from "node:path";
@@ -42,6 +44,7 @@ import { Effect, Layer } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { type ArtifactLocation, ensureArtifactDir } from "./artifacts";
 import { resolveCommitter } from "./committer";
+import { writeEnvFiles } from "./env-files";
 import { type CloneFailed, MountSourceMissing } from "./errors";
 import { eventLogDirOf, type MountPurpose } from "./mounts";
 import { cloneIntoWorkspace } from "./repo";
@@ -56,6 +59,29 @@ import {
 /** Directory under the data root holding one checkout per run. */
 export const WORKSPACES_SEGMENT = "workspaces";
 
+/** Directory under the data root holding the package stores every run shares. */
+export const CACHES_SEGMENT = "caches";
+
+/** What names the shared package store on the host. */
+export interface CachesDirInput {
+  readonly dataRoot: string;
+}
+
+/**
+ * The package store every run is handed, sibling to the checkouts.
+ *
+ * Under the same root as {@link workspaceDirOf} deliberately: pnpm hardlinks
+ * out of its store into a checkout's `node_modules`, and a hardlink cannot cross
+ * a filesystem. One root means the link works and the install is near instant;
+ * two disks means pnpm silently copies instead.
+ *
+ * Nothing evicts from it. When the disk gets tight the answer is to delete the
+ * directory and take one cold install, which is why there is no per-run or
+ * per-project scoping to unpick first.
+ */
+export const cachesDirOf = (input: CachesDirInput) =>
+  join(input.dataRoot, CACHES_SEGMENT);
+
 /**
  * Mode for every directory a run is handed. The same value the artifact folders
  * get, for the same reason: what a run may and may not write is stated by the
@@ -63,6 +89,17 @@ export const WORKSPACES_SEGMENT = "workspaces";
  * second answer to a question the mount already settles.
  */
 export const RUN_DIR_MODE = 0o755;
+
+/**
+ * Mode for the checkout, which is the one directory here that is narrower.
+ *
+ * A project's environment files are written into it, and the data root is one
+ * directory a service account owns with every other run's checkout as a
+ * sibling. The mount still decides what the run may do with it; this decides
+ * what everything else on the host may do with it, which the mount says nothing
+ * about.
+ */
+export const WORKSPACE_DIR_MODE = 0o700;
 
 /** What names one run's checkout on the host. */
 export interface WorkspaceDirInput {
@@ -122,25 +159,31 @@ export const makeLocalWorkspace = Effect.fnUntraced(function* (
    * same reason as one whose artifacts folder was deleted underneath it.
    */
   const ensureMountSource = (input: {
+    readonly mode?: number;
     readonly path: string;
     readonly purpose: MountPurpose;
   }) =>
-    fs.makeDirectory(input.path, { mode: RUN_DIR_MODE, recursive: true }).pipe(
-      Effect.tapError((cause) =>
-        Effect.logWarning("mount source not created", {
-          cause,
-          path: input.path,
-        })
-      ),
-      Effect.mapError(
-        () =>
-          new MountSourceMissing({
-            hostPath: input.path,
-            purpose: input.purpose,
+    fs
+      .makeDirectory(input.path, {
+        mode: input.mode ?? RUN_DIR_MODE,
+        recursive: true,
+      })
+      .pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning("mount source not created", {
+            cause,
+            path: input.path,
           })
-      ),
-      Effect.as(input.path)
-    );
+        ),
+        Effect.mapError(
+          () =>
+            new MountSourceMissing({
+              hostPath: input.path,
+              purpose: input.purpose,
+            })
+        ),
+        Effect.as(input.path)
+      );
 
   /**
    * The provider's login directory, checked and not made.
@@ -235,6 +278,14 @@ export const makeLocalWorkspace = Effect.fnUntraced(function* (
 
     yield* requireAgentHome({ agentHomeDir, provider: input.provider });
 
+    // Made, never released: the store is what the next run starts warm from, so
+    // it is deliberately outside the `acquireRelease` below that takes the
+    // checkout back.
+    const cacheDir = yield* ensureMountSource({
+      path: cachesDirOf({ dataRoot }),
+      purpose: "cache",
+    });
+
     const globalArtifactsDir = yield* ensureArtifacts({
       dataRoot,
       location: { scope: "global" },
@@ -262,6 +313,7 @@ export const makeLocalWorkspace = Effect.fnUntraced(function* (
     // sitting in the data root until someone notices.
     const workspaceDir = yield* Effect.acquireRelease(
       ensureMountSource({
+        mode: WORKSPACE_DIR_MODE,
         path: workspaceDirOf({ dataRoot, runId: identity.runId }),
         purpose: "workspace",
       }),
@@ -277,9 +329,30 @@ export const makeLocalWorkspace = Effect.fnUntraced(function* (
           .clone({ repo, targetDir: workspaceDir })
           .pipe(Effect.as(repo.branch));
 
+    // After the clone, never before: a clone fills an empty directory, and a
+    // file already sitting where it is about to write is how `git clone` is
+    // made to refuse the whole run. Inside the acquire's scope, so the one copy
+    // of these secrets that exists in the clear is removed with the checkout on
+    // every path the run can end on.
+    const envFiles = yield* writeEnvFiles({
+      files: input.envFiles,
+      workspaceDir,
+    }).pipe(Effect.provideService(FileSystem, fs));
+    if (envFiles.paths.length > 0) {
+      // Paths, never contents, and never a count of characters either: the log
+      // says which files a run was given, which is the question an operator
+      // debugging a failed dev server actually has.
+      yield* Effect.logInfo("project env files written into the checkout", {
+        excluded: envFiles.excluded,
+        paths: envFiles.paths,
+      });
+    }
+
     return {
       agentHomeDir,
       branch,
+      cacheDir,
+      envFiles,
       globalArtifactsDir,
       projectArtifactsDir,
       runDir,

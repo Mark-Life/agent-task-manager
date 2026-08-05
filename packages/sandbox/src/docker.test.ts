@@ -59,6 +59,8 @@ if (!reachable) {
 interface Fixture {
   readonly agentHomeDir: string;
   readonly artifactsDir: string;
+  /** The shared package store, which every run on a host mounts. */
+  readonly cacheDir: string;
   readonly globalDir: string;
   /** The host's own ledger, which is not a mount and not the container's. */
   readonly ledgerDir: string;
@@ -73,6 +75,7 @@ const makeDirs = async (root: string) => {
   const dirs = {
     agentHomeDir: join(root, "agent-home"),
     artifactsDir: join(root, "task-artifacts"),
+    cacheDir: join(root, "caches"),
     globalDir: join(root, "global-artifacts"),
     ledgerDir: join(root, "host-events"),
     root,
@@ -83,6 +86,7 @@ const makeDirs = async (root: string) => {
     [
       dirs.agentHomeDir,
       dirs.artifactsDir,
+      dirs.cacheDir,
       dirs.globalDir,
       dirs.ledgerDir,
       eventLogDirOf(dirs.runDir),
@@ -168,6 +172,7 @@ const specFor = (input: Fixture): SandboxSpec => ({
   image: IMAGE,
   mounts: mountsFor({
     agentHomeDir: input.agentHomeDir,
+    cacheDir: input.cacheDir,
     globalArtifactsDir: input.globalDir,
     projectArtifactsDir: null,
     runDir: input.runDir,
@@ -203,7 +208,7 @@ describe.skipIf(!reachable)("dockerSandbox", () => {
       expect(result.oomKilled).toBe(false);
       expect(result.teardown).toBe("removed");
       expect(result.containerId).not.toBeNull();
-      expect(result.mountCount).toBe(5);
+      expect(result.mountCount).toBe(6);
       expect(result.wallClockMs).toBeGreaterThan(0);
       expect(result.peakMemoryBytes).not.toBeNull();
 

@@ -73,6 +73,7 @@ import {
 } from "@workspace/harness";
 import {
   AGENT_TOKEN_ENV_VAR,
+  cachesDirOf,
   GH_TOKEN_ENV_VAR,
   githubTokenEnv,
   orphansOf,
@@ -1056,6 +1057,12 @@ const make = Effect.gen(function* () {
     yield* announceTurnEnv;
     yield* Effect.logInfo(
       `loop listening on ${config.maxConcurrency} work slots and ${config.maxChatConcurrency} chat slots, polling every ${config.pollIntervalMs}ms`
+    );
+    // Named at boot because it is the one directory in the data root that grows
+    // without bound and that nothing evicts from: when the disk gets tight, this
+    // is the path to `du` and delete.
+    yield* Effect.logInfo(
+      `worker turns share package caches at ${cachesDirOf({ dataRoot: config.dataRoot })}`
     );
     yield* config.gatewayUrl === null
       ? Effect.logWarning(

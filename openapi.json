@@ -383,6 +383,336 @@
         "summary": "Delete a project"
       }
     },
+    "/projects/{projectId}/env": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "projects.listEnv",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectEnvFile"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List a project's environment files"
+      },
+      "put": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "projects.saveEnv",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ProjectEnvFile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectEnvFile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Save an environment file",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectEnvFileSave"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/projects/{projectId}/env/{fileId}": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "projects.getEnv",
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          },
+          {
+            "name": "projectId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ProjectEnvFileContent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectEnvFileContent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read one environment file"
+      },
+      "delete": {
+        "tags": [
+          "projects"
+        ],
+        "operationId": "projects.deleteEnv",
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          },
+          {
+            "name": "projectId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "<No Content>"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Delete an environment file"
+      }
+    },
     "/tasks": {
       "get": {
         "tags": [
@@ -3747,6 +4077,124 @@
         },
         "additionalProperties": false
       },
+      "ProjectEnvFile": {
+        "type": "object",
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          }
+        },
+        "required": [
+          "createdAt",
+          "workspaceId",
+          "updatedAt",
+          "id",
+          "path",
+          "projectId"
+        ],
+        "additionalProperties": false
+      },
+      "ProjectEnvFileContent": {
+        "type": "object",
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "createdAt",
+          "workspaceId",
+          "updatedAt",
+          "id",
+          "path",
+          "projectId",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "ProjectEnvFileSave": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "content",
+          "path"
+        ],
+        "additionalProperties": false
+      },
       "Task": {
         "type": "object",
         "properties": {
@@ -6695,7 +7143,7 @@
         "bearerFormat": "opaque"
       },
       "adminToken": {
-        "description": "Bearer token scoped to destructive operations — deleting a project.",
+        "description": "Bearer token scoped to destructive operations and to stored secrets — deleting a project, and a project's environment files.",
         "type": "http",
         "scheme": "Bearer",
         "bearerFormat": "opaque"
@@ -6710,7 +7158,7 @@
     },
     {
       "name": "projects",
-      "description": "Projects: repositories, and areas of life."
+      "description": "Projects: repositories, areas of life, and the environment files a project's runs are given."
     },
     {
       "name": "tasks",

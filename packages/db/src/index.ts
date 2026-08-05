@@ -89,6 +89,12 @@ export {
   ProjectRepo,
 } from "./repositories/project";
 export {
+  type ProjectEnvFileRef,
+  ProjectEnvFileRepo,
+  type ProjectEnvFileSave,
+  type ProjectEnvFileScope,
+} from "./repositories/project-env";
+export {
   RunAlreadyLive,
   RunNotLive,
   RunNotStartable,

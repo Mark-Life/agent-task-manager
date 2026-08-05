@@ -244,6 +244,7 @@ export type AuditAction = typeof AuditAction.Type;
 /** The aggregates a repository can mutate, and therefore the ones an audit row can name. */
 export const AUDIT_ENTITY_TYPES = [
   "project",
+  "project_env_file",
   "task",
   "comment",
   "agent_session",

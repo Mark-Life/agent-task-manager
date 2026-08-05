@@ -38,6 +38,7 @@ import {
   claudeManagerMcpServers,
 } from "@workspace/agent-tools";
 import { RunEventRepo, RunRepo, withActor } from "@workspace/db";
+import type { EnvFileWrite } from "@workspace/domain";
 import {
   type AgentEvent,
   AgentEventRecord,
@@ -50,10 +51,12 @@ import {
 } from "@workspace/harness";
 import type { RunPlacement } from "@workspace/prompts";
 import {
+  CONTAINER_CACHE_DIR,
   identityEnv,
   type Mount,
   managerMountsFor,
   mountsFor,
+  packageCacheEnv,
   repoSourceFor,
   type SandboxKind,
   Workspace,
@@ -90,6 +93,13 @@ import {
 } from "./dispatch-context";
 import { type MappingContext, toRunEventPayload } from "./mapping";
 import { openRun, type RunClaim } from "./open-run";
+import {
+  makeRedactor,
+  projectEnvFilesFor,
+  redactDeep,
+  scrubRunFiles,
+  secretValuesOf,
+} from "./project-env";
 import { buildRunPrompt, placementOf } from "./prompt";
 import {
   closeRun,
@@ -97,7 +107,10 @@ import {
   markCommentPosted,
   type TerminalReport,
 } from "./terminal";
-import { preserveTranscript } from "./transcript-ingest";
+import {
+  durableTranscriptPathOf,
+  preserveTranscript,
+} from "./transcript-ingest";
 import {
   EMPTY_TURN_PROGRESS,
   observeTurn,
@@ -119,6 +132,17 @@ const encodeRecord = Schema.encodeEffect(AgentEventRecord);
 export interface RunDirectories {
   /** The branch a checkout is on, or null for a run with no repo. */
   readonly branch: string | null;
+  /**
+   * Where each package manager is told to keep its store, or nothing for a turn
+   * that has no cache mount.
+   *
+   * Beside the mounts rather than in the loop's own turn environment, and that
+   * pairing is the point: the variables name a path that is only there because
+   * the mount is, so a conversation — which gets no cache mount — is not handed
+   * four names pointing at a directory it cannot write, and a turn running as a
+   * host process is told the host path rather than the container's.
+   */
+  readonly cacheEnv: Readonly<Record<string, string>>;
   /** The exact mount set, entrypoint included. */
   readonly mounts: readonly Mount[];
   /** The paths as the run itself sees them, which is what the prompt names. */
@@ -149,6 +173,16 @@ export interface ExecuteRunInput {
    * the two that matter. Never the host's OTLP token.
    */
   readonly env: Readonly<Record<string, string>>;
+  /**
+   * The project's environment files, decrypted, resolved once by the caller.
+   *
+   * Resolved above this function rather than inside it because the same list
+   * answers two questions at two different moments: what is written into the
+   * checkout before the turn, and which strings must not survive into the
+   * timeline after it. Reading them twice would be two decryptions of the same
+   * rows and two chances for them to disagree.
+   */
+  readonly envFiles: readonly EnvFileWrite[];
   /**
    * The gateway as the **container** sees it, which is rarely `localhost`, or
    * null on an install that configured none. Null is what makes a turn run with
@@ -198,6 +232,7 @@ const directoriesFor = Effect.fnUntraced(function* (input: {
   readonly agentHomeDir: string;
   readonly context: DispatchContext;
   readonly dataRoot: string;
+  readonly envFiles: readonly EnvFileWrite[];
   readonly sandboxKind: SandboxKind;
   readonly skillsDir: string | null;
 }) {
@@ -216,6 +251,9 @@ const directoriesFor = Effect.fnUntraced(function* (input: {
     });
     return {
       branch: null,
+      // A chat turn installs nothing, so it gets neither the mount nor the
+      // names: see `managerMountsFor`.
+      cacheEnv: {},
       mounts: managerMountsFor(
         { agentHomeDir: input.agentHomeDir, ...dirs },
         extras
@@ -230,6 +268,7 @@ const directoriesFor = Effect.fnUntraced(function* (input: {
   const made = yield* workspaces.materialize({
     agentHomeDir: input.agentHomeDir,
     dataRoot: input.dataRoot,
+    envFiles: input.envFiles,
     identity: runIdentityOf(context),
     projectId: projectIdOf(context),
     provider: context.provider,
@@ -243,6 +282,11 @@ const directoriesFor = Effect.fnUntraced(function* (input: {
   });
   return {
     branch: made.branch,
+    // The same store either way, named as the run itself sees it: a container
+    // reads it at the fixed mount point, a host process at the host path.
+    cacheEnv: packageCacheEnv(
+      input.sandboxKind === "local" ? made.cacheDir : CONTAINER_CACHE_DIR
+    ),
     mounts: mountsFor(made, extras),
     placement: placementOf({ kind: input.sandboxKind, workspace: made }),
     workspaceDir: made.workspaceDir,
@@ -289,10 +333,16 @@ export const executeRun = (input: ExecuteRunInput) =>
     const identity = runIdentityOf(context);
     const eventLogPath = eventLogPathOf(context);
 
+    // Built before the directories exist, because it applies to everything the
+    // run says from its first event on: the agent is given these files and can
+    // read them back, so the values are in the timeline the moment it does.
+    const redact = makeRedactor(secretValuesOf(input.envFiles));
+
     const made = yield* directoriesFor({
       agentHomeDir: input.agentHomeDir,
       context,
       dataRoot: input.dataRoot,
+      envFiles: input.envFiles,
       sandboxKind: input.sandboxKind,
       skillsDir: input.skillsDir,
     });
@@ -406,16 +456,31 @@ export const executeRun = (input: ExecuteRunInput) =>
         }
       });
 
-    /** The container path: the file is the container's, and it is only read. */
+    /**
+     * The container path: the file is the container's, and it is only read.
+     *
+     * The event is redacted here, on the way in, rather than at each of the
+     * three places it is later written down. Everything below this line — the
+     * timeline row, the final text a fallback comment carries, the accumulated
+     * progress — is built from the same value, so redacting once at the
+     * boundary is what keeps them from disagreeing about what the run said.
+     */
     const fromContainer = ({ record, seq }: ContainerRecord) =>
-      onRecord({ event: record.event, occurredAt: record.occurredAt, seq });
+      onRecord({
+        event: redactDeep(record.event, redact),
+        occurredAt: record.occurredAt,
+        seq,
+      });
 
     /**
      * The local path: this process is the writer, so the line goes into the
-     * event file first and its ordinal is the count of events already seen.
+     * event file first and its ordinal is the count of events already seen. The
+     * line written is the redacted one, which is what the container path's own
+     * file is rewritten to at the close.
      */
-    const fromProvider = (event: AgentEvent) =>
+    const fromProvider = (raw: AgentEvent) =>
       Effect.gen(function* () {
+        const event = redactDeep(raw, redact);
         const before = yield* Ref.get(progress);
         const occurredAt = yield* DateTime.now;
         yield* appendLine({ event, occurredAt });
@@ -431,6 +496,7 @@ export const executeRun = (input: ExecuteRunInput) =>
           env: {
             ...identityEnv(identity),
             ...input.env,
+            ...made.cacheEnv,
             // The hook runs outside a container here, so it is told where the
             // marker really is rather than assuming the container's own path.
             [COMMENT_MARKER_ENV_VAR]: commentMarkerPathOf(context.layout),
@@ -518,7 +584,7 @@ export const executeRun = (input: ExecuteRunInput) =>
     if (contained) {
       return yield* containerTurn({
         context,
-        env: input.env,
+        env: { ...input.env, ...made.cacheEnv },
         mounts: made.mounts,
         onRecord: fromContainer,
         progress,
@@ -636,6 +702,11 @@ export interface RunOpenedInput<R = never>
 export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
   Effect.gen(function* () {
     const { context } = input;
+    // Read once, here, because both halves of the run need the same list: the
+    // materializer writes the files into the checkout, and the close takes the
+    // values back out of everything the run left on disk.
+    const envFiles = yield* projectEnvFilesFor(context);
+    const redact = makeRedactor(secretValuesOf(envFiles));
     const progress = yield* Ref.make(EMPTY_TURN_PROGRESS);
     const closed = yield* Ref.make<TerminalReport | null>(null);
     // The ending as the close actually filed it, which is not always the one
@@ -665,6 +736,18 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
           ),
           Effect.ignore
         );
+
+        // After the copy and before anything reads either file back: the
+        // container appended its own event file raw, and the transcript is the
+        // provider's own bytes. Both outlive the run, and a re-ingest of either
+        // must not put a secret back into the timeline the loop just redacted.
+        yield* scrubRunFiles({
+          paths: [
+            eventLogPathOf(context),
+            durableTranscriptPathOf(context.layout),
+          ],
+          redact,
+        });
 
         const state = yield* Ref.get(progress);
         // A turn that ended cleanly having lost the board did not end cleanly,
@@ -710,6 +793,7 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
         context,
         dataRoot: input.dataRoot,
         env: input.env ?? {},
+        envFiles,
         gatewayUrl: input.gatewayUrl,
         progress,
         sandboxKind: input.sandboxKind,

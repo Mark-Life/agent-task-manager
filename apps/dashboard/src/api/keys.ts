@@ -1,4 +1,5 @@
 import type {
+  ProjectEnvFileId,
   ProjectId,
   RunId,
   AgentSessionId as SessionId,
@@ -43,6 +44,14 @@ export const keys = {
 
   /** One project. */
   project: (projectId: ProjectId) => [PROJECTS, projectId] as const,
+
+  /** One of a project's environment files, with its text. Fetched only by the editor. */
+  projectEnvFile: (projectId: ProjectId, fileId: ProjectEnvFileId) =>
+    [PROJECTS, projectId, "env", fileId] as const,
+
+  /** The paths one project injects, without their content. */
+  projectEnvFiles: (projectId: ProjectId) =>
+    [PROJECTS, projectId, "env"] as const,
 
   /** Every project in the workspace. */
   projects: () => [PROJECTS] as const,

@@ -13,6 +13,7 @@ import {
 import {
   CONTAINER_AGENT_HOME_DIR,
   CONTAINER_ARTIFACT_DIR,
+  CONTAINER_CACHE_DIR,
   CONTAINER_EVENT_LOG_DIR,
   CONTAINER_SKILLS_DIR,
   CONTAINER_WORKSPACE_DIR,
@@ -23,10 +24,12 @@ import {
   mountArg,
   mountArgs,
   mountsFor,
+  packageCacheEnv,
 } from "./mounts";
 
 const sources: MountSources = {
   agentHomeDir: "/home/op/.claude-task-management",
+  cacheDir: "/data/caches",
   globalArtifactsDir: "/data/artifacts/global",
   projectArtifactsDir: "/data/artifacts/projects/p1",
   runDir: "/data/runs/r1",
@@ -38,19 +41,20 @@ const byPurpose = (mounts: readonly Mount[], purpose: Mount["purpose"]) =>
   mounts.find((mount) => mount.purpose === purpose);
 
 describe("mountsFor", () => {
-  test("mounts exactly the six directories a run may see", () => {
+  test("mounts exactly the seven directories a run may see", () => {
     const purposes = mountsFor(sources).map((mount) => mount.purpose);
     expect(purposes).toEqual([
       "run",
       "agent_home",
       "workspace",
+      "cache",
       "task_artifacts",
       "project_artifacts",
       "global_artifacts",
     ]);
   });
 
-  test("only the run's own directories and the agent home are writable", () => {
+  test("only the run's own directories, the agent home and the cache are writable", () => {
     const writable = mountsFor(sources)
       .filter((mount) => !mount.readOnly)
       .map((mount) => mount.purpose);
@@ -58,6 +62,7 @@ describe("mountsFor", () => {
       "run",
       "agent_home",
       "workspace",
+      "cache",
       "task_artifacts",
     ]);
   });
@@ -127,6 +132,56 @@ describe("mountsFor", () => {
     for (const mount of mounts) {
       expect(mount.containerPath).not.toContain("r1");
       expect(mount.containerPath).not.toContain("t1");
+    }
+  });
+});
+
+describe("the package cache", () => {
+  test("is one writable bind at a fixed path, shared by every run", () => {
+    const cache = byPurpose(mountsFor(sources), "cache");
+    expect(cache?.hostPath).toBe(sources.cacheDir);
+    expect(cache?.containerPath).toBe(CONTAINER_CACHE_DIR);
+    // Read-only would warm nothing for the next run, which is the point of it.
+    expect(cache?.readOnly).toBe(false);
+  });
+
+  test("is not offered to a conversation, which installs nothing", () => {
+    expect(byPurpose(managerMountsFor(sources), "cache")).toBeUndefined();
+  });
+
+  test("every manager is pointed at it, and none is detected", () => {
+    const env = packageCacheEnv(CONTAINER_CACHE_DIR);
+    expect(env).toEqual({
+      BUN_INSTALL_CACHE_DIR: "/cache/bun",
+      npm_config_cache: "/cache/npm",
+      npm_config_store_dir: "/cache/pnpm",
+      PNPM_CONFIG_STORE_DIR: "/cache/pnpm",
+      YARN_ENABLE_GLOBAL_CACHE: "true",
+      YARN_GLOBAL_FOLDER: "/cache/yarn",
+    });
+  });
+
+  test("names the pnpm store under both spellings, one per pnpm generation", () => {
+    // pnpm 11 ignores the npm-shaped name and reads its own; pnpm 10 does the
+    // opposite. A repo picks the version, so both have to name one directory.
+    const env = packageCacheEnv(CONTAINER_CACHE_DIR);
+    expect(env.PNPM_CONFIG_STORE_DIR).toBe(env.npm_config_store_dir);
+  });
+
+  test("names the store the run actually sees, container or host", () => {
+    // The local sandbox runs the same turn against host paths, so the variables
+    // have to name the host directory or every install writes somewhere it
+    // cannot create.
+    expect(packageCacheEnv("/data/caches").BUN_INSTALL_CACHE_DIR).toBe(
+      "/data/caches/bun"
+    );
+  });
+
+  test("every store is under the one mount, so one bind covers them all", () => {
+    for (const value of Object.values(packageCacheEnv(CONTAINER_CACHE_DIR))) {
+      expect(
+        value === "true" || value.startsWith(`${CONTAINER_CACHE_DIR}/`)
+      ).toBe(true);
     }
   });
 });

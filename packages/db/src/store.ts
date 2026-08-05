@@ -7,6 +7,7 @@ import { ChatNotificationRepo } from "./repositories/chat-notification";
 import { ChatThreadRepo } from "./repositories/chat-thread";
 import { CommentRepo } from "./repositories/comment";
 import { ProjectRepo } from "./repositories/project";
+import { ProjectEnvFileRepo } from "./repositories/project-env";
 import { RunRepo } from "./repositories/run";
 import { RunCommandRepo } from "./repositories/run-command";
 import { RunEventRepo } from "./repositories/run-event";
@@ -22,6 +23,11 @@ import { WorkspaceRepo } from "./repositories/workspace";
  * composition. That is also what keeps a mutation and its audit row inside a
  * single transaction — there is no second repository underneath to open one of
  * its own.
+ *
+ * One of them needs more than a handle: `ProjectEnvFileRepo` derives its
+ * sealing key from `BETTER_AUTH_SECRET` while this layer is built, so a process
+ * that provides the store without that variable refuses to start rather than
+ * discovering it on the first dispatch that has a file to write.
  */
 export const repositoriesLayer = Layer.mergeAll(
   AgentSessionRepo.layer,
@@ -31,6 +37,7 @@ export const repositoriesLayer = Layer.mergeAll(
   ChatNotificationRepo.layer,
   ChatThreadRepo.layer,
   CommentRepo.layer,
+  ProjectEnvFileRepo.layer,
   ProjectRepo.layer,
   RunCommandRepo.layer,
   RunEventRepo.layer,

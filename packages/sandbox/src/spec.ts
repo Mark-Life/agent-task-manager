@@ -35,6 +35,7 @@
 
 import type {
   AgentSessionId,
+  EnvFileWrite,
   ProjectId,
   RunId,
   SessionProvider,
@@ -43,6 +44,7 @@ import type {
 } from "@workspace/domain";
 import { TURN_ENV_VARS } from "@workspace/harness";
 import { Context, type Effect, Schema, type Scope } from "effect";
+import type { EnvFilesWritten } from "./env-files";
 import type { SandboxError } from "./errors";
 import type { HardeningSpec } from "./hardening";
 import type { Mount, MountSources } from "./mounts";
@@ -296,6 +298,16 @@ export interface MaterializeInput {
    */
   readonly agentHomeDir: string;
   readonly dataRoot: string;
+  /**
+   * The project's environment files, already decrypted, written into the
+   * checkout after the clone returns.
+   *
+   * Plain values rather than a reference to whatever holds them, because this
+   * package never imports `@workspace/db`: the caller reads the rows and opens
+   * them, and materialization learns bytes and paths. Empty for a task whose
+   * project has none, and for a task with no project at all.
+   */
+  readonly envFiles: readonly EnvFileWrite[];
   readonly identity: RunIdentity;
   /** Null for a task with no project: there is no promoted folder to show it. */
   readonly projectId: ProjectId | null;
@@ -326,6 +338,12 @@ export interface MaterializeInput {
 export interface RunWorkspace extends MountSources {
   /** The branch checked out, or null for a run with no repo. */
   readonly branch: string | null;
+  /**
+   * The project's environment files as they were actually put into the
+   * checkout: where each went, and whether git was told to ignore them. Paths
+   * only — the values are in the checkout and nowhere else this returns.
+   */
+  readonly envFiles: EnvFilesWritten;
   readonly strategy: MaterializeStrategy;
 }
 

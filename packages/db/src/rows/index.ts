@@ -72,6 +72,13 @@ export {
   ProjectRow,
   ProjectUpdate,
 } from "./project";
+export {
+  decodeProjectEnvFile,
+  decodeProjectEnvFileRow,
+  ProjectEnvFileInsert,
+  ProjectEnvFileRow,
+  ProjectEnvFileUpdate,
+} from "./project-env";
 export { decodeRun, RunInsert, RunRow, RunUpdate } from "./run";
 export {
   decodeRunCommand,

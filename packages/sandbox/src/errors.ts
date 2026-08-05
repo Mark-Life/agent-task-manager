@@ -2,7 +2,7 @@
  * How a container can fail, and how docker's own noise is given a name.
  *
  * Two vocabularies, deliberately different sizes, the same split the harness
- * makes. The error classes are what a failure *is* — nine of them, because "the
+ * makes. The error classes are what a failure *is* — ten of them, because "the
  * daemon is not running" and "the kernel killed it for memory" want completely
  * different reactions from the orchestrator: the first pauses dispatch, the
  * second retries the task on a smaller concurrency. The outcomes are how a
@@ -41,6 +41,7 @@ export const SANDBOX_ERROR_CLASSES = [
   "CloneFailed",
   "ContainerStartFailed",
   "DaemonUnreachable",
+  "EnvFileWriteFailed",
   "ImageMissing",
   "MountSourceMissing",
   "OomKilled",
@@ -156,11 +157,31 @@ export class CloneFailed extends Schema.TaggedErrorClass<CloneFailed>()(
   }
 ) {}
 
+/**
+ * A project's environment file could not be put into the checkout: a path that
+ * resolves outside the workspace, a parent directory that could not be made, a
+ * write that failed.
+ *
+ * Its own class, and fatal, because the alternative is worse than not starting.
+ * A run whose `DATABASE_URL` silently failed to arrive gets a container that
+ * boots, an agent that tries to run the app, and a debugging session about a
+ * connection error — for a file the operator can see in the dashboard. Failing
+ * here says which path and why, before a slot is spent.
+ *
+ * The path is on the error and the content is not, which is the whole reason
+ * this carries a path rather than a file.
+ */
+export class EnvFileWriteFailed extends Schema.TaggedErrorClass<EnvFileWriteFailed>()(
+  "Sandbox.EnvFileWriteFailed",
+  { cause: Schema.Unknown, path: Schema.String }
+) {}
+
 /** Everything a sandbox operation can fail with. The failure channel of a run. */
 export type SandboxError =
   | CloneFailed
   | ContainerStartFailed
   | DaemonUnreachable
+  | EnvFileWriteFailed
   | ImageMissing
   | MountSourceMissing
   | OomKilled
@@ -176,6 +197,7 @@ const CLASS_OF_TAG = {
   "Sandbox.CloneFailed": "CloneFailed",
   "Sandbox.ContainerStartFailed": "ContainerStartFailed",
   "Sandbox.DaemonUnreachable": "DaemonUnreachable",
+  "Sandbox.EnvFileWriteFailed": "EnvFileWriteFailed",
   "Sandbox.ImageMissing": "ImageMissing",
   "Sandbox.MountSourceMissing": "MountSourceMissing",
   "Sandbox.OomKilled": "OomKilled",
@@ -196,6 +218,7 @@ const OUTCOME_OF_CLASS = {
   CloneFailed: "start_failed",
   ContainerStartFailed: "start_failed",
   DaemonUnreachable: "start_failed",
+  EnvFileWriteFailed: "start_failed",
   ImageMissing: "start_failed",
   MountSourceMissing: "start_failed",
   OomKilled: "oom_killed",
@@ -217,6 +240,8 @@ const messageOf = (error: SandboxError): string => {
       return error.stderr.trim() || `${error.image} did not start`;
     case "Sandbox.DaemonUnreachable":
       return error.detail;
+    case "Sandbox.EnvFileWriteFailed":
+      return `the env file ${error.path} could not be written into the checkout`;
     case "Sandbox.ImageMissing":
       return error.detail.trim() || `no image ${error.image}`;
     case "Sandbox.MountSourceMissing":

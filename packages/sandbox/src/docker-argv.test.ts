@@ -50,6 +50,7 @@ const spec: SandboxSpec = {
   image: "atm/base:2026-08-01",
   mounts: mountsFor({
     agentHomeDir: "/home/op/.claude-task-management",
+    cacheDir: "/data/caches",
     globalArtifactsDir: "/data/artifacts/global",
     projectArtifactsDir: "/data/artifacts/projects/p1",
     runDir: "/data/runs/r1",
