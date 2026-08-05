@@ -169,6 +169,7 @@ export {
   CONTAINER_AGENT_HOME_DIR,
   CONTAINER_ARTIFACT_DIR,
   CONTAINER_ARTIFACTS_DIR,
+  CONTAINER_CACHE_DIR,
   CONTAINER_EVENT_LOG_DIR,
   CONTAINER_SKILLS_DIR,
   CONTAINER_WORKSPACE_DIR,
@@ -184,6 +185,7 @@ export {
   mountSourcePaths,
   mountsFor,
   NO_MOUNT_EXTRAS,
+  packageCacheEnv,
 } from "./mounts";
 export { type LabelledContainer, orphansOf } from "./reap";
 export {
@@ -235,8 +237,11 @@ export {
   type WorkspaceInterface,
 } from "./spec";
 export {
+  CACHES_SEGMENT,
+  type CachesDirInput,
   type CloneIntoWorkspace,
   type CloneWorkspaceInput,
+  cachesDirOf,
   type LocalWorkspaceOptions,
   localWorkspaceLayer,
   RUN_DIR_MODE,

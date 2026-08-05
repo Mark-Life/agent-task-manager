@@ -32,7 +32,9 @@
  * only in the checkout was scratch, and keeping it would mean a data root that
  * grows by a repo per run. The run directory outlives the scope on purpose: the
  * transcript and the event ledger are read off it after the container is gone,
- * and the artifact folders outlive it because they are the point.
+ * and the artifact folders outlive it because they are the point. So does the
+ * package store: a cache released with the run is a cache that is cold every
+ * time, which is the cost this whole mount exists to remove.
  */
 
 import { join } from "node:path";
@@ -55,6 +57,29 @@ import {
 
 /** Directory under the data root holding one checkout per run. */
 export const WORKSPACES_SEGMENT = "workspaces";
+
+/** Directory under the data root holding the package stores every run shares. */
+export const CACHES_SEGMENT = "caches";
+
+/** What names the shared package store on the host. */
+export interface CachesDirInput {
+  readonly dataRoot: string;
+}
+
+/**
+ * The package store every run is handed, sibling to the checkouts.
+ *
+ * Under the same root as {@link workspaceDirOf} deliberately: pnpm hardlinks
+ * out of its store into a checkout's `node_modules`, and a hardlink cannot cross
+ * a filesystem. One root means the link works and the install is near instant;
+ * two disks means pnpm silently copies instead.
+ *
+ * Nothing evicts from it. When the disk gets tight the answer is to delete the
+ * directory and take one cold install, which is why there is no per-run or
+ * per-project scoping to unpick first.
+ */
+export const cachesDirOf = (input: CachesDirInput) =>
+  join(input.dataRoot, CACHES_SEGMENT);
 
 /**
  * Mode for every directory a run is handed. The same value the artifact folders
@@ -235,6 +260,14 @@ export const makeLocalWorkspace = Effect.fnUntraced(function* (
 
     yield* requireAgentHome({ agentHomeDir, provider: input.provider });
 
+    // Made, never released: the store is what the next run starts warm from, so
+    // it is deliberately outside the `acquireRelease` below that takes the
+    // checkout back.
+    const cacheDir = yield* ensureMountSource({
+      path: cachesDirOf({ dataRoot }),
+      purpose: "cache",
+    });
+
     const globalArtifactsDir = yield* ensureArtifacts({
       dataRoot,
       location: { scope: "global" },
@@ -280,6 +313,7 @@ export const makeLocalWorkspace = Effect.fnUntraced(function* (
     return {
       agentHomeDir,
       branch,
+      cacheDir,
       globalArtifactsDir,
       projectArtifactsDir,
       runDir,

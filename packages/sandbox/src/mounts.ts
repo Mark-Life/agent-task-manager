@@ -9,7 +9,7 @@
  * closed by construction, and is unit-testable without a daemon: a mount added
  * by hand at a call site is a hole nobody reviews.
  *
- * Six mounts a run always gets, one it gets when the install shares a skills
+ * Seven mounts a run always gets, one it gets when the install shares a skills
  * directory and one when it runs our own entrypoint, and the reasons are each
  * their own.
  *
@@ -37,6 +37,24 @@
  * it. So the container path is a constant and the host path is chosen per run.
  *
  * The workspace is the repo checkout, read-write, because that is the work.
+ *
+ * The package cache is one directory under the data root, read-write, shared by
+ * every run and every project — the second mount after the agent home that is
+ * not private to a run, and for a different reason. These stores are
+ * content-addressed, so sharing is where the dedupe comes from: two repos on the
+ * same lockfile pin fetch once, and a run starts with a warm store instead of
+ * paying the full download every turn. It is a sibling of the workspaces
+ * directory rather than anywhere else on the host because pnpm hardlinks out of
+ * its store into `node_modules` and a hardlink cannot cross a filesystem; split
+ * the two across disks and pnpm silently falls back to copying.
+ *
+ * Every manager is pointed at it and none is detected — see
+ * {@link packageCacheEnv}. A run that installs nothing simply leaves it cold.
+ *
+ * A poisoned cache spreads: one run can write an artifact a later run installs.
+ * That is accepted rather than overlooked. The agent already has network access
+ * and push rights, so a per-project store would contain nothing it could not
+ * already do and would cost the dedupe that is the whole point.
  *
  * The three artifact folders are the scope rule from the domain made physical:
  * the task's own folder is read-write, the project's promoted folder and the
@@ -104,6 +122,44 @@ export const CONTAINER_WORKSPACE_DIR = "/workspace";
 export const CONTAINER_ARTIFACTS_DIR = "/artifacts";
 
 /**
+ * Where the shared package store is mounted. One bind for every manager: the
+ * per-manager subdirectories under it are the container's to create, so adding a
+ * fifth tool is a variable rather than a mount.
+ */
+export const CONTAINER_CACHE_DIR = "/cache";
+
+/**
+ * Where each package manager is told to keep its store, rooted at whichever
+ * path the run actually sees it under — {@link CONTAINER_CACHE_DIR} inside a
+ * container, the host directory for a turn that runs as a host process.
+ *
+ * All four are set on every run and none is detected. A repo using pnpm and a
+ * repo using bun get the same variables; whichever tool runs finds its own store
+ * warm and the others sit unused. Detecting the package manager per project is a
+ * guess that is wrong on the repo that uses two.
+ *
+ * The npm-shaped names are lowercase because that is the only spelling npm and
+ * pnpm read a config key under from the environment. Yarn berry needs both of
+ * its names: the folder alone leaves a berry project fetching into the
+ * per-project `.yarn/cache`, which is inside the checkout that dies with the
+ * run.
+ *
+ * This also takes installs off `$HOME`. A container runs as the loop process's
+ * uid, which on a host where that is a system account is not the image's 1000 —
+ * so `$HOME` is not writable and every tool that wants one falls back to `/tmp`,
+ * a tmpfs billed against the container's memory limit.
+ */
+export const packageCacheEnv = (
+  cacheRoot: string
+): Readonly<Record<string, string>> => ({
+  BUN_INSTALL_CACHE_DIR: join(cacheRoot, "bun"),
+  npm_config_cache: join(cacheRoot, "npm"),
+  npm_config_store_dir: join(cacheRoot, "pnpm"),
+  YARN_ENABLE_GLOBAL_CACHE: "true",
+  YARN_GLOBAL_FOLDER: join(cacheRoot, "yarn"),
+});
+
+/**
  * The three artifact folders as the container sees them, one per
  * `ArtifactScope`. Flat and named after the scope, so the one line of prompt
  * that explains artifacts to an agent is the whole interface.
@@ -162,6 +218,7 @@ export const MOUNT_PURPOSES = [
   "run",
   "agent_home",
   "workspace",
+  "cache",
   "task_artifacts",
   "project_artifacts",
   "global_artifacts",
@@ -197,6 +254,12 @@ export interface MountSources {
    * {@link CONTAINER_AGENT_HOME_DIR}.
    */
   readonly agentHomeDir: string;
+  /**
+   * The shared package store on the host, one directory for every run on the
+   * box. Read-write, and outlives the run that filled it — see
+   * {@link CONTAINER_CACHE_DIR}.
+   */
+  readonly cacheDir: string;
   /** The global promoted folder. Read-only. */
   readonly globalArtifactsDir: string;
   /** The project's promoted folder, or null for a task with no project. */
@@ -292,6 +355,14 @@ export const mountsFor = (
       readOnly: false,
     },
     {
+      containerPath: CONTAINER_CACHE_DIR,
+      hostPath: sources.cacheDir,
+      // Writable, and shared: a run that could only read the store would warm
+      // nothing for the next one, which is the entire point of the mount.
+      purpose: "cache",
+      readOnly: false,
+    },
+    {
       containerPath: CONTAINER_ARTIFACT_DIR.task,
       hostPath: sources.taskArtifactsDir,
       purpose: "task_artifacts",
@@ -350,6 +421,10 @@ export type ManagerMountSources = Pick<
  * The skills directory is shared with a conversation on the same terms as with
  * a run: the manager is the role that reads the board and writes the briefs, so
  * the operator's own instructions are the most use to it of anywhere.
+ *
+ * The package cache is not here, and neither are the variables that name it. A
+ * chat turn answers over HTTP and installs nothing, so the mount would be a
+ * shared writable directory handed to a turn with no use for it.
  *
  * The workspace is still mounted, and it is still read-write. The manager works
  * over HTTP and needs no checkout, but a scratch directory is where a CLI puts

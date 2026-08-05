@@ -1,14 +1,15 @@
 #!/usr/bin/env bun
 
 /**
- * Proves the six things the orchestrator is allowed to assume about a
+ * Proves the seven things the orchestrator is allowed to assume about a
  * container: that what a run writes to the artifacts mount is on the host after
  * the container is gone, that the shared artifact folders reject its writes,
  * that the container cannot read the operator's home directory, that it *can*
  * read the login out of the agent home and that a token it refreshes there is
- * on the host afterwards, that a wide-event row written *inside* the container
- * reaches the host carrying the `runId` the host minted, and that the container
- * itself left exactly one `atm.sandbox` row.
+ * on the host afterwards, that the shared package store is writable from inside
+ * and keeps what a run put in it, that a wide-event row written *inside* the
+ * container reaches the host carrying the `runId` the host minted, and that the
+ * container itself left exactly one `atm.sandbox` row.
  *
  * It is a script rather than a test because every one of those claims is about
  * a real daemon, a real bind mount and a real kernel. Checking them against a
@@ -79,6 +80,7 @@ import {
 import {
   CONTAINER_AGENT_HOME_DIR,
   CONTAINER_ARTIFACT_DIR,
+  CONTAINER_CACHE_DIR,
   CONTAINER_WORKSPACE_DIR,
   DEFAULT_SANDBOX_IMAGE,
   defaultHardening,
@@ -125,6 +127,13 @@ const CONTAINER_LEDGER_FILE = "harness.jsonl";
 
 /** What the container writes into the task's artifacts folder. */
 const ARTIFACT_FILE = "written-by-the-run.txt";
+
+/**
+ * What the container writes into the shared package store. Removed by this
+ * script afterwards: the store is the one mount a check shares with every real
+ * run on the host, so it leaves nothing in it.
+ */
+const CACHE_PROBE_FILE = "written-by-the-check.txt";
 
 /**
  * The credential-shaped file the throwaway agent home is seeded with, named as
@@ -285,6 +294,9 @@ const containerScript = (sentinel: Sentinel) =>
     `printf 'otlp:[%s]\\n' "$(printenv OTEL_EXPORTER_OTLP_HEADERS || true)"`,
     // Where the container thinks it is, and who it is.
     'printf \'workdir:[%s] uid:[%s]\\n\' "$(pwd)" "$(id -u)"',
+    // Claim 6: the shared package store is mounted and writable, which is what
+    // makes an install in a later run start warm.
+    `printf 'cachewrite:[%s]\\n' "$( (printf '%s' "$${TURN_ENV_VARS.runId}" > ${CONTAINER_CACHE_DIR}/${CACHE_PROBE_FILE}) 2>/dev/null && echo yes || echo no )"`,
     // Proof the run mount is the layout the harness computes.
     `printf 'runmount:[%s]\\n' "$(test -d ${CONTAINER_RUN_DIR} && echo yes || echo no)"`,
     `exit ${CONTAINER_EXIT_CODE}`,
@@ -408,6 +420,7 @@ const sandboxCheck = Effect.gen(function* () {
   // uses. `repo: null` is the scratch case — a task with no repository — which
   // is what keeps this check independent of git, a mirror and a network.
   const {
+    cacheDir,
     globalArtifactsDir,
     output,
     projectArtifactsDir,
@@ -443,6 +456,7 @@ const sandboxCheck = Effect.gen(function* () {
         }),
       });
       return {
+        cacheDir: made.cacheDir,
         globalArtifactsDir: made.globalArtifactsDir,
         output: lines.join(""),
         projectArtifactsDir: made.projectArtifactsDir,
@@ -499,6 +513,23 @@ const sandboxCheck = Effect.gen(function* () {
       step: `nothing reached the ${probe.scope} artifacts folder on the host`,
     });
   }
+
+  // Claim 6 — the shared package store round-trips, and the file is removed
+  // again: every other run on this host mounts the same directory.
+  const cacheProbePath = join(cacheDir, CACHE_PROBE_FILE);
+  const cached = ((): string | null => {
+    try {
+      return readFileSync(cacheProbePath, "utf-8");
+    } catch {
+      return null;
+    }
+  })();
+  rmSync(cacheProbePath, { force: true });
+  yield* check({
+    detail: `the container reported [${readField(output, "cachewrite")}] writing ${CONTAINER_CACHE_DIR}/${CACHE_PROBE_FILE}, and the host has ${cached === null ? "nothing" : cached} at ${cacheProbePath}`,
+    ok: readField(output, "cachewrite") === "yes" && cached === identity.runId,
+    step: "the shared package store is writable from inside and lands on the host",
+  });
 
   // Claim 3b — the agent home is the one thing the container is *supposed* to
   // read a credential out of, and the one place its refresh has to survive.

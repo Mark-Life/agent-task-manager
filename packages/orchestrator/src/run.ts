@@ -50,10 +50,12 @@ import {
 } from "@workspace/harness";
 import type { RunPlacement } from "@workspace/prompts";
 import {
+  CONTAINER_CACHE_DIR,
   identityEnv,
   type Mount,
   managerMountsFor,
   mountsFor,
+  packageCacheEnv,
   repoSourceFor,
   type SandboxKind,
   Workspace,
@@ -119,6 +121,17 @@ const encodeRecord = Schema.encodeEffect(AgentEventRecord);
 export interface RunDirectories {
   /** The branch a checkout is on, or null for a run with no repo. */
   readonly branch: string | null;
+  /**
+   * Where each package manager is told to keep its store, or nothing for a turn
+   * that has no cache mount.
+   *
+   * Beside the mounts rather than in the loop's own turn environment, and that
+   * pairing is the point: the variables name a path that is only there because
+   * the mount is, so a conversation — which gets no cache mount — is not handed
+   * four names pointing at a directory it cannot write, and a turn running as a
+   * host process is told the host path rather than the container's.
+   */
+  readonly cacheEnv: Readonly<Record<string, string>>;
   /** The exact mount set, entrypoint included. */
   readonly mounts: readonly Mount[];
   /** The paths as the run itself sees them, which is what the prompt names. */
@@ -216,6 +229,9 @@ const directoriesFor = Effect.fnUntraced(function* (input: {
     });
     return {
       branch: null,
+      // A chat turn installs nothing, so it gets neither the mount nor the
+      // names: see `managerMountsFor`.
+      cacheEnv: {},
       mounts: managerMountsFor(
         { agentHomeDir: input.agentHomeDir, ...dirs },
         extras
@@ -243,6 +259,11 @@ const directoriesFor = Effect.fnUntraced(function* (input: {
   });
   return {
     branch: made.branch,
+    // The same store either way, named as the run itself sees it: a container
+    // reads it at the fixed mount point, a host process at the host path.
+    cacheEnv: packageCacheEnv(
+      input.sandboxKind === "local" ? made.cacheDir : CONTAINER_CACHE_DIR
+    ),
     mounts: mountsFor(made, extras),
     placement: placementOf({ kind: input.sandboxKind, workspace: made }),
     workspaceDir: made.workspaceDir,
@@ -431,6 +452,7 @@ export const executeRun = (input: ExecuteRunInput) =>
           env: {
             ...identityEnv(identity),
             ...input.env,
+            ...made.cacheEnv,
             // The hook runs outside a container here, so it is told where the
             // marker really is rather than assuming the container's own path.
             [COMMENT_MARKER_ENV_VAR]: commentMarkerPathOf(context.layout),
@@ -518,7 +540,7 @@ export const executeRun = (input: ExecuteRunInput) =>
     if (contained) {
       return yield* containerTurn({
         context,
-        env: input.env,
+        env: { ...input.env, ...made.cacheEnv },
         mounts: made.mounts,
         onRecord: fromContainer,
         progress,

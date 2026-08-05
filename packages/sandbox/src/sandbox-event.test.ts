@@ -114,6 +114,7 @@ const WORKSPACE_ID = WorkspaceId.make("ws-1");
 
 const MOUNTS = mountsFor({
   agentHomeDir: "/home/op/.claude-task-management",
+  cacheDir: "/data/caches",
   globalArtifactsDir: "/data/artifacts/global",
   projectArtifactsDir: "/data/artifacts/project-1",
   runDir: "/data/runs/run-1",
@@ -282,7 +283,7 @@ describe("withSandboxEvent", () => {
     // what was asked for
     expect(row.kind).toBe("docker");
     expect(row.image).toBe("atm/base:2026-08-01");
-    expect(row.mountCount).toBe(6);
+    expect(row.mountCount).toBe(7);
     expect(row.timeoutMs).toBe(1_800_000);
     // the confinement that was applied
     expect(row.hardeningProfile).toBe("default");
@@ -363,7 +364,7 @@ describe("withSandboxEvent", () => {
     expect(row.teardown).toBeNull();
     // what was asked for is still on the row: that is what makes it readable
     expect(row.image).toBe("atm/base:2026-08-01");
-    expect(row.mountCount).toBe(6);
+    expect(row.mountCount).toBe(7);
     expect(typeof row.durationMs).toBe("number");
   });
 

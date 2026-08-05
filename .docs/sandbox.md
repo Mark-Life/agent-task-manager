@@ -6,9 +6,10 @@ it, and removes it — on every exit path including the interrupt a stop command
 Interrupting the fiber *is* how a run is stopped, which is why there is no `kill` method. The
 package never imports `packages/db`.
 
-**Six mounts, and nothing else.** The run directory (rw, mounted at `/run`, holding the comment
-marker, the turn spec and the event ledger), the provider's agent home (rw, `/agent-home`, the
-one mount shared between runs — see [agent homes](./agent-homes.md)), the workspace checkout (rw, `/workspace`), the
+**Seven mounts, and nothing else.** The run directory (rw, mounted at `/run`, holding the comment
+marker, the turn spec and the event ledger), the provider's agent home (rw, `/agent-home`, see
+[agent homes](./agent-homes.md)), the workspace checkout (rw, `/workspace`), the shared package
+store (rw, `/cache`, the other mount shared between runs — see below), the
 task's artifacts folder (rw, `/artifacts/task`), and the project's and global promoted folders
 (**ro**, `/artifacts/project` and `/artifacts/global`). Read-only on the shared folders is
 load-bearing: promotion is a deliberate act performed on the host, and that separation is the
@@ -22,6 +23,16 @@ looks for the personal skills of whoever it is running as. It is the one bind in
 bind, and the nesting is what makes it work at all; the daemon mounts a destination before
 anything under it. Unset shares nothing, which is the default. Mounted rather than copied, so an
 edit on the host is in the next container with no sync step.
+
+**One package store for the whole host.** `${DATA_ROOT}/caches` is mounted rw at `/cache`, and
+`BUN_INSTALL_CACHE_DIR`, `npm_config_cache`, `npm_config_store_dir`, `YARN_GLOBAL_FOLDER` and
+`YARN_ENABLE_GLOBAL_CACHE` point every manager at it. Shared across projects, because these
+stores are content-addressed and sharing is where the dedupe comes from; a sibling of
+`workspaces/` under one root, because pnpm hardlinks out of its store into `node_modules` and a
+hardlink cannot cross a filesystem. `node_modules` is still per run — the cache makes the install
+fast, it does not remove it. Nothing evicts: `du` it when the disk gets tight, delete it, and
+take one cold install. A poisoned cache spreads to later runs, which is accepted — the agent
+already has network access and push rights. Only worker runs get it.
 
 A chat turn has no task and no project, so it gets four: the run directory, the agent home, a
 scratch `/workspace` released with the run, and the global promoted folder read-only. Nothing

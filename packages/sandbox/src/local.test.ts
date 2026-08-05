@@ -99,11 +99,12 @@ const ledgerRows = () => {
     .filter((row) => row.event === SANDBOX_EVENT_MARKER);
 };
 
-/** A real directory tree with the six mount sources on disk. */
+/** A real directory tree with the seven mount sources on disk. */
 const makeSources = (): MountSources => {
   const root = mkdtempSync(join(tmpdir(), "sandbox-local-"));
   const sources: MountSources = {
     agentHomeDir: join(root, "agent-home"),
+    cacheDir: join(root, "caches"),
     globalArtifactsDir: join(root, "artifacts", "global"),
     projectArtifactsDir: join(root, "artifacts", "project"),
     runDir: join(root, "runs", "r1"),
@@ -166,6 +167,7 @@ const textOf = (chunks: readonly OutputChunk[], stream: "stdout" | "stderr") =>
 describe("hostPathOf", () => {
   const mounts = mountsFor({
     agentHomeDir: "/home/op/.claude-task-management",
+    cacheDir: "/data/caches",
     globalArtifactsDir: "/data/artifacts/global",
     projectArtifactsDir: "/data/artifacts/projects/p1",
     runDir: "/data/runs/r1",
@@ -202,6 +204,7 @@ describe("hostPathOf", () => {
 describe("localEnv", () => {
   const mounts = mountsFor({
     agentHomeDir: "/home/op/.claude-task-management",
+    cacheDir: "/data/caches",
     globalArtifactsDir: "/data/artifacts/global",
     projectArtifactsDir: null,
     runDir: "/data/runs/r1",
@@ -277,6 +280,7 @@ describe("localWorkingDir", () => {
   test("is the host side of the mount the spec pointed at", () => {
     const mounts = mountsFor({
       agentHomeDir: "/home/op/.claude-task-management",
+      cacheDir: "/data/caches",
       globalArtifactsDir: "/data/artifacts/global",
       projectArtifactsDir: null,
       runDir: "/data/runs/r1",
@@ -292,6 +296,7 @@ describe("localWorkingDir", () => {
 describe("unhonouredBy", () => {
   const mounts = mountsFor({
     agentHomeDir: "/home/op/.claude-task-management",
+    cacheDir: "/data/caches",
     globalArtifactsDir: "/data/artifacts/global",
     projectArtifactsDir: null,
     runDir: "/data/runs/r1",
@@ -358,7 +363,7 @@ describe("localSandboxLayer", () => {
     expect(result.success.kind).toBe("local");
     expect(result.success.containerId).toBe(null);
     expect(result.success.imagePulled).toBe(false);
-    expect(result.success.mountCount).toBe(6);
+    expect(result.success.mountCount).toBe(7);
     expect(result.success.oomKilled).toBe(false);
     expect(result.success.peakMemoryBytes).toBe(null);
     expect(result.success.teardown).toBe("skipped");
