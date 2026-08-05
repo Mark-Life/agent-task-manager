@@ -12,7 +12,7 @@
  */
 
 import { Api, Principal } from "@workspace/api";
-import { ProjectRepo, withActor } from "@workspace/db";
+import { ProjectEnvFileRepo, ProjectRepo, withActor } from "@workspace/db";
 import { Effect } from "effect";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { storeDefects, toInvalidInput, toNotFound } from "./store-failures";
@@ -32,6 +32,7 @@ export const projectsHandlers = HttpApiBuilder.group(
   (handlers) =>
     Effect.gen(function* () {
       const projects = yield* ProjectRepo;
+      const envFiles = yield* ProjectEnvFileRepo;
 
       return handlers.handleAll({
         create: ({ payload }) =>
@@ -69,11 +70,55 @@ export const projectsHandlers = HttpApiBuilder.group(
               );
           }),
 
+        // A file that will not decrypt is a `Db.MalformedRow`, and it stays a
+        // defect: the row is there and the bytes in it are not what this build
+        // can read, which is a broken deployment rather than a request that was
+        // wrong. See `storeDefects`.
+        deleteEnv: ({ params }) =>
+          Effect.gen(function* () {
+            const { actor, workspaceId } = yield* Principal;
+            return yield* envFiles
+              .delete({
+                id: params.fileId,
+                projectId: params.projectId,
+                workspaceId,
+              })
+              .pipe(
+                withActor(actor),
+                Effect.catchTags({
+                  ...storeDefects,
+                  "Db.InvalidInput": Effect.die,
+                  "Db.NotFound": toNotFound,
+                }),
+                Effect.asVoid
+              );
+          }),
+
         get: ({ params }) =>
           Effect.gen(function* () {
             const { workspaceId } = yield* Principal;
             return yield* projects
               .byId({ id: params.projectId, workspaceId })
+              .pipe(
+                Effect.catchTags({
+                  ...storeDefects,
+                  "Db.NotFound": toNotFound,
+                })
+              );
+          }),
+
+        // The one response in this API that carries a stored secret, which is
+        // why the whole group of four is `admin`: it is the operator's own
+        // value being shown back to them, and a run's token cannot reach here.
+        getEnv: ({ params }) =>
+          Effect.gen(function* () {
+            const { workspaceId } = yield* Principal;
+            return yield* envFiles
+              .read({
+                id: params.fileId,
+                projectId: params.projectId,
+                workspaceId,
+              })
               .pipe(
                 Effect.catchTags({
                   ...storeDefects,
@@ -90,6 +135,16 @@ export const projectsHandlers = HttpApiBuilder.group(
               .pipe(Effect.catchTags(storeDefects));
           }),
 
+        // Paths and timestamps. The shape has nowhere to put the content, so a
+        // listing cannot leak one by omission.
+        listEnv: ({ params }) =>
+          Effect.gen(function* () {
+            const { workspaceId } = yield* Principal;
+            return yield* envFiles
+              .list({ projectId: params.projectId, workspaceId })
+              .pipe(Effect.catchTags(storeDefects));
+          }),
+
         patch: ({ params, payload }) =>
           Effect.gen(function* () {
             const { actor, workspaceId } = yield* Principal;
@@ -101,6 +156,38 @@ export const projectsHandlers = HttpApiBuilder.group(
                   ...storeDefects,
                   "Db.InvalidInput": toInvalidInput,
                   "Db.NotFound": toNotFound,
+                })
+              );
+          }),
+
+        // An upsert on the path, so the editor saves without knowing whether a
+        // row already exists.
+        //
+        // The project is read first only so that saving into one that is not
+        // there is a 404 rather than a 500. The composite foreign key would
+        // refuse the write anyway — the read buys the status code, not the
+        // safety.
+        saveEnv: ({ params, payload }) =>
+          Effect.gen(function* () {
+            const { actor, workspaceId } = yield* Principal;
+            yield* projects.byId({ id: params.projectId, workspaceId }).pipe(
+              Effect.catchTags({
+                ...storeDefects,
+                "Db.NotFound": toNotFound,
+              })
+            );
+            return yield* envFiles
+              .upsert({
+                content: payload.content,
+                path: payload.path,
+                projectId: params.projectId,
+                workspaceId,
+              })
+              .pipe(
+                withActor(actor),
+                Effect.catchTags({
+                  ...storeDefects,
+                  "Db.InvalidInput": toInvalidInput,
                 })
               );
           }),

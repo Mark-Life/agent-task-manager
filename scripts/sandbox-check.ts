@@ -432,6 +432,10 @@ const sandboxCheck = Effect.gen(function* () {
       const made = yield* workspace.materialize({
         agentHomeDir: agentHome.dir,
         dataRoot,
+        // No project env files: what they do to a checkout is unit-tested
+        // against a real filesystem, and this check has no project rows to
+        // read them from.
+        envFiles: [],
         identity,
         // A project, so the conditional fifth mount is present and the
         // read-only claim has both promoted folders to be made against.

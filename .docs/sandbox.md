@@ -34,6 +34,13 @@ fast, it does not remove it. Nothing evicts: `du` it when the disk gets tight, d
 take one cold install. A poisoned cache spreads to later runs, which is accepted — the agent
 already has network access and push rights. Only worker runs get it.
 
+**The project's environment files land in the checkout.** After the clone returns, before the
+container starts: `0600`, parent directories made as needed, each path appended to the
+checkout's `.git/info/exclude`, and the whole checkout `0700` rather than `0755` because it now
+holds credentials beside every other run's checkout under one data root. The paths come from the
+orchestrator as plain `{path, content}`, so this package still never imports `packages/db`, and
+they die with the checkout when the scope closes. See [project env](./project-env.md).
+
 A chat turn has no task and no project, so it gets four: the run directory, the agent home, a
 scratch `/workspace` released with the run, and the global promoted folder read-only. Nothing
 it writes to `/workspace` outlives the container, and the prompt says so.

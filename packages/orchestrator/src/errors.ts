@@ -231,6 +231,7 @@ const OUTCOME_OF_CLASS = {
   ContainerStartFailed: "errored",
   DaemonUnreachable: "errored",
   DispatchFailed: "errored",
+  EnvFileWriteFailed: "errored",
   ImageMissing: "errored",
   IngestFailed: "errored",
   Interrupted: "interrupted",
@@ -381,6 +382,8 @@ const sandboxMessageOf = (error: SandboxError): string => {
       return `the container never started from ${error.image}${exitClause(error.exitCode)}${outputClause(error.stderr)}`;
     case "Sandbox.DaemonUnreachable":
       return `the docker daemon could not be reached: ${error.detail}`;
+    case "Sandbox.EnvFileWriteFailed":
+      return `the project env file ${error.path} could not be written into the checkout`;
     case "Sandbox.ImageMissing":
       return `the image ${error.image} is not on this host and could not be pulled: ${error.detail}`;
     case "Sandbox.MountSourceMissing":

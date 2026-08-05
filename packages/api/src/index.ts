@@ -50,6 +50,11 @@ export { Comment, CommentAppend } from "./schemas/comment";
 export { HealthStatus } from "./schemas/health";
 export { Project, ProjectCreate, ProjectPatch } from "./schemas/project";
 export {
+  ProjectEnvFile,
+  ProjectEnvFileContent,
+  ProjectEnvFileSave,
+} from "./schemas/project-env";
+export {
   DEFAULT_EVENT_PAGE,
   Run,
   RunEvent,

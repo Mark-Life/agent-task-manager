@@ -48,6 +48,13 @@ export type ProjectId = typeof ProjectId.Type;
 /** Mints a fresh {@link ProjectId}. */
 export const newProjectId = mint(ProjectId);
 
+/** One environment file a project hands to every run that works in its repo. */
+export const ProjectEnvFileId = ownId("ProjectEnvFileId");
+export type ProjectEnvFileId = typeof ProjectEnvFileId.Type;
+
+/** Mints a fresh {@link ProjectEnvFileId}. */
+export const newProjectEnvFileId = mint(ProjectEnvFileId);
+
 /** A task: the unit a run is spent on. */
 export const TaskId = ownId("TaskId");
 export type TaskId = typeof TaskId.Type;

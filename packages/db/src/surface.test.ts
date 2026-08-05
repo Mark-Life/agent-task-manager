@@ -37,6 +37,7 @@ const SURFACE = [
   "MalformedRow",
   "NotFound",
   "PersistenceError",
+  "ProjectEnvFileRepo",
   "ProjectRepo",
   "RunAlreadyLive",
   "RunCommandRepo",

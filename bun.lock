@@ -166,6 +166,7 @@
         "@better-auth/drizzle-adapter": "1.7.0-rc.2",
         "@effect/sql-pg": "catalog:",
         "@workspace/domain": "workspace:*",
+        "@workspace/token": "workspace:*",
         "better-auth": "1.7.0-rc.2",
         "drizzle-orm": "1.0.0-rc.4",
         "effect": "catalog:",

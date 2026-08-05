@@ -8,6 +8,7 @@ export * from "./enums";
 export * from "./ids";
 export * from "./primitives";
 export * from "./project";
+export * from "./project-env";
 export * from "./run";
 export * from "./run-command";
 export * from "./run-event";

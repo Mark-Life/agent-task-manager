@@ -99,9 +99,19 @@ export {
 } from "./committer";
 export { dockerSandbox, dockerSandboxLayer } from "./docker";
 export {
+  ENV_DIR_MODE,
+  ENV_FILE_MODE,
+  type EnvFilesWritten,
+  GIT_EXCLUDE_HEADER,
+  GIT_EXCLUDE_PATH,
+  type WriteEnvFilesInput,
+  writeEnvFiles,
+} from "./env-files";
+export {
   CloneFailed,
   ContainerStartFailed,
   DaemonUnreachable,
+  EnvFileWriteFailed,
   ImageMissing,
   MountSourceMissing,
   OomKilled,
@@ -245,6 +255,7 @@ export {
   type LocalWorkspaceOptions,
   localWorkspaceLayer,
   RUN_DIR_MODE,
+  WORKSPACE_DIR_MODE,
   WORKSPACES_SEGMENT,
   type WorkspaceDirInput,
   workspaceDirOf,

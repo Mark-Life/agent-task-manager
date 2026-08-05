@@ -138,13 +138,16 @@ something with a second operator, and by then sandboxes are somebody else's serv
 
 ---
 
-## Unresolved
+## Resolved
 
-- Does a task need to opt out of its project's env files? A run that should not hold
-  production credentials is a real case, but a per-task toggle is a switch nobody remembers
-  to set.
-- One file set per project, or named sets (`dev`, `staging`) selected per task?
-- Should the editor refuse a file whose path is not gitignored in the target repo? Writing
-  `.env` into a repo that tracks it means the agent can commit it.
-- Is there a case for a project-level variable that is *not* a file — something injected as
-  a real container env var rather than written to disk?
+- **Per-task opt-out:** no. A switch nobody remembers to set.
+- **Named sets (`dev`, `staging`):** no. A repo that needs two writes `.env.staging` beside
+  `.env` — two paths, which the file model already carries.
+- **Refusing a path the repo does not gitignore:** parsing a repo's nested `.gitignore` files
+  is not worth it. Instead each written path is appended to the checkout's own
+  `.git/info/exclude` — per checkout, git-native, one write. `git add .` skips it and
+  `git add .env` refuses by name. Does not cover a path the repo already tracks.
+- **Project-level variables that are not files:** scrapped.
+
+Built shape differs from §7 in one place: files are addressed by row id, not by a wildcard
+path segment. How it actually behaves is [`.docs/project-env.md`](../project-env.md).

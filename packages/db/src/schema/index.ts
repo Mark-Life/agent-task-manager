@@ -31,6 +31,7 @@ export {
 export { chatMessage, chatNotification, chatThread } from "./chat";
 export { comment } from "./comment";
 export { project } from "./project";
+export { projectEnvFile } from "./project-env";
 export { relations } from "./relations";
 export { run, runCommand, runEvent } from "./run";
 export { task } from "./task";

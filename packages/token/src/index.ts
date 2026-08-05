@@ -14,11 +14,19 @@
  * is made" is one answer, and the difference between the two roles is a
  * narrower binding of it rather than a second recipe.
  *
+ * The sealer is here for the third time the same reason applies. A project's
+ * environment files are encrypted with a key derived from the same root secret
+ * under a different label, and the gateway seals what an operator types while
+ * the loop opens it on the way into a container. Two processes, one derivation
+ * — and a second module reading `BETTER_AUTH_SECRET` would be a second thing to
+ * rotate.
+ *
  * Nothing else is in this package on purpose. It knows the claim shape, the
- * signature and the ceiling each kind of actor may hold; it knows nothing about
- * HTTP, about a request, or about how a credential is presented. That is what
- * keeps "which actor may hold which scope" a single rule enforced at mint and
- * at verify, rather than a rule each caller re-applies.
+ * signature, the ceiling each kind of actor may hold, and how a stored secret
+ * is sealed; it knows nothing about HTTP, about a request, or about how a
+ * credential is presented. That is what keeps "which actor may hold which
+ * scope" a single rule enforced at mint and at verify, rather than a rule each
+ * caller re-applies.
  */
 
 export type {
@@ -28,6 +36,17 @@ export type {
   WorkerRunBinding,
 } from "./actors";
 export { DEFAULT_AGENT_TOKEN_TTL_MS, mintAgentToken } from "./actors";
+export {
+  makeSecretSealer,
+  SEALED_KEY_VERSION,
+  SECRET_FAILURES,
+  type SealedSecret,
+  SecretFailure,
+  type SecretSealer,
+  SecretUnreadable,
+  secretSealerConfig,
+  secretSealerFrom,
+} from "./secrets";
 export {
   type MintOptions,
   makeTokenSigner,
