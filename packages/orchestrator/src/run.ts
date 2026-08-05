@@ -34,7 +34,9 @@
  */
 
 import {
+  agentTokenPathOf,
   CONTAINER_AGENT_MCP_PATH,
+  CONTAINER_AGENT_TOKEN_PATH,
   claudeManagerMcpServers,
 } from "@workspace/agent-tools";
 import { RunEventRepo, RunRepo, withActor } from "@workspace/db";
@@ -61,21 +63,14 @@ import {
   type SandboxKind,
   Workspace,
 } from "@workspace/sandbox";
-import { makeTokenSigner, mintAgentToken } from "@workspace/token";
-import {
-  Cause,
-  DateTime,
-  Effect,
-  type Redacted,
-  Ref,
-  Schema,
-  Stream,
-} from "effect";
+import { makeTokenSigner } from "@workspace/token";
+import { Cause, DateTime, Effect, Ref, Schema, Stream } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import {
   bindingOf,
   copyAgentBundle,
   scopedMcpServersFile,
+  scopedRollingToken,
 } from "./agent-token";
 import { materializeThreadRun, threadPlacementOf } from "./chat-turn";
 import { type ContainerRecord, containerTurn } from "./container-turn";
@@ -216,7 +211,11 @@ export interface ExecuteRunInput {
    * hangs exactly as quietly as a wedged model does.
    */
   readonly timeoutMs: number;
-  /** How long this turn's board credential lives. */
+  /**
+   * How long each of this turn's board credentials lives. Not how long the turn
+   * can reach the board: the credential is rolled for as long as the run is
+   * alive, so this is its blast radius rather than the run's own deadline.
+   */
   readonly tokenTtlMs: number;
 }
 
@@ -561,8 +560,9 @@ export const executeRun = (input: ExecuteRunInput) =>
         runDir: context.layout.runDir,
       });
       const signer = yield* makeTokenSigner;
-      const token: Redacted.Redacted<string> = yield* mintAgentToken({
+      const tokenPath = yield* scopedRollingToken({
         binding: bindingOf(context),
+        path: agentTokenPathOf(context.layout.runDir),
         signer,
         ttlMs: input.tokenTtlMs,
         workspaceId,
@@ -570,14 +570,16 @@ export const executeRun = (input: ExecuteRunInput) =>
       yield* scopedMcpServersFile({
         gatewayUrl,
         path: mcpServersPathOf(context.layout),
-        token,
       });
       return claudeManagerMcpServers({
-        // The container reads the bundle at its own mount point; a host process
-        // reads the copy where it actually is.
+        // The container reads the bundle and the credential at their own mount
+        // point; a host process reads them where they actually are.
         bundlePath: contained ? CONTAINER_AGENT_MCP_PATH : bundlePath,
+        credential: {
+          kind: "file",
+          path: contained ? CONTAINER_AGENT_TOKEN_PATH : tokenPath,
+        },
         gatewayUrl,
-        token,
       });
     });
 

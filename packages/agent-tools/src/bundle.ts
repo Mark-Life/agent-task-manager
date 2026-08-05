@@ -37,3 +37,27 @@ export const CONTAINER_AGENT_MCP_PATH = join(
 /** The bundle inside one thread's run directory on the host, which is what gets copied. */
 export const agentMcpRunCopyPathOf = (threadRunDir: string) =>
   join(threadRunDir, AGENT_MCP_BUNDLE_FILE);
+
+/**
+ * The file the board credential is rolled through.
+ *
+ * Beside the bundle rather than inside it, because the two have opposite
+ * lifetimes: the bundle is written once per turn and never changes, and this is
+ * rewritten every few minutes for as long as the turn lasts. Reading it is what
+ * the server does per request, so a turn of any length holds a credential that
+ * was minted minutes ago rather than one minted when the container started.
+ *
+ * Deleting it is what ends the turn's access — the only revocation this
+ * credential shape has, and the reason nothing caches what it read.
+ */
+export const AGENT_TOKEN_FILE = "agent-token";
+
+/** The rolling credential in one run directory on the host, which is what gets written. */
+export const agentTokenPathOf = (threadRunDir: string) =>
+  join(threadRunDir, AGENT_TOKEN_FILE);
+
+/** The same file as the container sees it, which is what the server is told to read. */
+export const CONTAINER_AGENT_TOKEN_PATH = join(
+  CONTAINER_RUN_DIR,
+  AGENT_TOKEN_FILE
+);

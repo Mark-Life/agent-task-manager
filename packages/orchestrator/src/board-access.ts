@@ -45,10 +45,10 @@ import { TOKEN_REJECTIONS } from "@workspace/token";
  *
  * Its own name rather than the harness's `Unauthenticated`, which means the
  * provider login failed rather than the board one. The two are answered by
- * different people — one is a re-login on the host, this one is a credential
- * the loop minted too short —
- * and a `GROUP BY errorClass` that cannot tell them apart sends every one of
- * these to the wrong place.
+ * different people — one is a re-login on the host, this one is the loop
+ * failing to keep the run's credential alive on the mount — and a `GROUP BY
+ * errorClass` that cannot tell them apart sends every one of these to the wrong
+ * place.
  */
 export const BOARD_ACCESS_ERROR_CLASS = "BoardAccessLost";
 
