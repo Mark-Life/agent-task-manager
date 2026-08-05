@@ -1,5 +1,6 @@
 /**
- * The claim the credential makes: it outlives the run that holds it.
+ * The claim the credential makes: a run holds a live one for as long as it
+ * runs, however long that is.
  *
  * The bug this file exists to keep fixed had no failing component in it.
  * Minting worked, signing worked, verifying worked, and the run worked — the
@@ -7,22 +8,30 @@
  * refused by the same gateway that issued it some hours later, and every board
  * tool went with it at once. Nothing was broken; the two numbers disagreed.
  *
- * So the test is a clock rather than a mock. A real signer mints a real token
- * for a run with a real deadline, the clock is moved forward past the lifetime
- * the old default gave it, and the same signer is asked whether it would still
- * accept the token. `TestClock` is what makes that exact, because both `mint`
- * and `verify` read the time through `Clock` — the whole of the expiry is
- * arithmetic on a number this test controls, so "a run that lasted twelve
- * hours" is an assertion rather than a twelve-hour test.
+ * The fix is to stop having two numbers. The credential is a file on the run
+ * mount that is rewritten while the run works, so the question "does the token
+ * outlive the run" has no answer to get wrong — what is asserted below is that
+ * at the far end of a run twelve hours long, the file holds a token this signer
+ * still accepts, and that it is not the one the run started with.
  *
- * The old lifetime is asserted alongside the new one on purpose. A test that
- * only showed the fixed token surviving would pass just as well if the expiry
- * check were removed altogether; showing that the same instant refuses the
- * fifteen-minute token and accepts the derived one is what makes it a proof of
- * the fix rather than of the clock.
+ * So the test is a clock rather than a mock. A real signer mints real tokens
+ * onto a real directory, and `TestClock` is what makes "twelve hours later"
+ * exact: both `mint` and `verify` read the time through `Clock`, and the whole
+ * of the expiry is arithmetic on a number this test controls.
+ *
+ * The old shape is asserted alongside the new one on purpose. A test that only
+ * showed the rolled credential surviving would pass just as well if the expiry
+ * check were removed altogether; showing that the same instant refuses a single
+ * minted token and accepts the rolled one is what makes it a proof of the fix
+ * rather than of the clock.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { BunFileSystem } from "@effect/platform-bun";
+import { agentTokenPathOf } from "@workspace/agent-tools";
 import { AgentSessionId, RunId, TaskId, WorkspaceId } from "@workspace/domain";
 import {
   type AgentBinding,
@@ -30,9 +39,10 @@ import {
   mintAgentToken,
   tokenSignerFrom,
 } from "@workspace/token";
-import { Effect, Redacted } from "effect";
+import { Effect, Redacted, type Scope } from "effect";
+import { FileSystem } from "effect/FileSystem";
 import { TestClock } from "effect/testing";
-import { tokenTtlFor } from "./agent-token";
+import { refreshPeriodOf, scopedRollingToken } from "./agent-token";
 
 const signer = tokenSignerFrom(Redacted.make("test-secret-not-a-real-one"));
 
@@ -49,16 +59,26 @@ const binding: AgentBinding = {
 /** The run cap this loop ships with: a day, because a worker run is a day's work. */
 const RUN_TIMEOUT_MS = 86_400_000;
 
-/** The manager's cap, which is a turn with a person waiting on it. */
-const CHAT_TIMEOUT_MS = 1_800_000;
-
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
 
-const mintFor = (ttlMs: number) =>
-  mintAgentToken({ binding, signer, ttlMs, workspaceId }).pipe(
-    Effect.map(Redacted.value)
-  );
+/** How many times the refresh fiber is given a chance to land its write. */
+const SETTLE_YIELDS = 200;
+
+const directories: string[] = [];
+
+afterEach(() => {
+  for (const directory of directories.splice(0)) {
+    rmSync(directory, { force: true, recursive: true });
+  }
+});
+
+/** A run directory of this test's own, cleaned up after it. */
+const runDir = () => {
+  const dir = mkdtempSync(join(tmpdir(), "atm-rolling-token-"));
+  directories.push(dir);
+  return dir;
+};
 
 /**
  * Whether the gateway would still take this token: `true`, or the reason it
@@ -74,61 +94,101 @@ const accepts = (token: string) =>
     )
   );
 
-/** One scripted run on a clock this test owns. */
-const onTheClock = <A, E>(program: Effect.Effect<A, E, never>) =>
-  Effect.runPromise(program.pipe(Effect.provide(TestClock.layer())));
+/** One scripted run on a clock and a scope this test owns. */
+const onTheClock = <A, E>(
+  program: Effect.Effect<A, E, FileSystem | Scope.Scope>
+) =>
+  Effect.runPromise(
+    Effect.scoped(program).pipe(
+      Effect.provide(BunFileSystem.layer),
+      Effect.provide(TestClock.layer())
+    )
+  );
 
-describe("tokenTtlFor", () => {
-  test("gives a run's credential the run's own deadline, plus room to land", () => {
-    const ttl = tokenTtlFor({ configured: null, timeoutMs: RUN_TIMEOUT_MS });
-    expect(ttl).toBeGreaterThan(RUN_TIMEOUT_MS);
-  });
-
-  test("outlives every turn the loop is willing to run", () => {
-    for (const timeoutMs of [CHAT_TIMEOUT_MS, RUN_TIMEOUT_MS]) {
-      expect(tokenTtlFor({ configured: null, timeoutMs })).toBeGreaterThan(
-        timeoutMs
-      );
+/**
+ * The credential on the mount, once the refresh fiber woken by the clock has
+ * finished writing it.
+ *
+ * The fiber is woken by `TestClock.adjust` but lands its write on the event
+ * loop, so the read is retried across yields rather than taken immediately.
+ * Bounded, so a refresh that never happens fails the assertion below instead of
+ * hanging the suite.
+ */
+const rolledPast = (path: string, previous: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem;
+    for (let attempt = 0; attempt < SETTLE_YIELDS; attempt += 1) {
+      const current = yield* fs.readFileString(path);
+      if (current !== previous) {
+        return current;
+      }
+      yield* Effect.yieldNow;
     }
+    return yield* fs.readFileString(path);
   });
 
-  test("lets a deployment that wants a shorter blast radius say so", () => {
-    expect(tokenTtlFor({ configured: 60_000, timeoutMs: RUN_TIMEOUT_MS })).toBe(
-      60_000
-    );
+/** The rolling credential for one run, in a directory of this test's own. */
+const rollingIn = (dir: string, ttlMs: number) =>
+  scopedRollingToken({
+    binding,
+    path: agentTokenPathOf(dir),
+    signer,
+    ttlMs,
+    workspaceId,
+  });
+
+describe("refreshPeriodOf", () => {
+  test("replaces the credential several times inside its own lifetime", () => {
+    const period = refreshPeriodOf(DEFAULT_AGENT_TOKEN_TTL_MS);
+    expect(period).toBeLessThan(DEFAULT_AGENT_TOKEN_TTL_MS);
+    expect(DEFAULT_AGENT_TOKEN_TTL_MS / period).toBeGreaterThanOrEqual(3);
+  });
+
+  test("does not spin when a deployment asks for a very short lifetime", () => {
+    expect(refreshPeriodOf(300)).toBeGreaterThanOrEqual(10_000);
   });
 });
 
-describe("a run that outlasts the old token lifetime", () => {
-  test("still holds a credential the gateway accepts, at the last turn of a day-long run", async () => {
+describe("a run that outlasts one token lifetime", () => {
+  test("still holds a credential the gateway accepts, twelve hours in", async () => {
+    const dir = runDir();
     const verdicts = await onTheClock(
       Effect.gen(function* () {
-        const token = yield* mintFor(
-          tokenTtlFor({ configured: null, timeoutMs: RUN_TIMEOUT_MS })
-        );
+        const fs = yield* FileSystem;
+        const path = yield* rollingIn(dir, DEFAULT_AGENT_TOKEN_TTL_MS);
+        const first = yield* fs.readFileString(path);
+        const atDispatch = yield* accepts(first);
 
-        // The instant the run used to lose the board: one minute past the
-        // fixed fifteen the credential used to be minted with.
-        yield* TestClock.adjust(DEFAULT_AGENT_TOKEN_TTL_MS + MINUTE_MS);
-        const pastOldExpiry = yield* accepts(token);
+        // Twelve hours of work, in the steps the refresh fiber actually wakes
+        // on. The last one is the turn that writes up what it did — the call
+        // the reporting run could not make.
+        const period = refreshPeriodOf(DEFAULT_AGENT_TOKEN_TTL_MS);
+        let held = first;
+        const seen: (string | boolean)[] = [];
+        for (let elapsed = 0; elapsed < 12 * HOUR_MS; elapsed += period) {
+          yield* TestClock.adjust(period);
+          held = yield* rolledPast(path, held);
+          seen.push(yield* accepts(held));
+        }
 
-        // Most of the way through the run's own cap — a worker that has been
-        // working through the night and is about to write up what it did.
-        yield* TestClock.adjust(RUN_TIMEOUT_MS - HOUR_MS);
-        const nearTheDeadline = yield* accepts(token);
-
-        return { nearTheDeadline, pastOldExpiry };
+        return { atDispatch, changed: held !== first, seen };
       })
     );
 
-    expect(verdicts.pastOldExpiry).toBe(true);
-    expect(verdicts.nearTheDeadline).toBe(true);
+    expect(verdicts.atDispatch).toBe(true);
+    expect(verdicts.changed).toBe(true);
+    expect(new Set(verdicts.seen)).toEqual(new Set([true]));
   });
 
-  test("would have lost it at the same instant under the old fixed lifetime", async () => {
+  test("would have been refused at the same instant on a single minted token", async () => {
     const verdict = await onTheClock(
       Effect.gen(function* () {
-        const token = yield* mintFor(DEFAULT_AGENT_TOKEN_TTL_MS);
+        const token = yield* mintAgentToken({
+          binding,
+          signer,
+          ttlMs: DEFAULT_AGENT_TOKEN_TTL_MS,
+          workspaceId,
+        }).pipe(Effect.map(Redacted.value));
         yield* TestClock.adjust(DEFAULT_AGENT_TOKEN_TTL_MS + MINUTE_MS);
         return yield* accepts(token);
       })
@@ -139,45 +199,44 @@ describe("a run that outlasts the old token lifetime", () => {
     expect(verdict).toBe("expired");
   });
 
-  test("posts its comment, registers its artifact and moves its card on one credential", async () => {
-    // Three tools, three moments, one token — the sequence the reporting run
-    // could not finish. Board calls are HTTP requests carrying this bearer, so
-    // what "the tool still works" means at this layer is exactly this.
-    const verdicts = await onTheClock(
+  test("writes nothing a stopped run could still use", async () => {
+    const dir = runDir();
+    const path = agentTokenPathOf(dir);
+
+    // The scope closes with the run, and the credential goes with it: deleting
+    // the file is the only way this token shape can be recalled early, so a
+    // file left behind is a live credential nobody is watching.
+    const present = await onTheClock(
       Effect.gen(function* () {
-        const token = yield* mintFor(
-          tokenTtlFor({ configured: null, timeoutMs: RUN_TIMEOUT_MS })
+        const fs = yield* FileSystem;
+        yield* Effect.scoped(
+          rollingIn(dir, DEFAULT_AGENT_TOKEN_TTL_MS).pipe(
+            Effect.andThen(fs.exists(path))
+          )
         );
-        const seen: boolean[] = [];
-        for (const _ of [
-          "artifacts written", // hours in
-          "comment posted", // the final turn
-          "status set", // after it
-        ]) {
-          yield* TestClock.adjust(8 * HOUR_MS);
-          seen.push((yield* accepts(token)) === true);
-        }
-        return seen;
+        return yield* fs.exists(path);
       })
     );
 
-    expect(verdicts).toEqual([true, true, true]);
+    expect(present).toBe(false);
   });
 
-  test("expires once the run it belongs to could no longer be alive", async () => {
-    // The lifetime is derived from the deadline, so it ends near it. A token
-    // that outlived its run by a day would be a credential nobody can recall,
-    // sitting on a mount, long after there is any work for it to do.
+  test("keeps rolling for the whole of the longest run the loop allows", async () => {
+    const dir = runDir();
     const verdict = await onTheClock(
       Effect.gen(function* () {
-        const token = yield* mintFor(
-          tokenTtlFor({ configured: null, timeoutMs: RUN_TIMEOUT_MS })
-        );
-        yield* TestClock.adjust(RUN_TIMEOUT_MS + HOUR_MS);
-        return yield* accepts(token);
+        const fs = yield* FileSystem;
+        const path = yield* rollingIn(dir, DEFAULT_AGENT_TOKEN_TTL_MS);
+        let held = yield* fs.readFileString(path);
+        const period = refreshPeriodOf(DEFAULT_AGENT_TOKEN_TTL_MS);
+        for (let elapsed = 0; elapsed < RUN_TIMEOUT_MS; elapsed += period) {
+          yield* TestClock.adjust(period);
+          held = yield* rolledPast(path, held);
+        }
+        return yield* accepts(held);
       })
     );
 
-    expect(verdict).toBe("expired");
+    expect(verdict).toBe(true);
   });
 });

@@ -81,6 +81,7 @@ import {
   Sandbox,
   sandboxImageFor,
 } from "@workspace/sandbox";
+import { DEFAULT_AGENT_TOKEN_TTL_MS } from "@workspace/token";
 import {
   Cause,
   Context,
@@ -93,7 +94,6 @@ import {
   Tracer,
 } from "effect";
 import { FileSystem } from "effect/FileSystem";
-import { tokenTtlFor } from "./agent-token";
 import { rescanRunArtifacts } from "./artifacts";
 import {
   makeRunCommands,
@@ -412,10 +412,7 @@ const make = Effect.gen(function* () {
         sandboxKind: config.sandboxKind,
         skillsDir: config.skillsDir,
         timeoutMs: timeoutFor(context.attached),
-        tokenTtlMs: tokenTtlFor({
-          configured: config.agentTokenTtlMs,
-          timeoutMs: timeoutFor(context.attached),
-        }),
+        tokenTtlMs: config.agentTokenTtlMs ?? DEFAULT_AGENT_TOKEN_TTL_MS,
       }).pipe(
         withRunEvent({
           dispatch: context,

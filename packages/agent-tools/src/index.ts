@@ -23,16 +23,22 @@
 export {
   AGENT_MCP_BUNDLE_FILE,
   AGENT_MCP_SEGMENT,
+  AGENT_TOKEN_FILE,
   agentMcpBundlePathOf,
   agentMcpRunCopyPathOf,
+  agentTokenPathOf,
   CONTAINER_AGENT_MCP_PATH,
+  CONTAINER_AGENT_TOKEN_PATH,
 } from "./bundle";
 export type { GatewayClient } from "./client";
 export { makeGatewayClient } from "./client";
-export type { GatewayConfig } from "./config";
+export type { GatewayConfig, GatewayCredential } from "./config";
 export {
+  currentGatewayToken,
   GATEWAY_TOKEN_ENV_VAR,
+  GATEWAY_TOKEN_FILE_ENV_VAR,
   GATEWAY_URL_ENV_VAR,
+  GatewayTokenUnreadable,
   readGatewayConfig,
 } from "./config";
 export type { AgentMcpStdio, CodexManagerConfig } from "./provider-config";

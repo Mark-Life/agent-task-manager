@@ -11,13 +11,23 @@
  * than per call, so no tool can be added that forgets it. None of the API's
  * access middlewares declare a client-side requirement, so the only service the
  * construction needs is an `HttpClient`.
+ *
+ * It is attached *effectfully*, because reading it can fail and can give a
+ * different answer than it did a minute ago: a rolling credential is a file the
+ * host rewrites while the turn runs (see `./config`). A read that fails is a
+ * transport failure of that request and nothing more — the next call reads
+ * again, so a turn does not lose its tools over one bad moment on the mount.
  */
 
 import { Api } from "@workspace/api";
-import { type Effect, Redacted } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { Effect, Redacted } from "effect";
+import {
+  HttpClient,
+  HttpClientError,
+  HttpClientRequest,
+} from "effect/unstable/http";
 import { HttpApiClient } from "effect/unstable/httpapi";
-import type { GatewayConfig } from "./config";
+import { currentGatewayToken, type GatewayConfig } from "./config";
 
 /**
  * A client for the whole gateway contract, authenticated as the manager.
@@ -29,8 +39,26 @@ import type { GatewayConfig } from "./config";
 export const makeGatewayClient = (config: GatewayConfig) =>
   HttpApiClient.make(Api, {
     baseUrl: config.baseUrl,
-    transformClient: HttpClient.mapRequest(
-      HttpClientRequest.bearerToken(Redacted.value(config.token))
+    transformClient: HttpClient.mapRequestEffect((request) =>
+      currentGatewayToken(config.credential).pipe(
+        Effect.map((token) =>
+          HttpClientRequest.bearerToken(request, Redacted.value(token))
+        ),
+        // The client's own error channel, so this stays a client the API's
+        // generated methods can be built from: every operation already answers
+        // an `HttpClientError`, and a second error type here would be one every
+        // tool has to name.
+        Effect.mapError(
+          (cause) =>
+            new HttpClientError.HttpClientError({
+              reason: new HttpClientError.TransportError({
+                cause,
+                description: cause.message,
+                request,
+              }),
+            })
+        )
+      )
     ),
   });
 

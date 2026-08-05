@@ -11,9 +11,12 @@
  * tool lists, which is what makes the superset a property nobody has to
  * maintain.
  *
- * **Minted per turn, and short.** Nothing can recall a token, so the defence is
- * that it expires before it is worth stealing. A turn is seconds to minutes; a
- * quarter of an hour is generous.
+ * **Short, and minted again while the turn runs.** Nothing can recall a token,
+ * so the defence is that it expires before it is worth stealing — a quarter of
+ * an hour, whatever the turn's own length. What keeps a long turn working is
+ * that the orchestrator mints another one and replaces the credential the turn
+ * reads (`scopedRollingToken` in `@workspace/orchestrator`), rather than this
+ * lifetime being stretched to cover the work.
  *
  * **It carries who acted.** The actor on the token is what the gateway writes
  * on the audit row of every change the turn causes, which is what makes "which

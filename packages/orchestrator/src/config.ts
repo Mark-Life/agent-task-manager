@@ -185,10 +185,11 @@ export const orchestratorConfig = Effect.gen(function* () {
     Config.withDefault(DEFAULT_CHAT_TIMEOUT_MS)
   );
 
-  // Absent is the useful default: the lifetime a board credential wants is the
-  // length of the turn holding it, which only the dispatch knows. `tokenTtlFor`
-  // in `./agent-token` derives it; a value here overrides, and a value shorter
-  // than the turn is a run that loses its board tools partway through.
+  // How long one board credential lives, not how long a turn can reach the
+  // board: `scopedRollingToken` in `./agent-token` replaces the credential on
+  // the run mount three times per lifetime for as long as the turn lasts, so a
+  // short value here is a smaller blast radius rather than a run that loses its
+  // tools partway through. Absent means the token package's own default.
   const agentTokenTtlMs = yield* Config.int(
     "ORCHESTRATOR_AGENT_TOKEN_TTL_MS"
   ).pipe(Config.withDefault(null));

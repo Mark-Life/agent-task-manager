@@ -26,7 +26,12 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import type { CodexOptions } from "@openai/codex-sdk";
 import { Redacted } from "effect";
-import { GATEWAY_TOKEN_ENV_VAR, GATEWAY_URL_ENV_VAR } from "./config";
+import {
+  GATEWAY_TOKEN_ENV_VAR,
+  GATEWAY_TOKEN_FILE_ENV_VAR,
+  GATEWAY_URL_ENV_VAR,
+  type GatewayCredential,
+} from "./config";
 
 /** The MCP server name, and therefore the middle segment of every tool name. */
 export const AGENT_SERVER_NAME = "atm";
@@ -41,15 +46,28 @@ export const AGENT_MCP_COMMAND = "bun";
 export interface AgentMcpStdio {
   /** The bundle's path **inside the container**, e.g. `/run/agent-mcp.js`. */
   readonly bundlePath: string;
+  /**
+   * Where the turn's credential comes from. A path is named **as the process
+   * that reads it sees it**, which for a contained turn is the container's
+   * spelling of the run mount and not the host's.
+   */
+  readonly credential: GatewayCredential;
   /** The gateway's base url as the container sees it. */
   readonly gatewayUrl: string;
-  /** The turn's manager token. Redacted so a config object logged whole does not print it. */
-  readonly token: Redacted.Redacted;
 }
 
-/** The two variables the server reads, filled in for one turn. */
+/**
+ * The two variables the server reads, filled in for one turn.
+ *
+ * A rolling credential puts a path here and no token, so nothing in the
+ * provider's configuration — which is written to a file and handed across a
+ * pipe — carries the secret itself. A fixed one still puts the value here,
+ * because a process that was handed a token has nowhere else to keep it.
+ */
 const stdioEnv = (server: AgentMcpStdio) => ({
-  [GATEWAY_TOKEN_ENV_VAR]: Redacted.value(server.token),
+  ...(server.credential.kind === "file"
+    ? { [GATEWAY_TOKEN_FILE_ENV_VAR]: server.credential.path }
+    : { [GATEWAY_TOKEN_ENV_VAR]: Redacted.value(server.credential.token) }),
   [GATEWAY_URL_ENV_VAR]: server.gatewayUrl,
 });
 

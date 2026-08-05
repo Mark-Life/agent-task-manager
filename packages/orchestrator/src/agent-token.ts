@@ -1,14 +1,32 @@
 /**
- * How a turn's board credential reaches the container it is for.
+ * How a turn's board credential reaches the container it is for, and how it
+ * stays valid for as long as the turn lasts.
+ *
+ * **It rolls.** A token is minted with a short life and written to a file on
+ * the run mount; a fiber in the run's scope rewrites that file every
+ * {@link refreshPeriodOf} for as long as the turn is alive, and the server
+ * inside the container reads the file per request. So the lifetime of the
+ * credential and the length of the run are no longer one number that has to be
+ * guessed right in advance: a run of any length holds a token minted minutes
+ * ago, and a token that escapes the mount is worth minutes rather than a day.
+ * That number used to be set from the turn's own deadline, which made a
+ * twelve-hour run carry a twelve-hour credential and a deployment that pinned
+ * fifteen minutes lose the board at minute fifteen — {@link scopedRollingToken}
+ * is what makes both of those the same short-lived file.
+ *
+ * **Deleting the file is the revocation.** Nothing caches what it read, so the
+ * run's access ends when the scope closes and the file goes, rather than
+ * whenever the last token it held happens to expire.
  *
  * **It travels on a mount, not in the environment and not in argv.** A server
  * entry in `<runDir>/mcp-servers.json` is read by the container's own
  * entrypoint through the run mount; an environment variable is printed by
  * `docker inspect` to anyone who can reach the daemon, and an argv is printed
- * by `ps` to every process on the host. The file is written before the
- * container starts and removed when the run's scope closes —
- * {@link scopedMcpServersFile} is that pair, held together so a turn that
- * fails cannot leave the credential on disk.
+ * by `ps` to every process on the host. That entry now names the credential's
+ * path rather than carrying its value. The file is written before the container
+ * starts and removed when the run's scope closes — {@link scopedMcpServersFile}
+ * is that pair, held together so a turn that fails cannot leave the credential
+ * on disk.
  *
  * **The bundle is a copy onto the same mount.** The run directory is already
  * mounted read-write, so one file copy per turn costs less than another entry
@@ -28,9 +46,15 @@ import {
   agentMcpRunCopyPathOf,
   agentMcpServersFile,
   CONTAINER_AGENT_MCP_PATH,
+  CONTAINER_AGENT_TOKEN_PATH,
 } from "@workspace/agent-tools";
-import type { AgentBinding } from "@workspace/token";
-import { Effect, type Redacted, Schema } from "effect";
+import type { WorkspaceId } from "@workspace/domain";
+import {
+  type AgentBinding,
+  mintAgentToken,
+  type TokenSigner,
+} from "@workspace/token";
+import { Effect, Redacted, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { type DispatchContext, sessionIdOf } from "./dispatch-context";
 
@@ -50,29 +74,25 @@ export class AgentBundleMissing extends Schema.TaggedErrorClass<AgentBundleMissi
 }
 
 /**
- * How much longer than its own turn a token lives. Enough to cover the turn's
- * teardown and the clock skew between the host that signs and the container
- * that presents, and nothing beyond it.
+ * How many times a token is replaced within its own lifetime.
+ *
+ * Three, so a refresh that fails has two more attempts before the credential on
+ * the mount goes stale, and the gateway is never asked to accept a token minted
+ * more than a third of a lifetime ago — which is the slack that absorbs clock
+ * skew between the host that signs and the container that presents.
  */
-const TOKEN_GRACE_MS = 300_000;
+const REFRESHES_PER_LIFETIME = 3;
 
 /**
- * How long this run's board credential should live.
- *
- * Derived from the turn's deadline rather than set on its own, because the two
- * are the same fact: the token exists for the length of the run and is worth
- * nothing after it. A fixed fifteen minutes was right when a turn was minutes,
- * and is exactly what makes a twelve-hour run spend eleven of them unable to
- * reach the board — a `401` per tool call, which an agent narrates rather than
- * fails on, so the run looks like it worked and filed nothing.
- *
- * `ORCHESTRATOR_AGENT_TOKEN_TTL_MS` still overrides, for a deployment that
- * wants a shorter blast radius and knows a long run pays for it.
+ * The floor on the refresh period. A deployment that asks for a very short
+ * lifetime gets a short one; what it does not get is a fiber rewriting the same
+ * file hundreds of times a minute.
  */
-export const tokenTtlFor = (input: {
-  readonly configured: number | null;
-  readonly timeoutMs: number;
-}) => input.configured ?? input.timeoutMs + TOKEN_GRACE_MS;
+const MIN_REFRESH_MS = 10_000;
+
+/** How often the credential on the mount is replaced, for a token that lives `ttlMs`. */
+export const refreshPeriodOf = (ttlMs: number) =>
+  Math.max(MIN_REFRESH_MS, Math.floor(ttlMs / REFRESHES_PER_LIFETIME));
 
 /**
  * Who this run's token speaks as. The one place the role changes what a
@@ -113,27 +133,113 @@ export const copyAgentBundle = Effect.fn("Run.copyAgentBundle")(
   }
 );
 
+/** What one run's rolling credential is made of, and where it is written. */
+export interface RollingTokenInput {
+  readonly binding: AgentBinding;
+  /** `agentTokenPathOf` applied to the run directory, **as this host sees it**. */
+  readonly path: string;
+  readonly signer: TokenSigner;
+  /** How long each minted token lives. Each is replaced well before it ends. */
+  readonly ttlMs: number;
+  readonly workspaceId: WorkspaceId;
+}
+
+/**
+ * Keeps a live board credential in a file for as long as the ambient scope is
+ * open, and takes it away when the scope closes.
+ *
+ * **The first write is the acquire, so a run that cannot mint never starts.** A
+ * refused mint means this loop asked for more than the actor may hold, which is
+ * a bug worth failing the turn over rather than dispatching an agent that will
+ * narrate its 401s.
+ *
+ * **Later writes are best-effort and loud.** By then the container is running,
+ * and one failed mint is not worth killing a turn that still holds a valid
+ * token for two more periods — but it is worth an error line, because the third
+ * one in a row is a run about to lose the board.
+ *
+ * **The replacement is a rename.** The server inside the container reads this
+ * file on every request with no lock and no retry, so it has to be whole at
+ * every instant: a write in place has a window where it is half a token, and a
+ * rename within the same directory has none.
+ */
+export const scopedRollingToken = Effect.fnUntraced(function* (
+  input: RollingTokenInput
+) {
+  const fs = yield* FileSystem;
+  const pending = `${input.path}.next`;
+
+  const write = Effect.gen(function* () {
+    const token = yield* mintAgentToken({
+      binding: input.binding,
+      signer: input.signer,
+      ttlMs: input.ttlMs,
+      workspaceId: input.workspaceId,
+    });
+    yield* fs.writeFileString(pending, Redacted.value(token));
+    yield* fs.rename(pending, input.path);
+  });
+
+  yield* Effect.acquireRelease(write, () =>
+    Effect.forEach([input.path, pending], (path) =>
+      fs.remove(path, { force: true }).pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning("board credential not removed", { cause, path })
+        ),
+        Effect.ignore
+      )
+    )
+  );
+
+  // Forked into the run's scope: it is interrupted with the turn, so nothing
+  // rewrites a credential for a run that has ended.
+  yield* Effect.forkScoped(
+    Effect.sleep(refreshPeriodOf(input.ttlMs)).pipe(
+      Effect.andThen(
+        write.pipe(
+          Effect.tapError((cause) =>
+            Effect.logError("board credential not refreshed", {
+              cause,
+              path: input.path,
+            })
+          ),
+          Effect.ignore
+        )
+      ),
+      Effect.forever
+    )
+  );
+
+  return input.path;
+});
+
 /** What the servers file names: where to reach the board, and as whom. */
 export interface McpServersFileInput {
   readonly gatewayUrl: string;
   /** `mcpServersPathOf` applied to the run's layout. */
   readonly path: string;
-  readonly token: Redacted.Redacted<string>;
 }
 
 /**
  * Writes the file into the ambient scope, and deletes it when that scope closes
  * — on every exit path, including an interrupt.
  *
+ * Both paths it names are the container's own, because the container's
+ * entrypoint is the only reader this file has: a host-side turn is handed the
+ * same server map directly, spelled in host paths. Naming them here rather than
+ * taking them from the caller is what keeps the two spellings from being
+ * swapped, which is a turn whose tools cannot find their own credential.
+ *
  * Acquired rather than written and later remembered, because the failure this
  * guards against is precisely the one a caller forgets: a turn that crashed
- * leaves a live bearer token in a directory that outlives it by design, since
- * the run directory is what the ingest, the transcript and anyone debugging the
- * run read afterwards.
+ * leaves the run pointed at a live credential in a directory that outlives it by
+ * design, since the run directory is what the ingest, the transcript and anyone
+ * debugging the run read afterwards.
  *
- * The removal is best-effort. A file that could not be deleted is a warning and
- * a token that expires on its own; failing the turn over it would report a
- * cleanup problem as the model's answer.
+ * The removal is best-effort. A file that could not be deleted is a warning, and
+ * the credential it names is removed by {@link scopedRollingToken} on the same
+ * exit path; failing the turn over it would report a cleanup problem as the
+ * model's answer.
  */
 export const scopedMcpServersFile = Effect.fnUntraced(function* (
   input: McpServersFileInput
@@ -141,8 +247,8 @@ export const scopedMcpServersFile = Effect.fnUntraced(function* (
   const fs = yield* FileSystem;
   const contents = agentMcpServersFile({
     bundlePath: CONTAINER_AGENT_MCP_PATH,
+    credential: { kind: "file", path: CONTAINER_AGENT_TOKEN_PATH },
     gatewayUrl: input.gatewayUrl,
-    token: input.token,
   });
   return yield* Effect.acquireRelease(
     fs
