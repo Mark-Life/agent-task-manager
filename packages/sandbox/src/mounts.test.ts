@@ -155,9 +155,17 @@ describe("the package cache", () => {
       BUN_INSTALL_CACHE_DIR: "/cache/bun",
       npm_config_cache: "/cache/npm",
       npm_config_store_dir: "/cache/pnpm",
+      PNPM_CONFIG_STORE_DIR: "/cache/pnpm",
       YARN_ENABLE_GLOBAL_CACHE: "true",
       YARN_GLOBAL_FOLDER: "/cache/yarn",
     });
+  });
+
+  test("names the pnpm store under both spellings, one per pnpm generation", () => {
+    // pnpm 11 ignores the npm-shaped name and reads its own; pnpm 10 does the
+    // opposite. A repo picks the version, so both have to name one directory.
+    const env = packageCacheEnv(CONTAINER_CACHE_DIR);
+    expect(env.PNPM_CONFIG_STORE_DIR).toBe(env.npm_config_store_dir);
   });
 
   test("names the store the run actually sees, container or host", () => {

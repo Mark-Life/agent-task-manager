@@ -144,6 +144,13 @@ export const CONTAINER_CACHE_DIR = "/cache";
  * per-project `.yarn/cache`, which is inside the checkout that dies with the
  * run.
  *
+ * pnpm gets two names for one directory because it changed which it reads.
+ * Through pnpm 10 the store came off `npm_config_store_dir`; pnpm 11 ignores
+ * that name and answers `undefined` for `store-dir`, taking the value from
+ * `PNPM_CONFIG_STORE_DIR` instead. A run does not choose its pnpm — a repo's
+ * `packageManager` field does, and `npx pnpm` takes the newest there is — so
+ * both are set and whichever version turns up finds the same store.
+ *
  * This also takes installs off `$HOME`. A container runs as the loop process's
  * uid, which on a host where that is a system account is not the image's 1000 —
  * so `$HOME` is not writable and every tool that wants one falls back to `/tmp`,
@@ -155,6 +162,7 @@ export const packageCacheEnv = (
   BUN_INSTALL_CACHE_DIR: join(cacheRoot, "bun"),
   npm_config_cache: join(cacheRoot, "npm"),
   npm_config_store_dir: join(cacheRoot, "pnpm"),
+  PNPM_CONFIG_STORE_DIR: join(cacheRoot, "pnpm"),
   YARN_ENABLE_GLOBAL_CACHE: "true",
   YARN_GLOBAL_FOLDER: join(cacheRoot, "yarn"),
 });

@@ -25,8 +25,10 @@ anything under it. Unset shares nothing, which is the default. Mounted rather th
 edit on the host is in the next container with no sync step.
 
 **One package store for the whole host.** `${DATA_ROOT}/caches` is mounted rw at `/cache`, and
-`BUN_INSTALL_CACHE_DIR`, `npm_config_cache`, `npm_config_store_dir`, `YARN_GLOBAL_FOLDER` and
-`YARN_ENABLE_GLOBAL_CACHE` point every manager at it. Shared across projects, because these
+`BUN_INSTALL_CACHE_DIR`, `npm_config_cache`, `npm_config_store_dir`,
+`PNPM_CONFIG_STORE_DIR`, `YARN_GLOBAL_FOLDER` and `YARN_ENABLE_GLOBAL_CACHE` point every manager
+at it. pnpm is named twice for one directory: through pnpm 10 the store came off
+`npm_config_store_dir`, and pnpm 11 reads `PNPM_CONFIG_STORE_DIR` and ignores the other. Shared across projects, because these
 stores are content-addressed and sharing is where the dedupe comes from; a sibling of
 `workspaces/` under one root, because pnpm hardlinks out of its store into `node_modules` and a
 hardlink cannot cross a filesystem. `node_modules` is still per run — the cache makes the install
