@@ -34,7 +34,9 @@
  * The Claude settings layer. `DEFAULT_CLAUDE_SETTINGS` and its merge are a
  * hardening decision about one vendor's permission model, applied by the harness
  * against the run's own environment; exported, they would be a permission set a
- * caller could relax from outside.
+ * caller could relax from outside. What does leave is the name of the variable
+ * an operator's overlay is read from, because the host has to know which
+ * variable to forward into a container, and the error a bad overlay fails with.
  *
  * The turn event's emit path. `withTurnEvent`, its counters and its row builder
  * are how the registry instruments a run, not something to instrument with — the
@@ -53,6 +55,10 @@
  * the exit codes — which both sides read and neither owns.
  */
 
+export {
+  CLAUDE_SETTINGS_ENV_VAR,
+  ClaudeSettingsInvalid,
+} from "./claude-settings";
 export {
   classify,
   describeError,

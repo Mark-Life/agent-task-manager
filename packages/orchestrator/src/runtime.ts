@@ -65,6 +65,7 @@ import {
   type WorkspaceId,
 } from "@workspace/domain";
 import {
+  CLAUDE_SETTINGS_ENV_VAR,
   EXECUTOR_KEY_ENV_VAR,
   EXECUTOR_URL_ENV_VAR,
   entrypointBundlePathOf,
@@ -84,10 +85,12 @@ import {
 import { DEFAULT_AGENT_TOKEN_TTL_MS } from "@workspace/token";
 import {
   Cause,
+  Config,
   Context,
   Effect,
   FiberMap,
   Layer,
+  Option,
   Redacted,
   Schedule,
   Stream,
@@ -241,13 +244,23 @@ const bestEffort =
  * neither runs with no connector tools, which is a smaller agent and not a
  * broken one, so an unreadable configuration is an empty environment rather
  * than a loop that refuses to boot.
+ *
+ * The agent settings overlay is forwarded rather than applied: the harness that
+ * reads it runs inside the container, so this loop passes the text along without
+ * looking at it. A blank one is left off entirely, so an env file that lists the
+ * name with no value hands a container nothing rather than an empty string.
  */
 export const turnEnvironment = Effect.gen(function* () {
   const executor = yield* readExecutorMcp.pipe(
     Effect.orElseSucceed(() => null)
   );
+  const claudeSettings = yield* Config.option(
+    Config.string(CLAUDE_SETTINGS_ENV_VAR)
+  );
+  const overlay = Option.getOrElse(claudeSettings, () => "").trim();
   const github = yield* readGithubToken;
   const env: Readonly<Record<string, string>> = {
+    ...(overlay.length === 0 ? {} : { [CLAUDE_SETTINGS_ENV_VAR]: overlay }),
     ...(executor === null
       ? {}
       : {

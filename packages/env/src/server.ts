@@ -162,6 +162,9 @@ const load = Effect.gen(function* () {
   const anthropicApiKey = yield* Config.option(
     Config.redacted("ANTHROPIC_API_KEY")
   );
+  // Read here as documentation of the contract only: `@workspace/harness` reads
+  // the same variable itself where the provider registry is built, because the
+  // process that applies it is the one inside the container.
   const claudeSettingsJson = yield* Config.option(
     Config.string("CLAUDE_SETTINGS_JSON")
   );
