@@ -113,15 +113,27 @@ const gatewayLayer = (workspace: WorkspaceId) => {
   const access = Layer.mergeAll(
     Layer.succeed(
       ReadAccess,
-      ReadAccess.of({ readToken: grant, sessionCookie: grant })
+      ReadAccess.of({
+        readToken: grant,
+        sessionCookie: grant,
+        userApiKey: grant,
+      })
     ),
     Layer.succeed(
       TaskWriteAccess,
-      TaskWriteAccess.of({ sessionCookie: grant, taskWriteToken: grant })
+      TaskWriteAccess.of({
+        sessionCookie: grant,
+        taskWriteToken: grant,
+        userApiKey: grant,
+      })
     ),
     Layer.succeed(
       AdminAccess,
-      AdminAccess.of({ adminToken: grant, sessionCookie: grant })
+      AdminAccess.of({
+        adminToken: grant,
+        sessionCookie: grant,
+        userApiKey: grant,
+      })
     )
   );
   const services = Layer.mergeAll(access, RunEventNotices.layer).pipe(

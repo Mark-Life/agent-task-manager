@@ -1,8 +1,10 @@
+import { apiKey } from "@better-auth/api-key";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter/relations-v2";
 import { type BetterAuthOptions, betterAuth } from "better-auth";
 import { organization } from "better-auth/plugins/organization";
 import {
   account,
+  apikey,
   invitation,
   member,
   organization as organizationTable,
@@ -70,6 +72,77 @@ const crossSubDomainCookies =
     : { domain: cookieDomain, enabled: true };
 
 /**
+ * What a user-issued API key looks like on the wire. Keys are prefixed so a
+ * value found in a log, a shell history or a paste is recognisable as this
+ * system's — and distinguishable at a glance from the signed bearer token an
+ * agent run carries, which is a different credential with a different lifetime.
+ */
+export const API_KEY_PREFIX = "atm_";
+
+/**
+ * How much of a key is kept in plain text for the dashboard to show. Long
+ * enough that two keys issued minutes apart are told apart by eye, short enough
+ * that the stored fragment is worth nothing to whoever reads the table.
+ */
+const API_KEY_START_LENGTH = 10;
+
+/**
+ * The ceiling on one key's traffic, and the window it is measured over. The
+ * plugin's own default is ten requests a *day*, which would make every key
+ * anybody issued look broken within a minute of being pointed at the board.
+ *
+ * Ten a second sustained is far above what an agent working a card does and far
+ * below what a loop that has lost its exit condition does, which is the thing
+ * worth stopping — a runaway integration hammering the board is the failure a
+ * per-key limit is actually for.
+ */
+const API_KEY_RATE_WINDOW_MS = 60_000;
+const API_KEY_RATE_MAX = 600;
+
+/**
+ * User-issued API keys, as the auth library implements them.
+ *
+ * Hashing, generation, expiry, revocation and the last-used timestamp are all
+ * the plugin's — it stores a SHA-256 of the key and never the key itself, so
+ * what is shown once at creation is genuinely the only copy, and `lastRequest`
+ * is written by the same verification the gateway calls on every request.
+ *
+ * Three settings are load-bearing.
+ *
+ * **`enableMetadata`.** A key has to say what it is good for and which
+ * workspace it speaks in, and metadata is the one field the plugin lets a
+ * browser set at creation. It is therefore *untrusted input*: the gateway
+ * checks the scope against the closed set and the workspace against the
+ * issuer's live memberships, so a key naming a workspace its owner is not in
+ * gets a 403 rather than a board.
+ *
+ * **`requireName`.** A key that cannot be identified in a list is a key nobody
+ * revokes, and an un-revokable credential is the failure this whole feature is
+ * meant to remove.
+ *
+ * **`enableSessionForAPIKeys` is left off**, which is the library's default and
+ * is worth saying out loud: a key that mocked a session would be accepted by
+ * the auth routes themselves, and among those routes is `/api-key/create`. A
+ * key could then mint further keys — including one outliving its own
+ * revocation. A key is a credential for the board's API and reaches nothing
+ * else.
+ */
+const apiKeys = apiKey({
+  defaultPrefix: API_KEY_PREFIX,
+  enableMetadata: true,
+  rateLimit: {
+    enabled: true,
+    maxRequests: API_KEY_RATE_MAX,
+    timeWindow: API_KEY_RATE_WINDOW_MS,
+  },
+  requireName: true,
+  startingCharactersConfig: {
+    charactersLength: API_KEY_START_LENGTH,
+    shouldStore: true,
+  },
+});
+
+/**
  * Everything about auth that does not depend on a live database handle, kept
  * apart so the schema generator can read it without one. The export is named
  * `options` because that is the property the Better Auth CLI looks for on the
@@ -106,7 +179,7 @@ export const options = {
     disableSignUp: true,
     enabled: true,
   },
-  plugins: [organization()],
+  plugins: [apiKeys, organization()],
   // Better Auth checks `Origin` on every non-GET that carries a cookie and
   // answers 403 to anything it was not told about. Its base URL's own origin is
   // already trusted, so this list is the dashboard and nothing else.
@@ -126,12 +199,13 @@ export const options = {
  * `relations` instead, so the lookup finds nothing and the adapter refuses to
  * initialize.
  *
- * Naming only these seven is the useful part of having to pass them: the
+ * Naming only these eight is the useful part of having to pass them: the
  * adapter is a generic model-keyed way into the database, and this is the list
  * of what it can address.
  */
 const authSchema = {
   account,
+  apikey,
   invitation,
   member,
   organization: organizationTable,

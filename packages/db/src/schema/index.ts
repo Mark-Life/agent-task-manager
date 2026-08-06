@@ -21,6 +21,7 @@ export { artifact } from "./artifact";
 export { auditEntry } from "./audit";
 export {
   account,
+  apikey,
   invitation,
   member,
   organization,

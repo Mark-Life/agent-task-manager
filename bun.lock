@@ -44,6 +44,7 @@
       "name": "dashboard",
       "version": "0.0.1",
       "dependencies": {
+        "@better-auth/api-key": "1.7.0-rc.2",
         "@dnd-kit/core": "6.3.1",
         "@dnd-kit/sortable": "10.0.0",
         "@dnd-kit/utilities": "^3.2.2",
@@ -163,6 +164,7 @@
       "name": "@workspace/db",
       "version": "0.0.1",
       "dependencies": {
+        "@better-auth/api-key": "1.7.0-rc.2",
         "@better-auth/drizzle-adapter": "1.7.0-rc.2",
         "@effect/sql-pg": "catalog:",
         "@workspace/domain": "workspace:*",
@@ -171,6 +173,7 @@
         "drizzle-orm": "1.0.0-rc.4",
         "effect": "catalog:",
         "pg": "^8.22.0",
+        "zod": "catalog:",
       },
       "devDependencies": {
         "@types/bun": "catalog:",
@@ -506,6 +509,8 @@
     "@base-ui/react": ["@base-ui/react@1.6.0", "", { "dependencies": { "@babel/runtime": "^7.29.2", "@base-ui/utils": "0.3.1", "@floating-ui/react-dom": "^2.1.8", "@floating-ui/utils": "^0.2.11", "use-sync-external-store": "^1.6.0" }, "peerDependencies": { "@date-fns/tz": "^1.2.0", "@types/react": "^17 || ^18 || ^19", "date-fns": "^4.0.0", "react": "^17 || ^18 || ^19", "react-dom": "^17 || ^18 || ^19" }, "optionalPeers": ["@date-fns/tz", "@types/react", "date-fns"] }, "sha512-/jzjTWJYXhRFO45Bev9lc3cHbmjzCMpUqbMZ2AgKy/z25mY9B6shGSNcXcjQar9n5doM0KYW1W8fcFv2jZBuMw=="],
 
     "@base-ui/utils": ["@base-ui/utils@0.3.1", "", { "dependencies": { "@babel/runtime": "^7.29.2", "@floating-ui/utils": "^0.2.11", "reselect": "^5.2.0", "use-sync-external-store": "^1.6.0" }, "peerDependencies": { "@types/react": "^17 || ^18 || ^19", "react": "^17 || ^18 || ^19", "react-dom": "^17 || ^18 || ^19" }, "optionalPeers": ["@types/react"] }, "sha512-gFFiltORVmW/N6IILTGxizP3PBpVpysqML1ALY5Vk0mH+7faVkCknOU31goYHN5Aoek2dkjxva1XOD2Ce9WuIg=="],
+
+    "@better-auth/api-key": ["@better-auth/api-key@1.7.0-rc.2", "", { "dependencies": { "zod": "^4.3.6" }, "peerDependencies": { "@better-auth/core": "^1.7.0-rc.2", "@better-auth/utils": "0.4.2", "better-auth": "^1.7.0-rc.2", "better-call": "1.3.7" } }, "sha512-7fyxJhOKKWQ+TtLTvCjxfZU+blE+jvwe4rzunz1RfOafuWEukE2ofRQ8uOMG4ZUYG6SO+tVKxsFDnbJZj2Da3g=="],
 
     "@better-auth/core": ["@better-auth/core@1.7.0-rc.2", "", { "dependencies": { "@opentelemetry/semantic-conventions": "^1.41.1", "@standard-schema/spec": "^1.1.0", "zod": "^4.3.6" }, "peerDependencies": { "@better-auth/utils": "0.4.2", "@better-fetch/fetch": "1.3.1", "@cloudflare/workers-types": ">=4", "@opentelemetry/api": "^1.9.0", "better-call": "1.3.7", "jose": "^6.1.0", "kysely": "^0.28.5 || ^0.29.0", "nanostores": "^1.0.1" }, "optionalPeers": ["@cloudflare/workers-types", "@opentelemetry/api"] }, "sha512-NreNGg68j4qUVVYTcC1DtvRTwSJdCavH5igrMyTO5ghZxnzL4G539uRIzOZmJ64MLzOyOwzWH+JHqpVaj0ZRxw=="],
 

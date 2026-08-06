@@ -14,9 +14,10 @@
  *
  * Six surfaces, each with its claims in `./gateway-check-claims`:
  *
- * **The door.** No credential, a forged one and an under-scoped one are three
- * different refusals with three different reasons, and each leaves a row. A
- * rejected token that vanished would be the one failure nobody could count.
+ * **The door.** No credential, a forged token, an under-scoped one and an API
+ * key nobody issued are four different refusals with four different reasons,
+ * and each leaves a row. A rejected credential that vanished would be the one
+ * failure nobody could count.
  *
  * **The board.** File a project, file a task, say something on it, walk it
  * `ideas → backlog → in progress → review → done`, and be refused the move that

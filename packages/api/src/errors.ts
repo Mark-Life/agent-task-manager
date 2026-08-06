@@ -152,3 +152,21 @@ export class Forbidden extends Schema.TaggedErrorClass<Forbidden>()(
   { reason: Schema.String, required: Schema.String },
   { httpApiStatus: 403 }
 ) {}
+
+/**
+ * A good credential asked too often. Only a user's API key can reach this: keys
+ * carry a per-key quota the auth library counts on the row itself, and the
+ * signed tokens an agent run holds are verified by arithmetic against no row at
+ * all, so nothing counts them and nothing can refuse them here.
+ *
+ * It is its own status rather than a 401 because the two mean opposite things
+ * to whoever is holding the key. A 401 says the credential is wrong and the
+ * repair is a new key; this says the credential is right and the repair is to
+ * wait. Answering the second with the first is how somebody spends an evening
+ * re-issuing a key that was never the problem.
+ */
+export class TooManyRequests extends Schema.TaggedErrorClass<TooManyRequests>()(
+  "TooManyRequests",
+  { reason: Schema.String },
+  { httpApiStatus: 429 }
+) {}

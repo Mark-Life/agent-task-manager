@@ -4,6 +4,7 @@ import { artifact } from "./artifact";
 import { auditEntry } from "./audit";
 import {
   account,
+  apikey,
   authRelations,
   invitation,
   member,
@@ -18,9 +19,17 @@ import { project } from "./project";
 import { run, runCommand, runEvent } from "./run";
 import { task } from "./task";
 
-/** The seven tables the auth library owns and regenerates. */
+/**
+ * The eight tables the auth library owns and regenerates. `apikey` has no
+ * relation of its own — its `reference_id` is a user id here but the plugin
+ * declares no foreign key, because the same column holds an organization id
+ * under a different configuration. It is listed anyway for the reason the
+ * bare part below exists: a table missing from this object has no `db.query`
+ * entry, and the adapter cannot read a model it cannot address.
+ */
 const authTables = {
   account,
+  apikey,
   invitation,
   member,
   organization,

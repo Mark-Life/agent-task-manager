@@ -155,15 +155,27 @@ const grant = <A, E, R>(httpEffect: Effect.Effect<A, E, R>) =>
 const accessLayer = Layer.mergeAll(
   Layer.succeed(
     ReadAccess,
-    ReadAccess.of({ readToken: grant, sessionCookie: grant })
+    ReadAccess.of({
+      readToken: grant,
+      sessionCookie: grant,
+      userApiKey: grant,
+    })
   ),
   Layer.succeed(
     TaskWriteAccess,
-    TaskWriteAccess.of({ sessionCookie: grant, taskWriteToken: grant })
+    TaskWriteAccess.of({
+      sessionCookie: grant,
+      taskWriteToken: grant,
+      userApiKey: grant,
+    })
   ),
   Layer.succeed(
     AdminAccess,
-    AdminAccess.of({ adminToken: grant, sessionCookie: grant })
+    AdminAccess.of({
+      adminToken: grant,
+      sessionCookie: grant,
+      userApiKey: grant,
+    })
   )
 );
 

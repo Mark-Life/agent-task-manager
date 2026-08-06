@@ -28,6 +28,7 @@ export {
   PayloadTooLarge,
   RunAlreadyLive,
   RunNotLive,
+  TooManyRequests,
   Unauthorized,
 } from "./errors";
 export { ArtifactsGroup } from "./groups/artifacts";
@@ -99,7 +100,9 @@ export {
 export {
   AdminAccess,
   AdminToken,
+  API_KEY_HEADER,
   API_SCOPES,
+  ApiKeyMetadata,
   ApiScope,
   boundTaskId,
   Principal,
@@ -110,4 +113,5 @@ export {
   scopeReaches,
   TaskWriteAccess,
   TaskWriteToken,
+  UserApiKey,
 } from "./security";
