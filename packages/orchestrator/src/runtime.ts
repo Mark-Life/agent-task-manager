@@ -65,6 +65,7 @@ import {
   type WorkspaceId,
 } from "@workspace/domain";
 import {
+  CLAUDE_SETTINGS_ENV_VAR,
   EXECUTOR_KEY_ENV_VAR,
   EXECUTOR_URL_ENV_VAR,
   entrypointBundlePathOf,
@@ -87,10 +88,12 @@ import {
 import { DEFAULT_AGENT_TOKEN_TTL_MS } from "@workspace/token";
 import {
   Cause,
+  Config,
   Context,
   Effect,
   FiberMap,
   Layer,
+  Option,
   Redacted,
   Schedule,
   Stream,
@@ -253,20 +256,31 @@ const bestEffort =
  * anything to. It is a decision now, and `ATM_MANAGER_GITHUB_TOKEN` is where an
  * operator makes it a different one. `.docs/agent-access.md` argues the
  * default.
+ *
+ * The agent settings overlay is forwarded rather than applied: the harness that
+ * reads it runs inside the container, so this loop passes the text along without
+ * looking at it. A blank one is left off entirely, so an env file that lists the
+ * name with no value hands a container nothing rather than an empty string.
  */
 export const turnEnvironment = Effect.gen(function* () {
   const executor = yield* readExecutorMcp.pipe(
     Effect.orElseSucceed(() => null)
   );
+  const claudeSettings = yield* Config.option(
+    Config.string(CLAUDE_SETTINGS_ENV_VAR)
+  );
+  const overlay = Option.getOrElse(claudeSettings, () => "").trim();
   const github = yield* readGithubToken;
   const managerGithub = yield* readManagerGithubToken;
-  const shared: Readonly<Record<string, string>> =
-    executor === null
+  const shared: Readonly<Record<string, string>> = {
+    ...(overlay.length === 0 ? {} : { [CLAUDE_SETTINGS_ENV_VAR]: overlay }),
+    ...(executor === null
       ? {}
       : {
           [EXECUTOR_KEY_ENV_VAR]: Redacted.value(executor.key),
           [EXECUTOR_URL_ENV_VAR]: executor.url,
-        };
+        }),
+  };
   return {
     // A manager has no checkout and no credential helper: this is `gh` alone,
     // there so a card names a repository that exists, on the branch it really

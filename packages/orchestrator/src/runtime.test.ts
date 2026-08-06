@@ -11,7 +11,11 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { EXECUTOR_KEY_ENV_VAR, EXECUTOR_URL_ENV_VAR } from "@workspace/harness";
+import {
+  CLAUDE_SETTINGS_ENV_VAR,
+  EXECUTOR_KEY_ENV_VAR,
+  EXECUTOR_URL_ENV_VAR,
+} from "@workspace/harness";
 import {
   AGENT_TOKEN_ENV_VAR,
   GH_TOKEN_ENV_VAR,
@@ -67,6 +71,23 @@ describe("turnEnvironment", () => {
       EXECUTOR_KEY_ENV_VAR,
       EXECUTOR_URL_ENV_VAR,
     ]);
+  });
+
+  /**
+   * The overlay is forwarded verbatim and read on the other side. Trimmed only,
+   * because a shell writing `NAME=` means unset and an empty string handed to a
+   * container is a settings file the harness would then refuse to parse.
+   */
+  test("carries the agent settings overlay across, blank or not at all", () => {
+    const overlay = '{"permissions":{"deny":[]}}';
+    expect(withEnv({ [CLAUDE_SETTINGS_ENV_VAR]: ` ${overlay} ` })).toEqual({
+      manager: { [CLAUDE_SETTINGS_ENV_VAR]: overlay },
+      worker: { [CLAUDE_SETTINGS_ENV_VAR]: overlay },
+    });
+    expect(withEnv({ [CLAUDE_SETTINGS_ENV_VAR]: "  " })).toEqual({
+      manager: {},
+      worker: {},
+    });
   });
 
   /**

@@ -20,9 +20,11 @@
  * individual providers do not.
  */
 
+import type { Settings } from "@anthropic-ai/claude-agent-sdk";
 import type { Telemetry } from "@workspace/telemetry";
 import { Effect, Layer, Queue, Stream } from "effect";
-import { claudeProvider } from "./claude";
+import { claudeProvider, makeClaudeProvider } from "./claude";
+import { readClaudeSettings } from "./claude-settings";
 import { codexProvider } from "./codex";
 import type { HarnessError } from "./errors";
 import type { AgentEvent } from "./events";
@@ -106,7 +108,17 @@ export const instrumented = (provider: AgentProvider): AgentProvider => ({
  * Every harness this system can run, keyed by the value a session row stores.
  * Instrumented on the way in, so there is no uninstrumented entry to pick up by
  * accident.
+ *
+ * Only Claude takes a settings argument, because only Claude has a settings file
+ * to override: Codex reads its own configuration and the harness renders it per
+ * run.
  */
+export const providerTableWith = (claudeSettings: Settings): ProviderTable => ({
+  claude: instrumented(makeClaudeProvider(claudeSettings)),
+  codex: instrumented(codexProvider),
+});
+
+/** The table under the hardened defaults, with nothing read from anywhere. */
 export const providerTable: ProviderTable = {
   claude: instrumented(claudeProvider),
   codex: instrumented(codexProvider),
@@ -116,11 +128,17 @@ export const providerTable: ProviderTable = {
 export const providerRegistry = makeProviderRegistry(providerTable);
 
 /**
- * The registry as a service. A plain value behind a layer rather than an
- * effectful build: nothing here opens a connection or reads a file, and the
- * orchestrator wants the lookup available wherever it dispatches.
+ * The registry as a service, over the settings the environment configured.
+ *
+ * Effectful rather than a plain value, because the operator's overlay is read
+ * here: at layer build, once, in the process that is about to run turns. That
+ * placement is the whole point — a settings file that does not parse fails the
+ * build with the variable named, instead of quietly running an agent under
+ * defaults nobody chose. Nothing else here opens anything.
  */
-export const providerRegistryLayer = Layer.succeed(
+export const providerRegistryLayer = Layer.effect(
   ProviderRegistry,
-  providerRegistry
+  Effect.map(readClaudeSettings, (claudeSettings) =>
+    makeProviderRegistry(providerTableWith(claudeSettings))
+  )
 );
