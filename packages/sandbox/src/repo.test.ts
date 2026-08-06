@@ -316,7 +316,14 @@ describe("materialization", () => {
     );
   });
 
-  test("a refreshed mirror is what the next run clones", async () => {
+  /**
+   * The regression this whole arrangement exists for. Before the fetch moved
+   * onto the dispatch path this test asserted the opposite — that the second
+   * run branched from the first run's commit and needed an explicit
+   * `refreshMirror` to catch up — which is exactly the bug, written down as an
+   * expectation.
+   */
+  test("a run dispatched after a commit lands starts from that commit", async () => {
     const source = sourceFor();
     await run(
       materializeRepo({
@@ -327,15 +334,197 @@ describe("materialization", () => {
     );
 
     const second = commit("second", "two\n");
-    // Without the refresh the mirror still holds only the first commit.
-    const stale = await run(
+    const fresh = await run(
       materializeRepo({
         committer: null,
         repo: source,
         workspaceDir: join(root, "workspace-b"),
       })
     );
-    expect(stale.headSha).not.toBe(second);
+
+    expect(fresh.headSha).toBe(second);
+    // The mirror was reused, not re-created: freshness came from the fetch.
+    expect(fresh.mirrorCreated).toBe(false);
+  });
+
+  /**
+   * The acceptance criterion the reviewer actually feels: the branch contains
+   * the merged commit, and the diff against the base is only the run's own work
+   * rather than every commit the stale mirror had not seen.
+   */
+  test("the run's diff against the base holds only the run's own changes", async () => {
+    const source = sourceFor();
+    // An earlier run, which is what pins the mirror if nothing re-fetches it.
+    await run(
+      materializeRepo({
+        committer: null,
+        repo: source,
+        workspaceDir: join(root, "workspace-earlier"),
+      })
+    );
+    const merged = commit("merged upstream", "upstream work\n");
+    const workspaceDir = join(root, "workspace");
+    await run(materializeRepo({ committer: null, repo: source, workspaceDir }));
+
+    const checkoutGit = (...args: string[]) =>
+      execFileSync("git", args, { cwd: workspaceDir, encoding: "utf8" }).trim();
+    // The merged commit is in the run's history, so it cannot show up as a change.
+    expect(checkoutGit("merge-base", "HEAD", merged)).toBe(merged);
+
+    writeFileSync(join(workspaceDir, "agent.txt"), "the run's work\n");
+    checkoutGit("add", "agent.txt");
+    checkoutGit("commit", "-m", "the run's work");
+
+    expect(checkoutGit("diff", "--name-only", `${merged}...HEAD`)).toBe(
+      "agent.txt"
+    );
+  });
+
+  /**
+   * The per-task override, which lives in the brief as prose and is carried out
+   * by the agent inside the container. It keeps working, and it inherits the
+   * freshness rule for free: the workspace is cloned after the fetch, so every
+   * `origin/<branch>` it holds is the remote's tip rather than whatever a local
+   * ref last remembered.
+   */
+  test("a base other than the default is fresh too", async () => {
+    fixtureGit(origin, "checkout", "-b", "mvp");
+    commit("mvp first", "mvp one\n");
+    fixtureGit(origin, "checkout", "main");
+
+    const source = sourceFor();
+    // A first run, which is what creates the mirror and would pin it.
+    await run(
+      materializeRepo({
+        committer: null,
+        repo: source,
+        workspaceDir: join(root, "workspace-a"),
+      })
+    );
+
+    fixtureGit(origin, "checkout", "mvp");
+    const mvpTip = commit("mvp second", "mvp two\n");
+    fixtureGit(origin, "checkout", "main");
+
+    const workspaceDir = join(root, "workspace-b");
+    await run(materializeRepo({ committer: null, repo: source, workspaceDir }));
+
+    // What an agent reading "branch off `mvp`" resolves in its checkout.
+    expect(
+      execFileSync("git", ["rev-parse", "origin/mvp"], {
+        cwd: workspaceDir,
+        encoding: "utf8",
+      }).trim()
+    ).toBe(mvpTip);
+  });
+
+  /**
+   * Naming the base explicitly, which is what a structured base-branch field
+   * would set. Same freshness, and the branch is cut from it rather than from
+   * the project default.
+   */
+  test("an explicit base ref is honoured at its remote tip", async () => {
+    fixtureGit(origin, "checkout", "-b", "mvp");
+    commit("mvp first", "mvp one\n");
+    fixtureGit(origin, "checkout", "main");
+    const source = sourceFor();
+    await run(
+      materializeRepo({
+        committer: null,
+        repo: source,
+        workspaceDir: join(root, "workspace-a"),
+      })
+    );
+
+    fixtureGit(origin, "checkout", "mvp");
+    const mvpTip = commit("mvp second", "mvp two\n");
+    fixtureGit(origin, "checkout", "main");
+
+    const checkout = await run(
+      materializeRepo({
+        committer: null,
+        repo: { ...source, baseRef: "origin/mvp" },
+        workspaceDir: join(root, "workspace-b"),
+      })
+    );
+    expect(checkout.headSha).toBe(mvpTip);
+  });
+
+  /**
+   * A branch deleted upstream. `--prune` is what makes this reachable — without
+   * it the mirror keeps the ref forever and the run branches from a base that
+   * no longer exists, silently.
+   */
+  test("a base branch deleted on the remote fails the run by name", async () => {
+    fixtureGit(origin, "checkout", "-b", "doomed");
+    commit("on doomed", "doomed\n");
+    fixtureGit(origin, "checkout", "main");
+
+    const source = { ...sourceFor(), baseRef: "origin/doomed" };
+    await run(
+      materializeRepo({
+        committer: null,
+        repo: source,
+        workspaceDir: join(root, "workspace-a"),
+      })
+    );
+
+    fixtureGit(origin, "branch", "-D", "doomed");
+
+    const failure = await Effect.runPromise(
+      Effect.flip(
+        Effect.provide(
+          materializeRepo({
+            committer: null,
+            repo: source,
+            workspaceDir: join(root, "workspace-b"),
+          }),
+          layer
+        )
+      )
+    );
+    expect(failure).toBeInstanceOf(CloneFailed);
+    // Names the ref, rather than git's "invalid reference".
+    expect(failure.stderr).toContain("origin/doomed");
+  });
+
+  /**
+   * The chosen failure policy, stated as a test: an unreachable remote fails the
+   * run rather than falling back to the mirror it can still read perfectly well.
+   * Deleting the origin is the cheapest unreachable remote there is.
+   */
+  test("a fetch that fails fails the run instead of using the stale mirror", async () => {
+    const source = sourceFor();
+    await run(
+      materializeRepo({
+        committer: null,
+        repo: source,
+        workspaceDir: join(root, "workspace-a"),
+      })
+    );
+    rmSync(origin, { force: true, recursive: true });
+
+    const failure = await Effect.runPromise(
+      Effect.flip(
+        Effect.provide(
+          materializeRepo({
+            committer: null,
+            repo: source,
+            workspaceDir: join(root, "workspace-b"),
+          }),
+          layer
+        )
+      )
+    );
+    expect(failure).toBeInstanceOf(CloneFailed);
+    // And nothing was materialized from the mirror that is still sitting there.
+    expect(existsSync(join(root, "workspace-b", "README.md"))).toBe(false);
+  });
+
+  test("a refreshed mirror is what the next run clones", async () => {
+    const source = sourceFor();
+    await run(ensureMirror(source));
+    const second = commit("second", "two\n");
 
     await run(refreshMirror(source));
     const fresh = await run(

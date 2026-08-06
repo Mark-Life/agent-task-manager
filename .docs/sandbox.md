@@ -61,9 +61,14 @@ image build. Local isolates nothing and says so — it logs every confinement it
 writes `kind: "local"` on its row, so an unisolated run can never be mistaken for a sandboxed
 one afterwards. The orchestrator asks for a `Sandbox` and never learns which it got.
 
-**Repos are cloned from a host-side bare mirror** under `${DATA_ROOT}/mirrors`, refreshed on a
-schedule the orchestrator owns, never on the path of a dispatch. A task with no repo gets an
-empty scratch directory and the same machinery. Artifacts live under
+**Repos are cloned from a host-side bare mirror** under `${DATA_ROOT}/mirrors`, fetched at the
+start of every materialization so a run branches from the remote's tip as it stands at
+dispatch. The fetch used to be a scheduled sweep held off the dispatch path for latency;
+nothing ever owned the schedule, so mirrors were fetched once and every later run branched from
+a base frozen on the day the repo was first seen. It is bounded (3 minutes) and retried past the
+ref-lock race two concurrent dispatches cause, and a fetch that still fails **fails the run** —
+there is no fallback to the stale mirror, because a silently old base is the bug this prevents.
+A task with no repo gets an empty scratch directory and the same machinery. Artifacts live under
 `${DATA_ROOT}/artifacts/{global,projects/<id>,tasks/<id>}`; Postgres holds an index of them,
 never the bytes.
 
