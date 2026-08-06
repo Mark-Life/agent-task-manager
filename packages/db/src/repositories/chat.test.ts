@@ -37,6 +37,12 @@ const CHAT_ID_RANGE = 1_000_000_000;
 
 const chatId = TelegramChatId.make(-Math.floor(Math.random() * CHAT_ID_RANGE));
 
+/** A second chat, so "another chat is holding it" is a state a test can build. */
+const otherChatId = TelegramChatId.make(chatId - 1);
+
+/** Enough of the workspace's conversations to find the ones written here. */
+const LIST_LIMIT = 100;
+
 const userId = UserId.make("chat-test-user");
 
 /** Sessions are audited, so the test says who is opening them. */
@@ -69,7 +75,9 @@ afterAll(async () => {
       const sql = yield* PgClient.PgClient;
       yield* sql`delete from chat_notification where workspace_id = ${workspaceId} and dedupe_key like ${`${APPLICATION_NAME}:%`}`;
       // The messages go with the threads, through the composite cascade.
-      yield* sql`delete from chat_thread where workspace_id = ${workspaceId} and chat_id = ${chatId}`;
+      // By the user as well as by the chat: a conversation opened the way the
+      // dashboard opens one has no chat id to find it by.
+      yield* sql`delete from chat_thread where workspace_id = ${workspaceId} and (chat_id = ${chatId} or user_id = ${userId})`;
     })
   );
   await runtime.dispose();
@@ -176,6 +184,109 @@ test("a chat has one current thread, and switching moves it", async () => {
   expect(result.displaced.isCurrent).toBe(false);
   expect(result.displaced.status).toBe("active");
   expect(result.listed.length).toBeGreaterThanOrEqual(2);
+});
+
+test("a conversation opened outside Telegram is listed for the workspace, and resuming it from a chat binds it there", async () => {
+  const result = await runtime.runPromise(
+    Effect.gen(function* () {
+      const threads = yield* ChatThreadRepo;
+
+      // What the gateway writes for a thread started in the dashboard: no
+      // chat, and `is_current` set on a thread that is current in no chat.
+      const fromDashboard = yield* threads.open({
+        provider: "claude",
+        title: "opened in the dashboard",
+        userId,
+        workspaceId,
+      });
+      const held = yield* threads.open({
+        chatId,
+        provider: "claude",
+        title: "the chat's own",
+        userId,
+        workspaceId,
+      });
+
+      const beforeChat = yield* threads.listForChat({ chatId, workspaceId });
+      const beforeWorkspace = yield* threads.listForWorkspace({
+        limit: LIST_LIMIT,
+        workspaceId,
+      });
+
+      const adopted = yield* threads.setCurrent({
+        chatId,
+        id: fromDashboard.id,
+        workspaceId,
+      });
+
+      return {
+        adopted,
+        beforeChat,
+        beforeWorkspace,
+        current: yield* threads.current({ chatId, workspaceId }),
+        displaced: yield* threads.byId({ id: held.id, workspaceId }),
+        fromDashboard,
+      };
+    })
+  );
+
+  const idsIn = (rows: readonly { readonly id: string }[]) =>
+    rows.map((row) => row.id);
+
+  // The filter that hid it: a chat's list is `chat_id = ?`, and this thread
+  // has none. The workspace's list — what the dashboard reads — has it.
+  expect(idsIn(result.beforeChat)).not.toContain(result.fromDashboard.id);
+  expect(idsIn(result.beforeWorkspace)).toContain(result.fromDashboard.id);
+
+  // Resuming it from the chat is what gives it a chat to be answered into.
+  expect(result.adopted.chatId).toBe(chatId);
+  expect(result.adopted.isCurrent).toBe(true);
+  expect(result.current?.id).toBe(result.fromDashboard.id);
+  // And currency is still one per chat, which is the index's doing.
+  expect(result.displaced.isCurrent).toBe(false);
+});
+
+test("a conversation another chat is holding cannot be taken by this one", async () => {
+  const failure = await runtime.runPromise(
+    Effect.gen(function* () {
+      const threads = yield* ChatThreadRepo;
+
+      const theirs = yield* threads.open({
+        chatId: otherChatId,
+        provider: "claude",
+        title: "another chat's conversation",
+        userId,
+        workspaceId,
+      });
+
+      return yield* Effect.flip(
+        threads.setCurrent({ chatId, id: theirs.id, workspaceId })
+      );
+    })
+  );
+
+  expect(failure._tag).toBe("Db.InvalidInput");
+});
+
+test("a conversation with no chat cannot be made current by a caller that names none", async () => {
+  const failure = await runtime.runPromise(
+    Effect.gen(function* () {
+      const threads = yield* ChatThreadRepo;
+
+      const fromDashboard = yield* threads.open({
+        provider: "claude",
+        title: "current in no chat",
+        userId,
+        workspaceId,
+      });
+
+      return yield* Effect.flip(
+        threads.setCurrent({ id: fromDashboard.id, workspaceId })
+      );
+    })
+  );
+
+  expect(failure._tag).toBe("Db.InvalidInput");
 });
 
 test("a thread with an unread message is dispatchable, and stops being one at the watermark", async () => {

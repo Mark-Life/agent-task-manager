@@ -11,12 +11,14 @@
  * for a tapped button — the button is what makes the next notice land in the
  * chat the person tapped it in.
  *
- * Failing that, the notice goes to the chats the deployment already trusts:
- * the allow-listed accounts for that workspace, current thread where one
- * exists. This is the "somebody started this from the dashboard" case, and a
- * notice in the right workspace's chat is worth more than silence — a person
- * who did not ask for it can ignore one line, while a failed run nobody hears
- * about is the failure mode this whole path exists to prevent.
+ * Failing that — no conversation on the task, or one that has never been spoken
+ * to from Telegram and so has no chat to answer into — the notice goes to the
+ * chats the deployment already trusts: the allow-listed accounts for that
+ * workspace, current thread where one exists. This is the "somebody started
+ * this from the dashboard" case, and a notice in the right workspace's chat is
+ * worth more than silence — a person who did not ask for it can ignore one
+ * line, while a failed run nobody hears about is the failure mode this whole
+ * path exists to prevent.
  *
  * When neither answers there is no chat at all, and the caller says so in the
  * log and sends nothing. There is deliberately no third fallback to "the first
@@ -106,15 +108,18 @@ export const resolveNotifyTargets = Effect.fn("Notify.resolveTargets")(
       const thread = yield* threads
         .byId({ id: threadId, workspaceId })
         .pipe(Effect.catchTag("Db.NotFound", () => Effect.succeed(null)));
-      if (thread !== null) {
-        return [
-          {
-            chatId: thread.chatId,
-            source: "audit_thread",
-            threadId: thread.id,
-            userId: thread.userId,
-          },
-        ] as readonly NotifyTarget[];
+      // A conversation opened in the dashboard and never resumed from Telegram
+      // has no chat to answer into, and a notice addressed to a null chat is
+      // one nobody gets. That is exactly the case the allow-list below is for,
+      // so it falls through rather than being sent nowhere.
+      if (thread !== null && thread.chatId !== null) {
+        const target: NotifyTarget = {
+          chatId: thread.chatId,
+          source: "audit_thread",
+          threadId: thread.id,
+          userId: thread.userId,
+        };
+        return [target];
       }
     }
 

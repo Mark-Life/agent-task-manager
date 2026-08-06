@@ -28,12 +28,20 @@ import { appendNavRow, navKeyboard, pageIndicator, paginate } from "./paging";
 import {
   ensureThread,
   listThreads,
+  THREAD_RELATION_LEGEND,
   telegramChatIdOf,
   threadButtonLabel,
+  threadRelation,
   threadTitle,
 } from "./threads";
 
-/** How many threads or messages a list reaches back over. */
+/**
+ * How many threads or messages a list reaches back over.
+ *
+ * The conversation list is the workspace's rather than one chat's, so this is
+ * the sixty most recently spoken in — eight to a page, and a conversation that
+ * has been quiet longer than sixty others is one nobody is scrolling to.
+ */
 const THREAD_LIST_LIMIT = 60;
 
 /** How much of a message the history list shows before it clips. */
@@ -46,17 +54,23 @@ export interface RenderedPage {
 }
 
 /**
- * The chat's conversations, one page at a time, each row a button that switches
- * to it. The list is a keyboard rather than text with ids beside it because
- * switching by typing a uuid is not a thing anybody does.
+ * The workspace's conversations, one page at a time, each row a button that
+ * switches to it. The list is a keyboard rather than text with ids beside it
+ * because switching by typing a uuid is not a thing anybody does.
+ *
+ * Every conversation on the board is here, including the ones opened in the
+ * dashboard: which surface a thread was started from is shown by its marker
+ * rather than settled by leaving it out. The legend under the heading is
+ * assembled from the markers actually on the page, so a chat that has only ever
+ * talked to itself never sees a key to symbols it has no rows for.
  */
 export const threadsPage = Effect.fnUntraced(function* (options: {
   readonly chatId: number;
   readonly ctx: BotContext;
   readonly page: number;
 }) {
+  const chatId = telegramChatIdOf(options.chatId);
   const threads = yield* listThreads({
-    chatId: telegramChatIdOf(options.chatId),
     limit: THREAD_LIST_LIMIT,
     workspaceId: options.ctx.identity.workspaceId,
   });
@@ -67,7 +81,7 @@ export const threadsPage = Effect.fnUntraced(function* (options: {
   for (const thread of page.items) {
     keyboard.row(
       InlineKeyboard.text(
-        threadButtonLabel({ now, thread }),
+        threadButtonLabel({ chatId, now, thread }),
         encodeCallbackData({
           kind: "thread",
           threadId: thread.id,
@@ -77,11 +91,23 @@ export const threadsPage = Effect.fnUntraced(function* (options: {
     );
   }
 
+  const legend = [
+    ...new Set(
+      page.items
+        .map(
+          (thread) => THREAD_RELATION_LEGEND[threadRelation({ chatId, thread })]
+        )
+        .filter((line) => line !== null)
+    ),
+  ];
+
   return {
     keyboard: appendNavRow({ key: "threads", keyboard, page }),
     text: page.isEmpty
       ? "No conversations yet. Send a message to start one."
-      : `${bold("Conversations")}${pageIndicator(page)}`,
+      : [`${bold("Conversations")}${pageIndicator(page)}`, ...legend].join(
+          "\n"
+        ),
   } satisfies RenderedPage;
 });
 

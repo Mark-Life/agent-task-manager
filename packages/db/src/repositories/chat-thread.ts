@@ -419,12 +419,23 @@ const make = Effect.gen(function* () {
   );
 
   /**
-   * Makes one thread the current one for its chat. The chat is read off the
-   * thread rather than taken from the caller, so a switch cannot move currency
-   * between two chats, and the row is locked for the length of the swap.
+   * Makes one thread the current one for a chat, and the row is locked for the
+   * length of the swap.
+   *
+   * Which chat is the caller's to say only when the thread has none. A named
+   * `chatId` on a thread opened outside Telegram *binds* it to that chat —
+   * which is what resuming a dashboard conversation from Telegram means, and
+   * what makes the answer to its next turn deliverable, since a turn is
+   * answered into `chat_id` and nowhere else. A thread that already belongs to
+   * a chat keeps it: moving one would send another chat's answers to whoever
+   * tapped last, so the swap is refused instead.
+   *
+   * Called with no `chatId` — the dashboard's *Make current* — a chat-less
+   * thread is refused, because currency is a property of a chat and there is
+   * no chat to hold it.
    */
   const setCurrent = Effect.fn("ChatThreadRepo.setCurrent")(function* (
-    options: ChatThreadRef
+    options: ChatThreadRef & { readonly chatId?: TelegramChatId }
   ) {
     yield* Effect.annotateCurrentSpan({
       threadId: options.id,
@@ -451,10 +462,25 @@ const make = Effect.gen(function* () {
             rows: locked,
           });
 
+          if (
+            target.chatId !== null &&
+            options.chatId !== undefined &&
+            target.chatId !== options.chatId
+          ) {
+            return yield* Effect.fail(
+              new InvalidInput({
+                cause: "that conversation belongs to another chat",
+                entity: ENTITY,
+              })
+            );
+          }
+
+          const chatId = target.chatId ?? options.chatId ?? null;
+
           // Currency is a property of a chat. A thread opened from the
-          // dashboard has none to be current in, and saying so is better than
-          // an update that silently matches nothing.
-          if (target.chatId === null) {
+          // dashboard that nobody has claimed has none to be current in, and
+          // saying so is better than an update that silently matches nothing.
+          if (chatId === null) {
             return yield* Effect.fail(
               new InvalidInput({
                 cause: "a thread with no chat cannot be the current one",
@@ -463,6 +489,9 @@ const make = Effect.gen(function* () {
             );
           }
 
+          // Before the row is bound to the chat, not after: the partial unique
+          // index allows one current thread per chat, and a thread opened
+          // elsewhere arrives already carrying `is_current`.
           yield* execute(
             "ChatThreadRepo.setCurrent",
             tx
@@ -470,10 +499,7 @@ const make = Effect.gen(function* () {
               .set({ isCurrent: false })
               .where(
                 and(
-                  chatOf({
-                    chatId: target.chatId,
-                    workspaceId: options.workspaceId,
-                  }),
+                  chatOf({ chatId, workspaceId: options.workspaceId }),
                   eq(chatThread.isCurrent, true),
                   ne(chatThread.id, options.id)
                 )
@@ -484,7 +510,7 @@ const make = Effect.gen(function* () {
             "ChatThreadRepo.setCurrent",
             tx
               .update(chatThread)
-              .set({ isCurrent: true, status: "active" })
+              .set({ chatId, isCurrent: true, status: "active" })
               .where(refOf(options))
               .returning()
           );
