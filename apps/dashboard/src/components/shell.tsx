@@ -1,6 +1,7 @@
 import {
   FolderLibraryIcon,
   KanbanIcon,
+  Key01Icon,
   Logout01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -36,14 +37,16 @@ import { ModeToggle } from "@/components/theme";
 const SIGN_IN_PATH = "/login";
 
 /**
- * The whole of the navigation. Two destinations, because there are two: the
- * board is the work and projects are where it belongs. Conversations are not
- * here — they open over whatever is underneath rather than replacing it, so
- * they are a list further down and never a page of their own.
+ * The whole of the navigation. The board is the work, projects are where it
+ * belongs, and keys are how anything that is not this dashboard reaches either.
+ * Conversations are not here — they open over whatever is underneath rather
+ * than replacing it, so they are a list further down and never a page of their
+ * own.
  */
 const DESTINATIONS = [
   { icon: KanbanIcon, label: "Board", to: "/" },
   { icon: FolderLibraryIcon, label: "Projects", to: "/projects" },
+  { icon: Key01Icon, label: "API keys", to: "/api-keys" },
 ] as const;
 
 /**

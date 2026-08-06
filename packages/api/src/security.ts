@@ -33,16 +33,26 @@
  * why every task-scoped route in this contract spells that parameter exactly
  * that way and nests below it: the check then belongs to the middleware, where
  * it happens once, instead of to eight handler files.
+ *
+ * **Three credentials, one ladder.** A signed bearer token is the system's, a
+ * session cookie is a browser's, and a user's API key is a person's — issued
+ * from the dashboard, revocable there, and acting as whoever issued it. All
+ * three appear on every operation, and every one of them is judged by the same
+ * scope comparison, so "which routes accept a key" has the same answer as
+ * "which routes accept a token": all of them, up to the scope the credential
+ * was issued at. A key created at `read` cannot delete a task however it is
+ * pointed; a key created at `admin` can delete a project, because the person
+ * who issued it could.
  */
 
-import type { Actor, TaskId, WorkspaceId } from "@workspace/domain";
+import { type Actor, type TaskId, WorkspaceId } from "@workspace/domain";
 import { Context, Schema } from "effect";
 import {
   HttpApiMiddleware,
   HttpApiSecurity,
   OpenApi,
 } from "effect/unstable/httpapi";
-import { Forbidden, Unauthorized } from "./errors";
+import { Forbidden, TooManyRequests, Unauthorized } from "./errors";
 
 /**
  * The three scopes, weakest first. The order is the containment order, so
@@ -112,6 +122,52 @@ export const SessionCookie = HttpApiSecurity.apiKey({
   )
 );
 
+/**
+ * The header a user's API key arrives in, and the name the document declares.
+ *
+ * A header of its own rather than `Authorization: Bearer`, for two reasons that
+ * both come down to keeping two different credentials distinguishable. A user's
+ * key is issued by a person, revocable, and speaks for that person; the bearer
+ * token an agent run carries is signed by the deployment's secret, unrevocable
+ * and short-lived, and speaks for the system. Sharing one header would mean the
+ * gateway guessing which kind of thing it was handed, and would mean a
+ * refusal's reason depending on that guess.
+ *
+ * The second reason is the document. OpenAPI can describe an `apiKey` scheme
+ * exactly — name, location, done — so a client generated from the spec sends
+ * the right header without anybody writing prose about it, which is what the
+ * whole spec-as-the-interface arrangement here is for.
+ */
+export const API_KEY_HEADER = "x-api-key";
+
+/** A user's API key: issued from the dashboard, revoked from the dashboard. */
+export const UserApiKey = HttpApiSecurity.apiKey({
+  in: "header",
+  key: API_KEY_HEADER,
+}).pipe(
+  HttpApiSecurity.annotate(
+    OpenApi.Description,
+    "An API key a person issued for themselves. It acts as that person, with the scope chosen when it was created, and stops working the moment it is revoked."
+  )
+);
+
+/**
+ * What a key carries beyond its own secret: the scope it was issued at, and the
+ * workspace it speaks in.
+ *
+ * It rides in the plugin's `metadata` because that is the one field a browser
+ * may set at creation, which makes it *untrusted*. Neither value is believed on
+ * its own — the scope is checked against the issuer's own ceiling, and the
+ * workspace against the memberships the issuer holds right now, so a key naming
+ * a board its owner was removed from stops opening it on the next request
+ * rather than the next login.
+ */
+export const ApiKeyMetadata = Schema.Struct({
+  scope: ApiScope,
+  workspaceId: WorkspaceId,
+});
+export type ApiKeyMetadata = typeof ApiKeyMetadata.Type;
+
 /** Who the request is, once a credential has been resolved. */
 export interface PrincipalShape {
   /** The actor every write this request makes is attributed to. */
@@ -142,8 +198,15 @@ export class Principal extends Context.Service<Principal, PrincipalShape>()(
 export const boundTaskId = (principal: PrincipalShape): TaskId | null =>
   principal.actor.kind === "worker_run" ? principal.actor.taskId : null;
 
-/** Every access middleware fails the same two ways, and provides the same one thing. */
-const accessOptions = { error: [Unauthorized, Forbidden] } as const;
+/**
+ * Every access middleware fails the same three ways, and provides the same one
+ * thing. The 429 belongs here rather than on the endpoints that could plausibly
+ * be busy, because it is the credential that is over its quota and not the
+ * operation — any of them, reached with a spent key, answers the same way.
+ */
+const accessOptions = {
+  error: [Unauthorized, Forbidden, TooManyRequests],
+} as const;
 
 /**
  * Reads. Satisfied by any credential that resolves, including a run's
@@ -155,7 +218,11 @@ export class ReadAccess extends HttpApiMiddleware.Service<
   { provides: Principal }
 >()("@workspace/api/ReadAccess", {
   ...accessOptions,
-  security: { readToken: ReadToken, sessionCookie: SessionCookie },
+  security: {
+    readToken: ReadToken,
+    sessionCookie: SessionCookie,
+    userApiKey: UserApiKey,
+  },
 }) {}
 
 /**
@@ -170,7 +237,11 @@ export class TaskWriteAccess extends HttpApiMiddleware.Service<
   { provides: Principal }
 >()("@workspace/api/TaskWriteAccess", {
   ...accessOptions,
-  security: { sessionCookie: SessionCookie, taskWriteToken: TaskWriteToken },
+  security: {
+    sessionCookie: SessionCookie,
+    taskWriteToken: TaskWriteToken,
+    userApiKey: UserApiKey,
+  },
 }) {}
 
 /**
@@ -185,11 +256,21 @@ export class TaskWriteAccess extends HttpApiMiddleware.Service<
  * secrets" is enforced by the actor's ceiling rather than by a check inside a
  * handler. A run is given its own project's files on disk, by the loop, which
  * is the only path they travel.
+ *
+ * A person's own API key *can* be issued at this scope, and that is the
+ * difference between a user credential and an agent's: it carries what the
+ * person carries. Whoever issues one is handing out their own reach over the
+ * destructive end and the stored secrets both, which is why the dashboard makes
+ * them choose the scope rather than defaulting to it.
  */
 export class AdminAccess extends HttpApiMiddleware.Service<
   AdminAccess,
   { provides: Principal }
 >()("@workspace/api/AdminAccess", {
   ...accessOptions,
-  security: { adminToken: AdminToken, sessionCookie: SessionCookie },
+  security: {
+    adminToken: AdminToken,
+    sessionCookie: SessionCookie,
+    userApiKey: UserApiKey,
+  },
 }) {}

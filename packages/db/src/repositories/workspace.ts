@@ -10,12 +10,12 @@
  * to hand back a domain `Workspace` instead of the library's row.
  */
 
-import type { WorkspaceId } from "@workspace/domain";
+import { type UserId, WorkspaceId } from "@workspace/domain";
 import { asc, eq } from "drizzle-orm";
 import { Context, Effect, Layer } from "effect";
 import { Database } from "../client";
 import { decodeWorkspace } from "../rows";
-import { organization } from "../schema/auth";
+import { member, organization } from "../schema/auth";
 import { decodeMany, decodeOne, execute } from "./audit";
 
 const ENTITY = "workspace";
@@ -60,7 +60,38 @@ const make = Effect.gen(function* () {
     });
   });
 
-  return { byId, list } as const;
+  /**
+   * The workspaces a person belongs to *right now*, as ids.
+   *
+   * Ids rather than workspaces because the caller is authorization rather than
+   * a screen: what it needs to know is whether the workspace a credential names
+   * is one this person may see, and reading the rest of the row to answer that
+   * would be work nobody asked for.
+   *
+   * It exists for the credentials that carry no session. A browser's cookie can
+   * be handed back to the auth library, which knows how to read memberships off
+   * it; an API key is a row naming a user and nothing more, so the membership
+   * has to be looked up. Same rule either way, and it is checked on every
+   * request rather than trusted from issue time — a person removed from a
+   * workspace, or deleted outright, stops reaching its board on the next call
+   * instead of whenever somebody remembers their keys.
+   */
+  const membershipsOf = Effect.fn("WorkspaceRepo.membershipsOf")(function* (
+    options: Readonly<{ userId: UserId }>
+  ) {
+    const rows = yield* execute(
+      "WorkspaceRepo.membershipsOf",
+      db
+        .select({ workspaceId: member.organizationId })
+        .from(member)
+        .where(eq(member.userId, options.userId))
+        .orderBy(asc(member.organizationId))
+    );
+
+    return rows.map((row) => WorkspaceId.make(row.workspaceId));
+  });
+
+  return { byId, list, membershipsOf } as const;
 });
 
 /** Reads of the workspace. Writes belong to the auth library. */

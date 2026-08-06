@@ -26,6 +26,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import process from "node:process";
+import { API_KEY_HEADER } from "@workspace/api";
 import { Effect, Schema } from "effect";
 import {
   REQUEST_EVENT_MARKER,
@@ -136,6 +137,8 @@ export interface Call {
 
 /** What one call says. Everything but `path` is optional. */
 export interface CallInput {
+  /** A user API key, sent in its own header. Exclusive with `token` in practice. */
+  readonly apiKey?: string;
   readonly body?: unknown;
   /** A multipart body, for the artifact upload. Exclusive with `body`. */
   readonly form?: FormData;
@@ -176,6 +179,9 @@ export interface Caller {
 
 const headersOf = (input: CallInput, traceparent: string) => {
   const headers: Record<string, string> = { traceparent };
+  if (input.apiKey !== undefined) {
+    headers[API_KEY_HEADER] = input.apiKey;
+  }
   if (input.token !== undefined) {
     headers.authorization = `Bearer ${input.token}`;
   }

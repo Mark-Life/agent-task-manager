@@ -29,7 +29,7 @@ import {
   ReadAccess,
   TaskWriteAccess,
 } from "@workspace/api";
-import { Auth } from "@workspace/db";
+import { Auth, WorkspaceRepo } from "@workspace/db";
 import { makeTokenSigner } from "@workspace/token";
 import { Context, Effect, Layer } from "effect";
 import {
@@ -60,7 +60,8 @@ class Access extends Context.Service<Access, PrincipalResolver>()(
     Effect.gen(function* () {
       const auth = yield* Auth;
       const tokens = yield* makeTokenSigner;
-      return makePrincipalResolver({ auth, tokens });
+      const workspaces = yield* WorkspaceRepo;
+      return makePrincipalResolver({ auth, tokens, workspaces });
     })
   );
 }
@@ -82,7 +83,11 @@ const readAccessLayer = Layer.effect(
   ReadAccess,
   Effect.map(Access, (resolver) => {
     const check = guard(resolver, "read");
-    return ReadAccess.of({ readToken: check, sessionCookie: check });
+    return ReadAccess.of({
+      readToken: check,
+      sessionCookie: check,
+      userApiKey: check,
+    });
   })
 );
 
@@ -94,16 +99,24 @@ const taskWriteAccessLayer = Layer.effect(
     return TaskWriteAccess.of({
       sessionCookie: check,
       taskWriteToken: check,
+      userApiKey: check,
     });
   })
 );
 
-/** The destructive end — deleting a project. No agent's token is minted at this scope. */
+/**
+ * The destructive end — deleting a project. No agent's token is minted at this
+ * scope; a person's own API key can be issued at it, because a person holds it.
+ */
 const adminAccessLayer = Layer.effect(
   AdminAccess,
   Effect.map(Access, (resolver) => {
     const check = guard(resolver, "admin");
-    return AdminAccess.of({ adminToken: check, sessionCookie: check });
+    return AdminAccess.of({
+      adminToken: check,
+      sessionCookie: check,
+      userApiKey: check,
+    });
   })
 );
 

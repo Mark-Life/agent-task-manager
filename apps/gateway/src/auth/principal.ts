@@ -2,12 +2,22 @@
  * Turning a credential into a {@link Principal} — the one place in the gateway
  * that decides who a request is.
  *
- * Two doors, one answer. A browser sends a Better Auth session cookie; a
- * machine sends a bearer token signed by `./tokens`. Both resolve to the same
- * three facts — the actor every write is attributed to, the scope the
- * credential is good for, and the single workspace it can see — and every
- * handler downstream reads those from the service rather than from the request,
- * so there is no second way to find out who is calling.
+ * Three doors, one answer. A browser sends a Better Auth session cookie; the
+ * system's own agents send a bearer token signed from the deployment's secret;
+ * a person's integration sends an API key that person issued, in `x-api-key`.
+ * All three resolve to the same three facts — the actor every write is
+ * attributed to, the scope the credential is good for, and the single workspace
+ * it can see — and every handler downstream reads those from the service rather
+ * than from the request, so there is no second way to find out who is calling.
+ *
+ * **A key and a token are not the same kind of thing, and the split is on
+ * purpose.** A key is a person's: stored hashed, revocable from the dashboard,
+ * resolving to that person's `human` actor with the scope they chose. A token
+ * is the system's: signed rather than stored, expiring in minutes, bound to a
+ * run's own task. Neither is minted from the other. Revoking every key a person
+ * owns stops that person's integrations and leaves every worker on the board
+ * running, and that is a property of these being two paths rather than a rule
+ * anybody has to keep.
  *
  * **The workspace is never in a path or a body.** It comes off the credential
  * and nowhere else, which is what makes "a cross-workspace read returns
@@ -26,18 +36,21 @@
  */
 
 import {
+  API_KEY_HEADER,
   type ApiScope,
   boundTaskId,
   Forbidden,
   type PrincipalShape,
   scopeReaches,
+  TooManyRequests,
   Unauthorized,
 } from "@workspace/api";
-import type { Auth } from "@workspace/db";
+import type { WorkspaceRepo } from "@workspace/db";
 import { Actor, UserId, WorkspaceId } from "@workspace/domain";
 import type { TokenSigner } from "@workspace/token";
 import { type Context, Effect } from "effect";
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
+import { type AuthInstance, resolveApiKey, USER_CEILING } from "./api-key";
 import {
   type AuthOutcome,
   type AuthRecord,
@@ -69,9 +82,6 @@ const TASK_PARAM = "taskId";
 /** The authorization scheme a machine credential arrives under. */
 const BEARER_PREFIX = "bearer ";
 
-/** The built auth instance, as the store hands it over. */
-type AuthInstance = Context.Service.Shape<typeof Auth>;
-
 /**
  * Why a request was refused, as a closed set. It is a field on the request
  * event and the string a caller reads, and those being the same string is the
@@ -88,8 +98,12 @@ const REASONS = {
   unscopedRoute: "unscoped_route",
 } as const;
 
-/** The scope a signed-in person holds. */
-const SESSION_SCOPE: ApiScope = "admin";
+/**
+ * The scope a signed-in person holds. The same value a key is checked against
+ * before it is believed, which is what makes "a key carries its issuer's
+ * permissions and no more" one comparison rather than two agreeing constants.
+ */
+const SESSION_SCOPE: ApiScope = USER_CEILING;
 
 /** The ids an actor carries, flattened for the request event. */
 const identityOf = (actor: Actor) =>
@@ -154,31 +168,39 @@ interface Attempt {
   readonly scheme: AuthScheme;
 }
 
+/** How a refusal is spelled on the wire, keyed by the outcome it is filed as. */
+const failureOf = (outcome: AuthOutcome, attempt: Attempt, reason: string) => {
+  if (outcome === "forbidden") {
+    return new Forbidden({ reason, required: attempt.required });
+  }
+  return outcome === "rate_limited"
+    ? new TooManyRequests({ reason })
+    : new Unauthorized({ reason });
+};
+
 /** Files the refusal, then fails with it. Both, always — a 401 nobody counted is a 401 nobody fixes. */
 const deny = (
   attempt: Attempt,
   reason: string,
   options?: {
-    readonly forbidden?: boolean;
+    readonly as?: Exclude<AuthOutcome, "granted">;
     readonly principal?: PrincipalShape;
   }
-) =>
-  Effect.andThen(
+) => {
+  const outcome = options?.as ?? "unauthorized";
+  return Effect.andThen(
     recordAuth(
       recordOf({
-        outcome: options?.forbidden === true ? "forbidden" : "unauthorized",
+        outcome,
         principal: options?.principal ?? null,
         reason,
         required: attempt.required,
         scheme: attempt.scheme,
       })
     ),
-    Effect.fail(
-      options?.forbidden === true
-        ? new Forbidden({ reason, required: attempt.required })
-        : new Unauthorized({ reason })
-    )
+    Effect.fail(failureOf(outcome, attempt, reason))
   );
+};
 
 /** The bearer token on this request, or the empty string when there is none. */
 const bearerOf = (headers: Readonly<Record<string, string | undefined>>) => {
@@ -188,12 +210,31 @@ const bearerOf = (headers: Readonly<Record<string, string | undefined>>) => {
     : "";
 };
 
-/** Which door the request came to, judged by what it actually carried. */
-const schemeOf = (token: string, cookie: string | undefined): AuthScheme => {
-  if (token !== "") {
+/** The user API key on this request, or the empty string when there is none. */
+const apiKeyOf = (headers: Readonly<Record<string, string | undefined>>) =>
+  headers[API_KEY_HEADER]?.trim() ?? "";
+
+/**
+ * Which door the request came to, judged by what it actually carried.
+ *
+ * The order is the specificity order rather than a preference: each credential
+ * has a header of its own, so a request carrying two has said two things and
+ * the one it is judged by should not depend on which check ran first. A key is
+ * read before a token because it is the one a person had to go and create — if
+ * somebody sent both, the deliberate one is the key.
+ */
+const schemeOf = (options: {
+  readonly apiKey: string;
+  readonly cookie: string | undefined;
+  readonly token: string;
+}): AuthScheme => {
+  if (options.apiKey !== "") {
+    return "api_key";
+  }
+  if (options.token !== "") {
     return "bearer";
   }
-  return cookie === undefined ? "none" : "session";
+  return options.cookie === undefined ? "none" : "session";
 };
 
 /** Better Auth reads the request's own headers, signature and all, so it is handed them whole. */
@@ -207,14 +248,15 @@ const headersOf = (request: HttpServerRequest.HttpServerRequest) =>
 export interface PrincipalResolver {
   /**
    * Who this request is, once it has proved it may perform an operation at
-   * `required`. Fails {@link Unauthorized} when nothing resolves and
-   * {@link Forbidden} when something did and does not reach.
+   * `required`. Fails {@link Unauthorized} when nothing resolves,
+   * {@link Forbidden} when something did and does not reach, and
+   * {@link TooManyRequests} when a user's key is over its own quota.
    */
   readonly resolve: (
     required: ApiScope
   ) => Effect.Effect<
     PrincipalShape,
-    Unauthorized | Forbidden,
+    Unauthorized | Forbidden | TooManyRequests,
     HttpServerRequest.HttpServerRequest | HttpRouter.RouteContext
   >;
 }
@@ -223,6 +265,16 @@ export interface PrincipalResolver {
 export interface ResolverOptions {
   readonly auth: AuthInstance;
   readonly tokens: TokenSigner;
+  /**
+   * The membership read a key is checked against. A cookie can be handed back
+   * to the auth library, which reads memberships off the session itself; a key
+   * names a user and nothing more, so the workspace it claims has to be
+   * verified against the database.
+   */
+  readonly workspaces: Pick<
+    Context.Service.Shape<typeof WorkspaceRepo>,
+    "membershipsOf"
+  >;
 }
 
 /**
@@ -251,7 +303,7 @@ const workspaceOfSession = (options: {
       return ids.includes(options.active)
         ? WorkspaceId.make(options.active)
         : yield* deny(options.attempt, REASONS.notAMember, {
-            forbidden: true,
+            as: "forbidden",
           });
     }
     if (ids.length === 0) {
@@ -318,6 +370,33 @@ export const makePrincipalResolver = (
     });
 
   /**
+   * A person's other credential: a key they issued for themselves, verified
+   * against a stored hash rather than a signature.
+   *
+   * The verdict comes back from `./api-key`, which knows the plugin; the
+   * refusal is spelled here, which knows how a refusal is filed. A spent quota
+   * is the one that is neither a 401 nor a 403 — the credential is good and the
+   * repair is to wait, so it is filed as its own outcome and answered 429.
+   */
+  const fromApiKey = (attempt: Attempt, key: string) =>
+    Effect.gen(function* () {
+      const verdict = yield* resolveApiKey({
+        auth: options.auth,
+        key,
+        workspaces: options.workspaces,
+      });
+      if (verdict.kind === "resolved") {
+        return verdict.principal;
+      }
+      if (verdict.kind === "spent") {
+        return yield* deny(attempt, verdict.reason, { as: "rate_limited" });
+      }
+      return yield* deny(attempt, verdict.reason, {
+        as: verdict.forbidden ? "forbidden" : "unauthorized",
+      });
+    });
+
+  /**
    * A run's token writes on its own task and reads everywhere else. The check
    * is here, once, against the `:taskId` the contract nests every task-owned
    * route below — which is why the contract nests them.
@@ -334,14 +413,14 @@ export const makePrincipalResolver = (
         // A write that is not about one task — filing a project, opening a new
         // ticket — is not this run's to make, whatever its token says.
         return yield* deny(attempt, REASONS.unscopedRoute, {
-          forbidden: true,
+          as: "forbidden",
           principal,
         });
       }
       return onTask === bound
         ? principal
         : yield* deny(attempt, REASONS.taskNotOwned, {
-            forbidden: true,
+            as: "forbidden",
             principal,
           });
     });
@@ -350,22 +429,25 @@ export const makePrincipalResolver = (
     required: ApiScope
   ) {
     const request = yield* HttpServerRequest.HttpServerRequest;
+    const apiKey = apiKeyOf(request.headers);
     const token = bearerOf(request.headers);
-    const scheme = schemeOf(token, sessionCookieOf(request.cookies));
+    const cookie = sessionCookieOf(request.cookies);
+    const scheme = schemeOf({ apiKey, cookie, token });
     const attempt = { required, scheme } as const;
 
     if (scheme === "none") {
       return yield* deny(attempt, REASONS.noCredential);
     }
 
-    const principal =
-      scheme === "bearer"
-        ? yield* fromToken(attempt, token)
-        : yield* fromSession(attempt, request);
+    const principal = yield* {
+      api_key: () => fromApiKey(attempt, apiKey),
+      bearer: () => fromToken(attempt, token),
+      session: () => fromSession(attempt, request),
+    }[scheme]();
 
     if (!scopeReaches(principal.scope, required)) {
       return yield* deny(attempt, REASONS.insufficientScope, {
-        forbidden: true,
+        as: "forbidden",
         principal,
       });
     }

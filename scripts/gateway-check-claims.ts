@@ -104,7 +104,7 @@ export const specClaims = (caller: Caller, token: string) =>
   });
 
 /**
- * The three ways a credential is turned away, each with a reason of its own.
+ * The four ways a credential is turned away, each with a reason of its own.
  *
  * `forgedToken` is a real token with its signature swapped, not a string of
  * nonsense: nonsense is refused while it is still being parsed, and what is
@@ -153,7 +153,31 @@ export const doorClaims = (input: {
       step: "a read token is 403 on a write, not 401",
     });
 
-    return [none.traceId, forged.traceId, underScoped.traceId];
+    // The fourth door, and the one a person's own integration comes to. A key
+    // nobody issued proves the header is read on the running process and that
+    // the refusal is a key's refusal rather than "no credential" — which is
+    // what a caller who mistyped their key needs to be told. Provisioning a
+    // real key would mean a signed-in person with a known password, which this
+    // check does not have; the paths that need one are covered against a real
+    // database in `apps/gateway/src/auth/principal.test.ts`.
+    const strangeKey = yield* caller.call({
+      apiKey: "atm_nobody-ever-issued-this-one",
+      path: "/projects",
+    });
+    yield* check({
+      detail: `${strangeKey.status} ${failureOf(strangeKey.body).reason ?? "no reason"}`,
+      ok:
+        strangeKey.status === UNAUTHORIZED &&
+        failureOf(strangeKey.body).reason === "key_rejected",
+      step: "an unknown API key is 401, named as a key and not as a missing credential",
+    });
+
+    return [
+      none.traceId,
+      forged.traceId,
+      underScoped.traceId,
+      strangeKey.traceId,
+    ];
   });
 
 /** What a card did on the board, and the ids the rest of the check hangs off. */

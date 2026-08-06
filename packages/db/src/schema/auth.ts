@@ -11,6 +11,7 @@ import { defineRelationsPart } from "drizzle-orm";
 import {
   boolean,
   index,
+  integer,
   pgTable,
   text,
   timestamp,
@@ -93,6 +94,44 @@ export const verification = pgTable(
     value: text("value").notNull(),
   },
   (table) => [index("verification_identifier_idx").on(table.identifier)]
+);
+
+export const apikey = pgTable(
+  "apikey",
+  {
+    configId: text("config_id").default("default").notNull(),
+    createdAt: timestamp("created_at").notNull(),
+    enabled: boolean("enabled").default(true),
+    expiresAt: timestamp("expires_at"),
+    id: text("id").primaryKey(),
+    key: text("key").notNull(),
+    lastRefillAt: timestamp("last_refill_at"),
+    lastRequest: timestamp("last_request"),
+    metadata: text("metadata"),
+    name: text("name"),
+    permissions: text("permissions"),
+    prefix: text("prefix"),
+    rateLimitEnabled: boolean("rate_limit_enabled").default(true),
+    // The generator writes the plugin's configured rate limit into the column
+    // defaults, so these two literals are `../auth/options` seen from the
+    // database. They are not read from there: that module imports this one.
+    // biome-ignore lint/style/noMagicNumbers: generated from the plugin's configuration
+    rateLimitMax: integer("rate_limit_max").default(600),
+    // biome-ignore lint/style/noMagicNumbers: generated from the plugin's configuration
+    rateLimitTimeWindow: integer("rate_limit_time_window").default(60_000),
+    referenceId: text("reference_id").notNull(),
+    refillAmount: integer("refill_amount"),
+    refillInterval: integer("refill_interval"),
+    remaining: integer("remaining"),
+    requestCount: integer("request_count").default(0),
+    start: text("start"),
+    updatedAt: timestamp("updated_at").notNull(),
+  },
+  (table) => [
+    index("apikey_configId_idx").on(table.configId),
+    index("apikey_referenceId_idx").on(table.referenceId),
+    index("apikey_key_idx").on(table.key),
+  ]
 );
 
 export const organization = pgTable(

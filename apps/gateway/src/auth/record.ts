@@ -35,14 +35,30 @@ import type {
 } from "@workspace/domain";
 import { Context, Effect, Option, Ref } from "effect";
 
-/** How a credential arrived, or that none did. */
-export const AUTH_SCHEMES = ["bearer", "session", "none"] as const;
+/**
+ * How a credential arrived, or that none did. `api_key` is a person's own key
+ * in its own header; `bearer` is the system's signed token. They are counted
+ * apart because "who is reaching this board" is a question an operator asks of
+ * exactly this field, and folding a user's integration in with the agents would
+ * make it unanswerable.
+ */
+export const AUTH_SCHEMES = ["api_key", "bearer", "session", "none"] as const;
 
 /** The scheme a request presented. */
 export type AuthScheme = (typeof AUTH_SCHEMES)[number];
 
-/** Whether the door opened, and if not, which way it was shut. */
-export const AUTH_OUTCOMES = ["granted", "unauthorized", "forbidden"] as const;
+/**
+ * Whether the door opened, and if not, which way it was shut. `rate_limited` is
+ * a credential that was good and had asked too often — a fourth answer rather
+ * than a shade of the other two, because an operator reading a spike of these
+ * is looking at a runaway integration and not at anything broken.
+ */
+export const AUTH_OUTCOMES = [
+  "granted",
+  "unauthorized",
+  "forbidden",
+  "rate_limited",
+] as const;
 
 /** What the access check decided. */
 export type AuthOutcome = (typeof AUTH_OUTCOMES)[number];

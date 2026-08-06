@@ -1,6 +1,7 @@
 import { createRouter } from "@tanstack/react-router";
 import { Spinner } from "@workspace/ui/components/spinner";
 import { queryClient } from "@/lib/query-client";
+import { apiKeysRoute } from "@/routes/api-keys";
 import { boardRoute } from "@/routes/board";
 import { layoutRoute } from "@/routes/layout";
 import { loginRoute } from "@/routes/login";
@@ -19,7 +20,7 @@ import { taskRoute } from "@/routes/task";
  */
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  layoutRoute.addChildren([boardRoute, taskRoute, projectsRoute]),
+  layoutRoute.addChildren([boardRoute, taskRoute, projectsRoute, apiKeysRoute]),
 ]);
 
 /** The quiet moment between asking for a route and having it. */

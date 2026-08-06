@@ -15,7 +15,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHmac } from "node:crypto";
-import { Unauthorized } from "@workspace/api";
+import { API_KEY_HEADER, Unauthorized } from "@workspace/api";
 import {
   Auth,
   NotFound,
@@ -134,10 +134,19 @@ const makeOwnWorkspace = async (label: string, cookie: string) => {
   return organization.id as WorkspaceId;
 };
 
-const resolver = makePrincipalResolver({ auth, tokens });
+const workspaceRepo = await runtime.runPromise(
+  Effect.map(WorkspaceRepo, (self) => self)
+);
+
+const resolver = makePrincipalResolver({
+  auth,
+  tokens,
+  workspaces: workspaceRepo,
+});
 
 /** One request at the door: what it was told, and what the request event was told. */
 const knock = (options: {
+  readonly apiKey?: string;
   readonly bearer?: string;
   readonly cookie?: string;
   readonly params?: Readonly<Record<string, string>>;
@@ -146,6 +155,9 @@ const knock = (options: {
   Effect.gen(function* () {
     const recorder = yield* makeRequestAuth;
     const headers: Record<string, string> = {};
+    if (options.apiKey !== undefined) {
+      headers[API_KEY_HEADER] = options.apiKey;
+    }
     if (options.bearer !== undefined) {
       headers.authorization = `Bearer ${options.bearer}`;
     }
@@ -269,6 +281,22 @@ afterAll(async () => {
     body: { organizationId: bob.workspaceId },
     headers: new Headers({ cookie: bob.cookie }),
   });
+  // The keys these tests issued go by hand. The plugin declares no foreign key
+  // on `reference_id` — the same column holds an organization id under a
+  // different configuration — so deleting the user does not take them, and a
+  // row left behind here is a row the next run of this file counts.
+  await Promise.all(
+    (
+      await auth.api.listApiKeys({
+        headers: new Headers({ cookie: alice.cookie }),
+      })
+    ).apiKeys.map((key) =>
+      auth.api.deleteApiKey({
+        body: { keyId: key.id },
+        headers: new Headers({ cookie: alice.cookie }),
+      })
+    )
+  );
   await Promise.all(
     [alice, bob].map((person) =>
       authContext.internalAdapter.deleteUser(person.userId)
@@ -480,5 +508,210 @@ describe("the workspace on the credential", () => {
       throw new Error("a task from another workspace was returned");
     }
     expect(found.failure).toBeInstanceOf(NotFound);
+  });
+});
+
+/**
+ * A key, issued the way the dashboard issues one.
+ *
+ * Server-side rather than over the session, because the plugin refuses a
+ * client request that names a `userId` — which is exactly the check that stops
+ * one person minting a key for another, and not something to route around in
+ * the code under test. The metadata is the same metadata the dashboard writes.
+ */
+const issueKey = async (options: {
+  readonly name: string;
+  readonly scope: "read" | "task-write" | "admin";
+  readonly userId: string;
+  readonly workspaceId: string;
+}) => {
+  const created = await auth.api.createApiKey({
+    body: {
+      metadata: { scope: options.scope, workspaceId: options.workspaceId },
+      name: options.name,
+      userId: options.userId,
+    },
+  });
+  return created.key;
+};
+
+/** A key with metadata this system does not write, for the checks that need one. */
+const issueRawKey = async (options: {
+  readonly metadata?: Record<string, unknown>;
+  readonly name: string;
+  readonly userId: string;
+}) => {
+  const created = await auth.api.createApiKey({
+    body: {
+      ...(options.metadata === undefined ? {} : { metadata: options.metadata }),
+      name: options.name,
+      userId: options.userId,
+    },
+  });
+  return { id: created.id, key: created.key };
+};
+
+describe("a user's API key", () => {
+  test("resolves to the person who issued it, as a human actor", async () => {
+    const key = await issueKey({
+      name: `resolves-${Date.now()}`,
+      scope: "task-write",
+      userId: alice.userId,
+      workspaceId: alice.workspaceId,
+    });
+
+    const { outcome, record } = await runtime.runPromise(
+      knock({
+        apiKey: key,
+        params: { taskId: owned.id },
+        required: "task-write",
+      })
+    );
+
+    if (!Result.isSuccess(outcome)) {
+      throw new Error("a good key was refused");
+    }
+    expect(outcome.success.actor).toEqual(
+      Actor.cases.human.make({ userId: UserId.make(alice.userId) })
+    );
+    expect(outcome.success.workspaceId).toBe(alice.workspaceId);
+    expect(outcome.success.scope).toBe("task-write");
+    // The scheme is counted apart from the system's bearer tokens, which is how
+    // "who is reaching this board" stays an answerable question.
+    expect(recordOf(record).authScheme).toBe("api_key");
+    expect(recordOf(record).userId).toBe(UserId.make(alice.userId));
+  });
+
+  test("carries the scope it was issued at and not a step more", async () => {
+    const key = await issueKey({
+      name: `read-only-${Date.now()}`,
+      scope: "read",
+      userId: alice.userId,
+      workspaceId: alice.workspaceId,
+    });
+
+    const reading = await runtime.runPromise(
+      knock({ apiKey: key, required: "read" })
+    );
+    expect(Result.isSuccess(reading.outcome)).toBe(true);
+
+    const writing = await runtime.runPromise(
+      knock({ apiKey: key, required: "task-write" })
+    );
+    expect(Result.isFailure(writing.outcome)).toBe(true);
+    expect(recordOf(writing.record).authReason).toBe("insufficient_scope");
+    expect(recordOf(writing.record).authOutcome).toBe("forbidden");
+  });
+
+  test("is refused once revoked, and the system's own credential is not", async () => {
+    const issued = await issueRawKey({
+      metadata: { scope: "read", workspaceId: alice.workspaceId },
+      name: `revoked-${Date.now()}`,
+      userId: alice.userId,
+    });
+
+    const before = await runtime.runPromise(
+      knock({ apiKey: issued.key, required: "read" })
+    );
+    expect(Result.isSuccess(before.outcome)).toBe(true);
+
+    await auth.api.deleteApiKey({
+      body: { keyId: issued.id },
+      headers: new Headers({ cookie: alice.cookie }),
+    });
+
+    const after = await runtime.runPromise(
+      knock({ apiKey: issued.key, required: "read" })
+    );
+    expect(Result.isFailure(after.outcome)).toBe(true);
+    expect(recordOf(after.record).authReason).toBe("key_rejected");
+
+    // The constraint this whole split exists for: an agent's credential is
+    // signed rather than stored, so nothing about revoking a person's keys can
+    // reach it. A run whose token was minted before the revocation still works.
+    const agentToken = await Effect.runPromise(
+      tokens.mint({
+        actor: Actor.cases.worker_run.make({
+          runId: RunId.make(crypto.randomUUID()),
+          sessionId: AgentSessionId.make(crypto.randomUUID()),
+          taskId: owned.id as TaskId,
+        }),
+        scope: "task-write",
+        ttl: "15 minutes",
+        workspaceId: alice.workspaceId,
+      })
+    );
+    const worker = await runtime.runPromise(
+      knock({
+        bearer: agentToken,
+        params: { taskId: owned.id },
+        required: "task-write",
+      })
+    );
+    expect(Result.isSuccess(worker.outcome)).toBe(true);
+  });
+
+  test("cannot name a workspace its owner is not in", async () => {
+    // Metadata is the one field a browser may write, so a key can claim any
+    // board. The membership read is what makes the claim worth nothing.
+    const issued = await issueRawKey({
+      metadata: { scope: "admin", workspaceId: bob.workspaceId },
+      name: `forged-${Date.now()}`,
+      userId: alice.userId,
+    });
+
+    const { outcome, record } = await runtime.runPromise(
+      knock({ apiKey: issued.key, required: "read" })
+    );
+
+    expect(Result.isFailure(outcome)).toBe(true);
+    expect(recordOf(record).authReason).toBe("workspace_not_member");
+    expect(recordOf(record).authOutcome).toBe("forbidden");
+  });
+
+  test("is refused when it never said what it was for", async () => {
+    const issued = await issueRawKey({
+      name: `bare-${Date.now()}`,
+      userId: alice.userId,
+    });
+
+    const { outcome, record } = await runtime.runPromise(
+      knock({ apiKey: issued.key, required: "read" })
+    );
+
+    expect(Result.isFailure(outcome)).toBe(true);
+    expect(recordOf(record).authReason).toBe("key_unscoped");
+  });
+
+  test("is refused when it is not a key at all", async () => {
+    const { outcome, record } = await runtime.runPromise(
+      knock({ apiKey: "atm_not-a-key-anybody-issued", required: "read" })
+    );
+
+    expect(Result.isFailure(outcome)).toBe(true);
+    expect(outcome).toMatchObject({ failure: expect.any(Unauthorized) });
+    expect(recordOf(record).authReason).toBe("key_rejected");
+  });
+
+  test("stamps its own last-used time, which is what the dashboard shows", async () => {
+    const issued = await issueRawKey({
+      metadata: { scope: "read", workspaceId: alice.workspaceId },
+      name: `used-${Date.now()}`,
+      userId: alice.userId,
+    });
+
+    const fresh = await auth.api.getApiKey({
+      headers: new Headers({ cookie: alice.cookie }),
+      query: { id: issued.id },
+    });
+    expect(fresh.lastRequest).toBeNull();
+
+    await runtime.runPromise(knock({ apiKey: issued.key, required: "read" }));
+
+    const used = await auth.api.getApiKey({
+      headers: new Headers({ cookie: alice.cookie }),
+      query: { id: issued.id },
+    });
+    expect(used.lastRequest).not.toBeNull();
   });
 });

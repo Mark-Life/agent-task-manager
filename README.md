@@ -109,7 +109,8 @@ The libraries are consumed as source through tsconfig paths and have no build st
 `typecheck` and `test` — not `build` — are what cover them. `bun run openapi --check` fails when
 the committed spec has drifted from the contract.
 
-Other commands: `gateway:token` mints a scoped bearer token, `db:seed` fills a fresh database,
+Other commands: `gateway:token` mints a scoped bearer token for the system's own agents — a
+person issues their own from the dashboard's *API keys* screen, `db:seed` fills a fresh database,
 `user:add` creates a login, `dashboard:build` / `dashboard:publish` produce and place the static
 bundle, `loop:dev` / `gateway:dev` / `bot:dev` are the watch-mode variants, `upgrade` bumps
 dependencies.
@@ -155,7 +156,7 @@ ours.
 | `apps/loop` | Runs the orchestrator. |
 | `apps/gateway` | Serves the contract, SSE, auth, artifacts. |
 | `apps/bot` | Telegram: intake, rendering, queueing, buttons. No agent runtime. |
-| `apps/dashboard` | Vite SPA. The operator board, task detail, manager chat. |
+| `apps/dashboard` | Vite SPA. The operator board, task detail, manager chat, API keys. |
 | `apps/web` | Next.js marketing app. |
 
 ## Reading further
