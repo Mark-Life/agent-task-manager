@@ -60,6 +60,11 @@
  * a *Switch* button on the first makes it current again — the callback decoded
  * through its schema, not cast out of the update.
  *
+ * **The dashboard's conversation.** A thread opened the way the dashboard opens
+ * one — no chat behind it — belongs to no chat's list and is in `/threads` all
+ * the same, marked as the dashboard's. Tapping it binds it to the chat that
+ * tapped, which is what makes its next answer deliverable there.
+ *
  * **The notice.** A finished run renders into a message a person can read, with
  * the buttons its task's status earns.
  *
@@ -110,6 +115,7 @@ import {
   TaskId,
   TelegramChatId,
   type ThreadId,
+  type UserId,
   type WorkspaceId,
 } from "@workspace/domain";
 import { ServerEnv } from "@workspace/env/server";
@@ -130,6 +136,7 @@ import {
 } from "../apps/bot/src/telegram/answer";
 import { Board } from "../apps/bot/src/telegram/board";
 import { encodeCallbackData } from "../apps/bot/src/telegram/callback-data";
+import { THREAD_RELATION_MARKERS } from "../apps/bot/src/telegram/threads";
 import { TranscribeService } from "../apps/bot/src/transcribe";
 import { CheckFailed, chatRowsFor, check } from "./bot-check-claims";
 import { ensureWorkspace } from "./store/workspace";
@@ -200,6 +207,10 @@ interface ApiCall {
   readonly method: string;
   readonly payload: Record<string, unknown>;
 }
+
+/** Whether a recorded call's keyboard carries one button's callback data or label. */
+const carries = (call: ApiCall, data: string) =>
+  JSON.stringify(call.payload.reply_markup ?? {}).includes(data);
 
 /** What `getMe` would have said, so `bot.init()` succeeds with no network. */
 const botInfo = {
@@ -602,6 +613,100 @@ const pureClaims = Effect.gen(function* () {
   });
 });
 
+/**
+ * The dashboard's conversation, and what Telegram may do with it.
+ *
+ * A thread is opened here the way the gateway opens one for the dashboard —
+ * `open` with no chat — because that is the row whose absence from `/threads`
+ * this claim is about. The list has to hold it while the chat's own list does
+ * not, which is the difference between the two reads stated as a claim rather
+ * than as a comment; and the tap has to bind it, because a conversation with no
+ * chat is one whose next answer `deliverAnswer` drops.
+ */
+const dashboardThreadClaims = (options: {
+  readonly calls: ApiCall[];
+  readonly chatRef: {
+    readonly chatId: TelegramChatId;
+    readonly workspaceId: WorkspaceId;
+  };
+  readonly handle: (update: Update) => Promise<void>;
+  readonly userId: UserId;
+}) =>
+  Effect.gen(function* () {
+    const { calls, chatRef, handle } = options;
+    const { workspaceId } = chatRef;
+    const chatId = Number(chatRef.chatId);
+    const threads = yield* ChatThreadRepo;
+
+    const fromDashboard = yield* threads.open({
+      provider: "claude",
+      title: "started in the dashboard",
+      userId: options.userId,
+      workspaceId,
+    });
+    const chatOwn = yield* threads.listForChat(chatRef);
+    yield* check({
+      detail: `the chat's own list holds ${chatOwn.length} conversations, none of them ${fromDashboard.id}`,
+      ok: !chatOwn.some((thread) => thread.id === fromDashboard.id),
+      step: "a conversation opened outside Telegram belongs to no chat's list",
+    });
+
+    const beforeList = calls.length;
+    yield* Effect.promise(() =>
+      handle(
+        messageUpdate({
+          chatId,
+          fromId: ALLOWED_TELEGRAM_USER,
+          messageId: 5,
+          text: "/threads",
+        })
+      )
+    );
+    const switchData = encodeCallbackData({
+      kind: "thread",
+      threadId: fromDashboard.id,
+      verb: "thsw",
+    });
+    const drawn = yield* eventually({
+      effect: Effect.sync(() => calls.slice(beforeList)),
+      holds: (sent) => sent.some((call) => carries(call, switchData)),
+      step: "/threads lists a conversation opened in the dashboard",
+    });
+    const list = drawn.find((call) => carries(call, switchData));
+    yield* check({
+      detail: `the list said ${JSON.stringify(list?.payload.text)}`,
+      ok: list !== undefined,
+      step: "/threads lists a conversation opened in the dashboard",
+    });
+    yield* check({
+      detail: `the buttons read ${JSON.stringify(list?.payload.reply_markup)}`,
+      ok:
+        list !== undefined && carries(list, THREAD_RELATION_MARKERS.dashboard),
+      step: "the list says which conversations came from the dashboard",
+    });
+
+    yield* Effect.promise(() =>
+      handle(
+        callbackUpdate({
+          chatId,
+          data: switchData,
+          fromId: ALLOWED_TELEGRAM_USER,
+          messageId: 6,
+        })
+      )
+    );
+    const resumed = yield* eventually({
+      effect: threads.byId({ id: fromDashboard.id, workspaceId }),
+      holds: (thread) => thread.chatId !== null,
+      step: "resuming a dashboard conversation binds it to the chat that did",
+    });
+    yield* check({
+      detail: `it is now current in chat ${String(resumed.chatId)}`,
+      ok: resumed.chatId === chatRef.chatId && resumed.isCurrent,
+      step: "a dashboard conversation resumed from Telegram is answered into this chat",
+    });
+  });
+
 /** The claims that need the whole bot standing up. */
 const wiredClaims = (options: {
   readonly boardCalls: BoardCall[];
@@ -772,8 +877,6 @@ const wiredClaims = (options: {
       kind: "compose",
       verb: "cmcxl",
     });
-    const carries = (call: ApiCall, data: string) =>
-      JSON.stringify(call.payload.reply_markup ?? {}).includes(data);
     const rowsInThread = () =>
       messages.recent({
         limit: THREAD_LOOKBACK,
@@ -1204,6 +1307,13 @@ const wiredClaims = (options: {
       detail: `kinds seen: ${[...new Set(tapped.map((row) => row.updateKind))].join(", ")}`,
       ok: tapped.some((row) => row.updateKind === "callback"),
       step: "the tap leaves a row of its own, classified as a callback",
+    });
+
+    yield* dashboardThreadClaims({
+      calls,
+      chatRef,
+      handle: (update) => telegram.bot.handleUpdate(update),
+      userId: opened.userId,
     });
   });
 

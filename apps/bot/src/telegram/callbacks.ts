@@ -52,6 +52,13 @@ import { type RenderedPage, renderPage } from "./views";
 /** What a tap on a button minted by an older build is told. */
 export const EXPIRED_CALLBACK_ANSWER = "That button has expired.";
 
+/** What a tap on a conversation another chat is holding is told. */
+export const THREAD_HELD_ELSEWHERE_ANSWER =
+  "That conversation is another chat's. Read it in the dashboard.";
+
+/** What a tap on a conversation that is no longer there is told. */
+export const THREAD_GONE_ANSWER = "That conversation is gone.";
+
 /** How Telegram is told to parse a re-rendered page. */
 const HTML = { parse_mode: "HTML" } as const;
 
@@ -271,23 +278,34 @@ export const registerCallbacks = Effect.fnUntraced(function* (
     yield* answer(ctx, `Sent ${waiting} as one.`);
   });
 
-  /** Make one conversation the chat's current one. */
+  /**
+   * Make one conversation this chat's current one.
+   *
+   * The list is the workspace's, so a tap can land on a conversation this chat
+   * cannot have: one already being held in another chat. The store is what
+   * decides that, and its refusal is answered as itself rather than as the
+   * "gone" a missing row gets — a person who is told a conversation they can
+   * see does not exist learns the wrong thing about the list.
+   */
   const onSwitch = Effect.fnUntraced(function* (input: {
+    readonly chatId: number;
     readonly ctx: BotContext;
     readonly threadId: ThreadId;
   }) {
     const { ctx } = input;
-    const switched = yield* switchThread({
+    const said = yield* switchThread({
+      chatId: telegramChatIdOf(input.chatId),
       id: input.threadId,
       workspaceId: ctx.identity.workspaceId,
-    }).pipe(Effect.option);
-
-    yield* answer(
-      ctx,
-      Option.isNone(switched)
-        ? "That conversation is gone."
-        : `Switched to ${escapeHtml(threadTitle(switched.value))}.`
+    }).pipe(
+      Effect.map((thread) => `Switched to ${escapeHtml(threadTitle(thread))}.`),
+      Effect.catchTag("Db.InvalidInput", () =>
+        Effect.succeed(THREAD_HELD_ELSEWHERE_ANSWER)
+      ),
+      Effect.catch(() => Effect.succeed(THREAD_GONE_ANSWER))
     );
+
+    yield* answer(ctx, said);
   });
 
   bot.on("callback_query:data", (ctx) =>
@@ -322,10 +340,9 @@ export const registerCallbacks = Effect.fnUntraced(function* (
           return;
         }
         if (data.kind === "thread") {
-          yield* (data.verb === "thfs" ? onForceSend : onSwitch)({
-            ctx,
-            threadId: data.threadId,
-          });
+          yield* data.verb === "thfs"
+            ? onForceSend({ ctx, threadId: data.threadId })
+            : onSwitch({ chatId, ctx, threadId: data.threadId });
           return;
         }
 
