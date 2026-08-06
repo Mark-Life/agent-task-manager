@@ -11,6 +11,14 @@
  * system refuses, so a refusal is a value with a reason on it rather than a
  * handler that returns early and says nothing.
  *
+ * **Words live in three places, not one.** `text` is the obvious one and
+ * `caption` the well-known one; the third is `rich_message`, the Bot API's
+ * structured document, which carries neither of those fields and holds every
+ * word in a tree of blocks instead. A bot that answers with `sendRichMessage`
+ * sends nothing else, so a forward of one used to land on the catch-all refusal
+ * with its whole content sitting in a field nobody read. `./rich` is what reads
+ * it.
+ *
  * Classification is deliberately separate from resolution. Classifying is
  * synchronous and testable with a literal object; {@link resolveIntake} is what
  * touches the network, because only a voice note has to be fetched and
@@ -24,6 +32,7 @@ import { Effect, type Redacted } from "effect";
 import type { Bot, Context } from "grammy";
 import { TranscribeService } from "../transcribe";
 import { downloadTelegramFile, type FileLocator } from "./download";
+import { richMessageToText } from "./rich";
 
 /** The kinds of message intake that become a stored conversation turn. */
 export const INTAKE_MESSAGE_KINDS = ["text", "voice", "forward"] as const;
@@ -95,6 +104,14 @@ export interface IntakeForward extends IntakeOrigin {
 export interface IntakeUnsupported extends IntakeOrigin {
   readonly kind: "unsupported";
   readonly reason: UnsupportedIntakeReason;
+  /**
+   * Which fields the refused message actually carried, from
+   * {@link messageShape}. The reason is what the person is told; this is what
+   * the ledger keeps, and it is the difference between "a forward was refused"
+   * and "a forward carrying `rich_message` was refused" — one of those is a
+   * report, the other is the answer.
+   */
+  readonly shape: string;
 }
 
 /** An update that becomes a conversation turn. */
@@ -121,6 +138,31 @@ export const forwardSenderName = (origin: ForwardOrigin) => {
   }
   return "unknown";
 };
+
+/**
+ * The envelope every message has: who, where, when, and which message. Nothing
+ * in it says what the message *is*, which is what makes everything else a clue.
+ */
+const MESSAGE_ENVELOPE_FIELDS = new Set(["chat", "date", "from", "message_id"]);
+
+/** How much of a shape is worth keeping. Long enough for the oddest message. */
+const MAX_SHAPE_CHARS = 200;
+
+/**
+ * What a message was made of, as a field list.
+ *
+ * A subtraction rather than a list of known kinds, and that is the whole point:
+ * the shapes worth recording are the ones nobody thought of, so a field the Bot
+ * API adds next month appears here by name on the first message that carries it.
+ * Names only — a field list is a shape, not content, and the words themselves
+ * belong in `chat_message` rather than in a ledger anyone can grep.
+ */
+export const messageShape = (message: TelegramMessage) =>
+  Object.keys(message)
+    .filter((field) => !MESSAGE_ENVELOPE_FIELDS.has(field))
+    .sort()
+    .join(",")
+    .slice(0, MAX_SHAPE_CHARS);
 
 /** The sentence a refused update gets back. One per reason, and no apology twice. */
 export const refusalFor = (reason: UnsupportedIntakeReason) => {
@@ -159,6 +201,12 @@ export const classifyMessage = (
     telegramChatId: message.chat.id,
     telegramMessageId: message.message_id,
   };
+  const refuse = (reason: UnsupportedIntakeReason): IntakeUnsupported => ({
+    ...origin,
+    kind: "unsupported",
+    reason,
+    shape: messageShape(message),
+  });
   const forwardFrom =
     message.forward_origin === undefined
       ? null
@@ -177,21 +225,29 @@ export const classifyMessage = (
   // An album arrives as several updates sharing one id. Refusing the group is
   // one sentence; refusing each member is three.
   if (message.media_group_id !== undefined) {
-    return { ...origin, kind: "unsupported", reason: "media_group" };
+    return refuse("media_group");
   }
   if (message.photo) {
-    return { ...origin, kind: "unsupported", reason: "photo" };
+    return refuse("photo");
   }
   if (message.document) {
-    return { ...origin, kind: "unsupported", reason: "document" };
+    return refuse("document");
   }
 
-  const body = message.text ?? message.caption;
+  // The three places a message keeps its words, in the order Telegram fills
+  // them. A rich message has neither of the first two and is entirely the
+  // third; reading only `text` is what refused a bot's formatted answer as an
+  // attachment.
+  const rich =
+    message.rich_message === undefined
+      ? undefined
+      : richMessageToText(message.rich_message);
+  const body = message.text ?? message.caption ?? rich;
   if (body === undefined) {
-    return { ...origin, kind: "unsupported", reason: "unsupported_media" };
+    return refuse("unsupported_media");
   }
   if (body.length === 0) {
-    return { ...origin, kind: "unsupported", reason: "empty" };
+    return refuse("empty");
   }
 
   if (forwardFrom !== null) {

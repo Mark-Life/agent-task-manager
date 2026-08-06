@@ -103,6 +103,14 @@ export const ChatEvent = defineEvent(CHAT_EVENT_MARKER, {
   promptChars: Schema.Natural,
   /** Which harness the conversation runs on. Null before there is a conversation. */
   provider: Schema.NullOr(SessionProvider),
+  /**
+   * What a refused message was made of — its field names, never its content.
+   * Non-null exactly when `outcome` is `rejected`. It is here rather than in a
+   * log line because "a forward was refused" is a report and "a forward
+   * carrying `rich_message` was refused" is the answer, and only one of them
+   * can be grouped by.
+   */
+  refusedShape: Schema.NullOr(SanitizedText),
   /** The Telegram account that sent the update, present even when nothing else is. */
   telegramUserId: Schema.String,
   /** The conversation this update belongs to. Null before one exists. */
@@ -138,6 +146,8 @@ export interface ChatProgress {
   readonly outcome: ChatOutcome | null;
   readonly promptChars: number;
   readonly provider: SessionProvider | null;
+  /** The field names of a message this bot declined, from `messageShape`. */
+  readonly refusedShape: string | null;
   /** The live turn this update queued behind, where there was one. */
   readonly runId: string | null;
   /** The task this update turned out to be about, where it was about one. */
@@ -162,6 +172,7 @@ export const emptyChatProgress: ChatProgress = {
   outcome: null,
   promptChars: 0,
   provider: null,
+  refusedShape: null,
   runId: null,
   taskId: null,
   threadId: null,
@@ -310,6 +321,7 @@ const chatRow = (
     promptChars: progress.promptChars,
     provider: progress.provider,
     queueWaitMs: null,
+    refusedShape: progress.refusedShape,
     runId: progress.runId,
     // The session a conversation is answered in belongs to its run.
     sessionId: null,
