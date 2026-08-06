@@ -387,6 +387,7 @@ const make = Effect.gen(function* () {
             eventsSeen: events?.lines ?? turn.eventsSeen,
             parked: ladder?.kind === "park",
             promptChars: turn.promptChars,
+            prUrl: report.prUrl,
             retryInMs: ladder?.delayMs ?? null,
             terminus:
               rollup === null

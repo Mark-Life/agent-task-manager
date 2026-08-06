@@ -34,6 +34,15 @@
  * conversation. The only two comments this file writes are the crash text and
  * the fallback — and the fallback exists because a run that forgets the comment
  * tool would otherwise leave the task silent.
+ *
+ * **The pull request is written here for the same reason the fallback is.** A
+ * worker that opened one says so in its comment, in prose, and the card's own
+ * `prUrl` column stayed null on every task this board has ever run. Closing the
+ * run asks GitHub what pull request the run's branch has and writes the answer
+ * onto the task — see `pullRequestForBranch` — so the field is a fact the loop
+ * observed rather than a step at the end of a long turn that a model has to
+ * remember. It runs on every ending, crashes included, because a run that opened
+ * a pull request and then died is exactly the one whose link is worth keeping.
  */
 
 import {
@@ -45,6 +54,7 @@ import {
 } from "@workspace/db";
 import type { CommentKind, RunOutcome } from "@workspace/domain";
 import { commentMarkerPathOf } from "@workspace/harness";
+import { pullRequestForBranch } from "@workspace/sandbox";
 import { Effect } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { closeChatTurn } from "./chat-turn";
@@ -239,6 +249,13 @@ export interface TerminalReport {
    */
   readonly handoffAttached: boolean;
   readonly outcome: RunOutcome;
+  /**
+   * The pull request the task's own column holds now that the run has closed,
+   * and null when it holds none. Not "what this run opened": a rerun that
+   * changed nothing reports the link the task already had, which is the honest
+   * reading of a field that describes the task rather than the attempt.
+   */
+  readonly prUrl: string | null;
   readonly runClosed: boolean;
   readonly sessionEnded: boolean;
   /**
@@ -258,6 +275,7 @@ interface BoardWrites {
   readonly errorCommented: boolean;
   readonly fallbackCommented: boolean;
   readonly handoffAttached: boolean;
+  readonly prUrl: string | null;
   readonly transitioned: boolean;
 }
 
@@ -270,8 +288,58 @@ const NO_BOARD_WRITES: BoardWrites = {
   errorCommented: false,
   fallbackCommented: false,
   handoffAttached: false,
+  prUrl: null,
   transitioned: true,
 };
+
+/**
+ * The pull request this run's branch has, onto the task that owns the branch.
+ *
+ * Answers the URL the card's column ends up holding, and null for the ordinary
+ * case — a run that produced a document, an answer or nothing has no pull
+ * request, and the lookup says so rather than this having to guess from what the
+ * agent wrote.
+ *
+ * Written only when it would change the row. A task whose field already holds
+ * this link is every rerun after the first, and an `UPDATE` per rerun would be
+ * an audit entry per rerun recording that nothing moved.
+ *
+ * Best-effort in both halves and deliberately after the comments: the link is in
+ * the thread already, posted by the agent or by the fallback, so a GitHub that
+ * will not answer or a write the database refuses costs the structured field and
+ * never the link itself.
+ */
+const recordPullRequest = Effect.fnUntraced(function* (input: {
+  readonly closure: RunClosure;
+  readonly task: WorkerAttachment["task"];
+}) {
+  const { closure, task } = input;
+  const { context } = closure;
+  const tasks = yield* TaskRepo;
+
+  // Total by contract — every refusal GitHub can make is already an answer of
+  // null in there — so there is nothing here for `bestEffort` to catch.
+  const found = yield* pullRequestForBranch({
+    branch: closure.branch,
+    repoUrl: context.repoUrl,
+  });
+
+  if (found === null || found === task.prUrl) {
+    return found ?? task.prUrl;
+  }
+
+  const written = yield* withActor(context.actor)(
+    tasks.update({
+      fields: { prUrl: found },
+      id: task.id,
+      workspaceId: workspaceIdOf(context),
+    })
+  ).pipe(bestEffort("recording the pull request on the task"));
+
+  // The URL either way, because it is what this run's branch has whether or not
+  // the column took it — and the log above says which happened.
+  return written === null ? task.prUrl : found;
+});
 
 /**
  * The two comments and the board move, for a run that has a task.
@@ -353,6 +421,14 @@ const closeOnTask = Effect.fnUntraced(function* (input: {
           })
         ).pipe(bestEffort("posting the fallback comment"));
 
+  // Before the move, so a dashboard woken by the status change finds the card
+  // already carrying its link — the same ordering, and the same reason, as the
+  // comments above.
+  const prUrl = yield* recordPullRequest({
+    closure,
+    task: input.attached.task,
+  });
+
   // The one move a run may make, and it is the same move for all three
   // endings. `after` is deliberately absent: the card goes to the bottom of
   // review, because nobody dragged it there.
@@ -364,6 +440,7 @@ const closeOnTask = Effect.fnUntraced(function* (input: {
     errorCommented: errorComment !== null,
     fallbackCommented: fallbackComment !== null,
     handoffAttached: handoff !== null && fallbackComment !== null,
+    prUrl,
     transitioned: moved !== null,
   } satisfies BoardWrites;
 });
@@ -493,6 +570,7 @@ export const closeRun = Effect.fn("Run.close")(function* (closure: RunClosure) {
     fallbackCommented: board.fallbackCommented,
     handoffAttached: board.handoffAttached,
     outcome,
+    prUrl: board.prUrl,
     runClosed: closed !== null,
     sessionEnded: ended !== null,
     transitioned: board.transitioned,

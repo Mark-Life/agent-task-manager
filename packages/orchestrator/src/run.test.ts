@@ -543,6 +543,12 @@ test("a clean run lands the task in review with a run row and a timeline", async
     "finished",
   ]);
   expect(seen.report?.transitioned).toBe(true);
+  // The turn's last words are "I opened the pull request." and this run has no
+  // repository, so there is none. The card's own field stays null rather than
+  // taking the model's word for it: `prUrl` is written from what GitHub says
+  // about the run's branch, and a run with no branch is never asked about.
+  expect(seen.task.prUrl).toBeNull();
+  expect(seen.report?.prUrl).toBeNull();
   // The event file the ingest would re-read, with one line per row.
   const lines = readFileSync(seen.context.layout.eventLogPath, "utf-8")
     .split("\n")
