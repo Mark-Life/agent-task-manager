@@ -139,6 +139,8 @@ export interface RunProgress {
   readonly eventsSeen: number;
   readonly parked: boolean;
   readonly promptChars: number | null;
+  /** The pull request the task carries once the run has closed, or null for the many runs that produce none. */
+  readonly prUrl: string | null;
   readonly retryInMs: number | null;
   /** How the run ended, once one of the three endings is known. */
   readonly terminus: RunTerminus | null;
@@ -152,6 +154,7 @@ export const emptyRunProgress: RunProgress = {
   eventsSeen: 0,
   parked: false,
   promptChars: null,
+  prUrl: null,
   retryInMs: null,
   terminus: null,
 };
@@ -206,6 +209,12 @@ export const RunEvent = defineEvent(RUN_EVENT_MARKER, {
   provider: SessionProvider,
   /** The provider's own conversation id, which is what the next resume is pointed at. */
   providerSessionId: Schema.NullOr(SanitizedText),
+  /**
+   * The pull request on the run's task once it closed, null where there is
+   * none. Beside {@link branch}, and the pair is the question: a run that
+   * pushed a branch and has no pull request is a change nobody can review.
+   */
+  prUrl: Schema.NullOr(SanitizedText),
   /** `owner/name`, parsed out of the URL — which may carry a token and never reaches a row. */
   repo: Schema.NullOr(SanitizedText),
   retryInMs: Schema.NullOr(Schema.Number),
@@ -462,6 +471,7 @@ const runRow = (
     // enough to find the conversation a wedged run is stuck in.
     providerSessionId:
       terminus?.providerSessionId ?? resumeSessionIdOf(context.dispatch),
+    prUrl: progress.prUrl,
     retryInMs: progress.retryInMs,
   };
 };

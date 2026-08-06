@@ -706,6 +706,7 @@ describe("observeRunProgress", () => {
       eventsSeen: 84,
       parked: false,
       promptChars: 1200,
+      prUrl: null,
       retryInMs: null,
       terminus: finished,
     });
