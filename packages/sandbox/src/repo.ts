@@ -4,25 +4,45 @@
  * Two levels, and the split is the whole design. A **bare mirror** per repo
  * lives under the data root and is the only thing that ever talks to the
  * network; a run's workspace is an ordinary clone *of that mirror*, off local
- * disk, in the time it takes to hardlink a pack file. A repo that a hundred
- * runs touch is fetched on a schedule instead of a hundred times, and a run
- * dispatched while GitHub is having an afternoon still gets a checkout.
+ * disk, in the time it takes to hardlink a pack file. A repo that a hundred runs
+ * touch is cloned over the network once and caught up incrementally after that,
+ * so the per-run cost is a fetch of what changed rather than a fetch of the
+ * history.
  *
- * The mirror is refreshed by {@link refreshMirror}, which is a separate
- * operation on purpose: the orchestrator owns the schedule, because how stale a
- * base branch may be is a policy decision and burying a fetch inside
- * materialization would put it on the critical path of every dispatch. A
- * missing mirror is still created on first use — a repo added at three in the
- * morning should not wait for the next sweep.
+ * The mirror is refreshed by {@link refreshMirror}, **on the dispatch path**,
+ * every time a run is materialized. That is a reversal: this used to be a
+ * separate operation the orchestrator was expected to schedule, on the argument
+ * that a base branch an hour old still produces a correct pull request and a
+ * fetch on the critical path is a network stall holding a dispatch slot. Two
+ * things were wrong with it. Nothing ever owned the schedule, so a mirror was
+ * fetched exactly once — when it was created — and every run after that branched
+ * from the tip as it stood that day. And the premise does not survive contact
+ * with a reviewer: a pull request cut from a stale base is reviewed against code
+ * that is no longer what the default branch says, so the diff does not mean what
+ * it looks like it means and the merge is a guess. Freshness is correctness
+ * here, not latency policy, and the fetch is bounded ({@link FETCH_TIMEOUT}) so
+ * the stall it was moved off the path to avoid fails loudly instead of hanging.
+ * A missing mirror is still created on first use, and that clone is already at
+ * the tip, so the cold path does not also fetch.
+ *
+ * A fetch that fails **fails the run**. There is no fallback to the stale
+ * mirror: silently branching from an old base is the bug this arrangement
+ * exists to prevent, and a run that cannot reach the remote also cannot push or
+ * open a pull request, so continuing buys nothing. The failure is a
+ * {@link CloneFailed}, which the orchestrator's ladder already retries with
+ * backoff before parking the task — a network blip costs an attempt, not the
+ * card.
  *
  * The workspace clone is a plain local clone, and **not** `--reference` or
  * `--shared`. Those make the checkout borrow objects from the mirror through
  * `objects/info/alternates`, which is faster still and is exactly wrong here:
- * the mirror is refreshed and repacked by a different process on a timer, and a
- * repack that prunes an object out from under a borrowing repo produces a
+ * the mirror is fetched and repacked by whichever dispatch reaches it next, and
+ * a repack that prunes an object out from under a borrowing repo produces a
  * checkout that fails to read its own history halfway through a run. A local
  * clone hardlinks instead, so the workspace holds its own reference to every
- * object file it uses and the mirror can do whatever it likes.
+ * object file it uses and the mirror can do whatever it likes. Moving the fetch
+ * onto the dispatch path makes that concurrent repack likelier, not rarer, which
+ * is the second reason this stays a copy.
  *
  * **No worktrees.** The previous generation of this machinery gave each task a
  * `git worktree` off one shared checkout, and carried the tax that implies: a
@@ -42,7 +62,7 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import type { TaskId } from "@workspace/domain";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schedule } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { CloneFailed } from "./errors";
 import { Git, redactRemote } from "./git";
@@ -355,13 +375,42 @@ export const ensureMirror = Effect.fn("Repo.ensureMirror")(function* (
 });
 
 /**
+ * How long the fetch may take before it is torn down as a failure.
+ *
+ * A cap rather than the turn's own deadline, which also covers materialization
+ * but is measured in tens of minutes: spending all of it on a remote that
+ * black-holes packets means the run fails at the end of its budget having done
+ * nothing, instead of failing in a minute with a message naming the remote.
+ * Generous enough for a large repo's first catch-up over a slow link, and the
+ * interrupt reaches the subprocess — `Git` kills a child that ignores SIGTERM.
+ */
+export const FETCH_TIMEOUT = "3 minutes";
+
+/**
+ * How many extra attempts a fetch gets, and how long it waits between them.
+ *
+ * Not for the network. This is for the race we cause ourselves: two dispatches
+ * on the same repo at the same moment both fetch the same bare mirror, and the
+ * loser's ref update loses a `.lock` file to the winner. That is a failure
+ * against a mirror that is, a moment later, exactly as fresh as it needed to
+ * be — so retrying costs a second and spending an attempt off the orchestrator's
+ * ladder on it does not. A genuine outage still exhausts these and fails.
+ */
+const FETCH_RETRIES = 2;
+const FETCH_RETRY_DELAY = "1 second";
+
+/**
  * Fetches everything the remote has into an existing mirror and drops the refs
  * it has deleted.
  *
- * Its own operation, called by whatever owns the schedule. It is never on the
- * path of a dispatch: a run wants a checkout now, and a repo whose base branch
- * is an hour old still produces a correct pull request, while a fetch that
- * hangs on a network stall would hold a slot instead.
+ * On the dispatch path, before every checkout — see this module's header for why
+ * that changed, and why a failure here is the run's failure rather than a
+ * fallback to whatever the mirror last saw.
+ *
+ * `--prune` matters as much as the fetch: without it a branch deleted on the
+ * remote lives on in the mirror, and a task naming it as its base gets a
+ * checkout of a branch that no longer exists rather than the error that would
+ * have told somebody.
  */
 export const refreshMirror = Effect.fn("Repo.refreshMirror")(function* (
   input: Pick<RepoSource, "mirrorDir">
@@ -380,15 +429,34 @@ export const refreshMirror = Effect.fn("Repo.refreshMirror")(function* (
       stderr: `no mirror to refresh at ${input.mirrorDir}`,
     });
   }
-  yield* git.mustRun({
-    // `remote update --prune` rather than `fetch`: a mirror's refspec maps the
-    // remote's refs onto its own, and this is the form that honours it without
-    // restating the refspec here.
-    args: ["remote", "update", "--prune"],
-    cwd: input.mirrorDir,
-    executable: "git",
-    repo,
-  });
+  yield* git
+    .mustRun({
+      // `remote update --prune` rather than `fetch`: a mirror's refspec maps the
+      // remote's refs onto its own, and this is the form that honours it without
+      // restating the refspec here.
+      args: ["remote", "update", "--prune"],
+      cwd: input.mirrorDir,
+      executable: "git",
+      repo,
+    })
+    .pipe(
+      Effect.retry({
+        schedule: Schedule.spaced(FETCH_RETRY_DELAY),
+        times: FETCH_RETRIES,
+      }),
+      // Outside the retry, so the cap bounds the whole ladder rather than each
+      // attempt: a remote that black-holes packets costs one budget, not one
+      // per try.
+      Effect.timeoutOrElse({
+        duration: FETCH_TIMEOUT,
+        orElse: () =>
+          new CloneFailed({
+            exitCode: null,
+            repo,
+            stderr: `fetching ${repo} exceeded the ${FETCH_TIMEOUT} cap`,
+          }),
+      })
+    );
 });
 
 /** What to check out, where, and who its commits belong to. */
@@ -412,8 +480,19 @@ export interface RepoCheckout {
 }
 
 /**
- * Gives one run its checkout: mirror if needed, clone from it, cut the branch,
- * point `origin` back at the real remote, and name the committer.
+ * Gives one run its checkout: mirror if needed, fetch it, clone from it, cut the
+ * branch, point `origin` back at the real remote, and name the committer.
+ *
+ * The fetch is what makes the base the remote's tip at *dispatch* rather than
+ * whenever this repo was first seen. It is skipped only when {@link ensureMirror}
+ * just created the mirror, because a `clone --mirror` that finished a moment ago
+ * is already the tip and a second round trip would buy nothing.
+ *
+ * Freshness reaches a task that overrides the base as well, without this
+ * function knowing it happened. The workspace is cloned from the mirror *after*
+ * the fetch, so every branch the remote has arrives as an `origin/<branch>`
+ * remote-tracking ref current as of this moment — an agent told by its brief to
+ * work off `mvp` gets the real `mvp`, not one a local ref remembered.
  *
  * `origin` is repointed rather than left alone because the clone's origin is a
  * host path that does not exist inside the container — an agent's `git push`
@@ -433,6 +512,9 @@ export const materializeRepo = Effect.fn("Repo.materialize")(function* (
   const inWorkspace = { cwd: workspaceDir, executable: "git", repo } as const;
 
   const mirror = yield* ensureMirror(source);
+  if (!mirror.created) {
+    yield* refreshMirror(source);
+  }
   yield* fs
     .makeDirectory(workspaceDir, { recursive: true })
     .pipe(failingFor(repo));
@@ -445,6 +527,23 @@ export const materializeRepo = Effect.fn("Repo.materialize")(function* (
     executable: "git",
     repo,
   });
+  // Asked before the checkout is attempted, purely so the message is readable.
+  // `checkout -B` against a ref that is not there fails with git's "invalid
+  // reference", which does not say that the *project's* default branch is the
+  // thing that no longer exists on the remote — and with `--prune` above, a
+  // branch deleted upstream now reaches this line instead of quietly resolving
+  // against a leftover mirror ref.
+  const base = yield* git.run({
+    ...inWorkspace,
+    args: ["rev-parse", "--verify", "--quiet", `${source.baseRef}^{commit}`],
+  });
+  if (base.exitCode !== 0) {
+    return yield* new CloneFailed({
+      exitCode: base.exitCode,
+      repo,
+      stderr: `base ref ${source.baseRef} does not exist on ${repo} after fetching`,
+    });
+  }
   // `--no-track` so the new branch has no upstream. With one, an agent's plain
   // `git push` argues with the base branch it was cut from instead of creating
   // the run's own head.
@@ -480,7 +579,14 @@ export const materializeRepo = Effect.fn("Repo.materialize")(function* (
     ...inWorkspace,
     args: ["rev-parse", "HEAD"],
   });
-  yield* Effect.annotateCurrentSpan({ branch: source.branch, repo });
+  // `baseRef` is on the span because "what did this run branch from" is the
+  // question a reviewer holding a suspicious diff actually asks, and answering
+  // it from a trace beats reconstructing it from the merge-base afterwards.
+  yield* Effect.annotateCurrentSpan({
+    baseRef: source.baseRef,
+    branch: source.branch,
+    repo,
+  });
 
   return {
     branch: source.branch,
@@ -525,15 +631,12 @@ export const cloneIntoWorkspace = (input: {
     workspaceDir: input.targetDir,
   }).pipe(Effect.asVoid, Effect.provide(platformLayer));
 
-/**
- * {@link refreshMirror} with its dependencies already resolved, for whoever
- * owns the schedule.
- *
- * The wired form exists so the fetch can be scheduled without handing its owner
- * a general-purpose subprocess runner: {@link Git} is deliberately not part of
- * this package's public surface, because a service that runs `git` and `gh`
- * with the host's credentials is one refactor away from being an `exec` that
- * takes its command from a database row.
+/*
+ * There was a `refreshRepoMirror` here — {@link refreshMirror} pre-wired "for
+ * whoever owns the schedule". Nobody ever did, and that is the whole of the
+ * stale-base bug: an export shaped like a solved problem, on a package's public
+ * surface, with no caller. The fetch is on the dispatch path now, so a wired
+ * form has no user, and leaving one would rebuild the same trap. If a pre-warm
+ * sweep is ever wanted — to make the dispatch fetch cheap rather than to make it
+ * unnecessary — it is four lines, and it should arrive with its scheduler.
  */
-export const refreshRepoMirror = (input: Pick<RepoSource, "mirrorDir">) =>
-  refreshMirror(input).pipe(Effect.asVoid, Effect.provide(platformLayer));

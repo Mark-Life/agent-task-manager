@@ -211,7 +211,6 @@ export {
   parseRepoUrl,
   type RepoIdentity,
   type RepoSourceInput,
-  refreshRepoMirror,
   repoLabelOf,
   repoSourceFor,
 } from "./repo";

@@ -273,9 +273,10 @@ export const MaterializeStrategy = Schema.Literals(MATERIALIZE_STRATEGIES);
 export type MaterializeStrategy = typeof MaterializeStrategy.Type;
 
 /**
- * Where a run's checkout comes from. The mirror is a host-side bare clone kept
- * refreshed on a schedule, so a run clones by reference off local disk instead
- * of pulling the whole history over the network every time.
+ * Where a run's checkout comes from. The mirror is a host-side bare clone
+ * fetched at the start of every materialization, so a run branches from the
+ * remote's tip as it stands at dispatch while still building its working tree
+ * off local disk rather than pulling the whole history over the network.
  */
 export interface RepoSource {
   /** What the run's branch is cut from, `origin/main` and the like. */
