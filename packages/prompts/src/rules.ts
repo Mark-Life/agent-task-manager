@@ -86,6 +86,38 @@ export const ARTIFACT_RULES = `## What survives this run
 You have one writable artifacts directory and two read-only ones. Anything worth keeping goes in the writable one; everything outside it is scratch and dies with the container.`;
 
 /**
+ * What the run's GitHub credential is, and what to do the moment GitHub refuses
+ * to use it.
+ *
+ * Written because of a run that hit exactly this. A task needed a change under
+ * `.github/workflows/`; the credential was a `gh auth login` token, which
+ * carries `repo` and not `workflow`; GitHub rejected the push naming the scope,
+ * in those words. The agent understood the refusal perfectly and then improvised
+ * around it — it saved the blocked half as a patch file in its artifacts and
+ * opened a pull request with the other half. The pull request reviewed as
+ * complete. It taught two installers to fetch an asset that nothing in it built.
+ *
+ * So the rule is not "you may hit a permission wall". It is that a wall is a
+ * finding to report and never a thing to route around, and it names the three
+ * improvisations that look like finishing — the patch file, the pull request
+ * that describes what it omits, the plan quietly narrowed to what the token
+ * allowed. An agent that stops and says which scope was refused costs a person
+ * one re-mint; an agent that works around it costs them a broken release and a
+ * review that could not have caught it.
+ *
+ * Only a run with a repository is given this, which is what keeps it true: the
+ * board's credential is what clones, so a run that has a checkout has one.
+ * `@workspace/sandbox` says the same thing to the operator from the other end,
+ * naming the missing scope at boot, and `bun run github:check` prints it on
+ * demand.
+ */
+export const CREDENTIAL_RULES = `## The GitHub credential you hold
+
+\`git\` and \`gh\` are both authenticated, as the person who owns this board, with one token on your environment as \`GH_TOKEN\`. \`gh auth status\` prints what it carries. Use it for the whole change: push the branch, open the pull request, and reach repository settings through \`gh api\` when a task is about them.
+
+If GitHub refuses one of those, stop and report it. Say which operation was refused and which scope or permission the refusal named — in your comment on the task, and in the pull request if you opened one. Do not route around it. A patch file for a human to apply by hand, a pull request that describes the half it could not include, a plan quietly narrowed to what the token allowed: each of those reads as finished work and is not, and half a change nobody can review as a unit is worse than a run that stops and names the wall.`;
+
+/**
  * The rule the stop hook enforces, in its positive form, and the one thing to
  * do when the tool it names cannot be reached.
  *

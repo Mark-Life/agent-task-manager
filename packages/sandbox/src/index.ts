@@ -221,6 +221,20 @@ export {
   SandboxEvent,
   type SandboxEventInput,
 } from "./sandbox-event";
+// What that credential is allowed to do. Exported because the loop says it at
+// boot: a token that clones and pushes and then refuses `.github/workflows/` is
+// a run that half-finishes, and the only cheap moment to notice is before any
+// task has been spent on it.
+export {
+  type CredentialNote,
+  credentialNotes,
+  type GithubCredential,
+  type GithubTokenKind,
+  OWNER_SCOPES,
+  probeGithubCredential,
+  REQUIRED_SCOPES,
+  tokenKindOf,
+} from "./scopes";
 export {
   identityEnv,
   MATERIALIZE_STRATEGIES,

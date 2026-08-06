@@ -24,7 +24,7 @@ import {
 } from "@workspace/domain";
 import { DateTime } from "effect";
 import type { PromptMode, RunPlacement } from "./render";
-import { ARTIFACT_RULES, SHARED_RULES } from "./rules";
+import { ARTIFACT_RULES, CREDENTIAL_RULES, SHARED_RULES } from "./rules";
 import { buildWorkerPrompt, commentLabelOf } from "./worker";
 
 const at = DateTime.makeUnsafe("2026-08-02T10:00:00.000Z");
@@ -128,6 +128,18 @@ describe("a fresh session's prompt", () => {
     expect(text).toContain("open a pull request");
   });
 
+  /**
+   * The rule that replaced a workaround. A run whose push was refused for a
+   * missing scope saved the blocked half as a patch file and opened a pull
+   * request with the rest, and the pull request read as complete — so the
+   * instruction has to reach the run that has a repository to push.
+   */
+  test("tells a run with a repository what its credential is and what a refusal means", () => {
+    expect(text).toContain(CREDENTIAL_RULES);
+    expect(text).toContain("gh auth status");
+    expect(text).toContain("which scope or permission the refusal named");
+  });
+
   test("names the writable folder and the read-only ones, and states the rule once", () => {
     expect(text).toContain(
       "- `/artifacts/task` is yours to write, and what you leave there outlives the container."
@@ -160,6 +172,9 @@ describe("a fresh session's prompt", () => {
     expect(scratch).toContain("`/workspace` is an empty scratch directory");
     expect(scratch).not.toContain("pull request");
     expect(scratch).not.toContain("## Project");
+    // And no credential section: nothing to push, and a token it will not reach
+    // for is one more paragraph between the run and its task.
+    expect(scratch).not.toContain("The GitHub credential you hold");
   });
 
   test("passes on what was said before the first run ever started", () => {

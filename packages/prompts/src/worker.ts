@@ -39,7 +39,12 @@ import {
   section,
   speech,
 } from "./render";
-import { ARTIFACT_RULES, SHARED_RULES, WORKER_RULES } from "./rules";
+import {
+  ARTIFACT_RULES,
+  CREDENTIAL_RULES,
+  SHARED_RULES,
+  WORKER_RULES,
+} from "./rules";
 
 /**
  * How much of a session id goes in a label. Enough to tell two sessions on one
@@ -148,6 +153,10 @@ const freshPrompt = (input: WorkerPromptInput) => {
     section("Acceptance criteria", task.acceptance),
     section("Project", projectSection(project)),
     section("Where you are working", placementSection({ placement, repoUrl })),
+    // Only for a run with a repository, because the credential is what cloned
+    // it: a scratch-directory run has nothing to push and telling it about a
+    // token is telling it about a tool it will not reach for.
+    repoUrl === null ? null : CREDENTIAL_RULES,
     ARTIFACT_RULES,
     SHARED_RULES,
     section(
