@@ -259,10 +259,17 @@ describe("one row, rendered", () => {
 });
 
 describe("the rules", () => {
-  /** The bullet list the rules introduce the tools with, and nothing else. */
+  /**
+   * The bullet list the rules introduce the tools with, and nothing else.
+   *
+   * It ends where the sentence about the container's other tools begins, which
+   * is also where names that are not board tools start appearing — `gh` is the
+   * first of them, and a slice that ran to the next heading would read it as a
+   * tool the server ought to have registered.
+   */
   const toolSection = MANAGER_RULES.slice(
     MANAGER_RULES.indexOf("The tools are:"),
-    MANAGER_RULES.indexOf("## How you move and remove cards")
+    MANAGER_RULES.indexOf("Other tools may be in your container")
   );
 
   const named = [...toolSection.matchAll(/`(\w+)`/g)].map(
@@ -295,5 +302,32 @@ describe("the rules", () => {
 
   test("name no single window the conversation arrives through", () => {
     expect(MANAGER_RULES).not.toContain("Telegram");
+  });
+
+  /**
+   * The sentence these replace said the opposite — "You have no shell, no
+   * repository" — and stayed after the manager moved into a container, so a
+   * turn asked to file a card about a repository guessed its URL from the
+   * repositories of neighbouring projects rather than spending one `gh` call.
+   * The claim is asserted in both directions because a prompt that is merely
+   * silent about the shell produces the same guess.
+   */
+  test("say the shell and `gh` are there, and what they are for", () => {
+    expect(MANAGER_RULES).not.toContain("You have no shell");
+    expect(MANAGER_RULES).toContain("`gh` logged in");
+    expect(MANAGER_RULES).toContain("default branch before you name them");
+  });
+
+  test("say the shell is for reading and the work still belongs on a card", () => {
+    expect(MANAGER_RULES).toContain("It is not there to do the work");
+    expect(MANAGER_RULES).toContain(
+      "do not commit, push, or open a pull request"
+    );
+    expect(MANAGER_RULES).toContain("file the card");
+  });
+
+  test("say the scratch directory does not outlive the turn", () => {
+    expect(MANAGER_RULES).toContain("`/workspace` is scratch");
+    expect(MANAGER_RULES).not.toContain("outlives the container");
   });
 });

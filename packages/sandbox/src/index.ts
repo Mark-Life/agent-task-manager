@@ -135,7 +135,9 @@ export {
   GH_TOKEN_ENV_VAR,
   GITHUB_TOKEN_ENV_VAR,
   githubTokenEnv,
+  MANAGER_TOKEN_ENV_VAR,
   readGithubToken,
+  readManagerGithubToken,
 } from "./github";
 export {
   DEFAULT_CPUS,

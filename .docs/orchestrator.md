@@ -8,11 +8,12 @@ rank order and the conversations with something unanswered. There is no queue an
 database.
 
 **A worker run and a chat turn are one runtime.** A run carries a `role` — `worker` or
-`manager` — and the role selects exactly four things: the system prompt, what the run is
-attached to (a task or a conversation), the container image, and what the run's board
-credential is bound to. Everything else is shared: one dispatch, one lease, one pool, one quota
-gate, one `run` row, one event ingest, one retry ladder, one `atm.run`. A pull request that adds
-a role check inside the lease, the pool, the quota gate or the turn is wrong by construction.
+`manager` — and the role selects exactly five things: the system prompt, what the run is
+attached to (a task or a conversation), the container image, what the run's board credential is
+bound to, and which GitHub token it is handed (`.docs/agent-access.md`). Everything else is
+shared: one dispatch, one lease, one pool, one quota gate, one `run` row, one event ingest, one
+retry ladder, one `atm.run`. A pull request that adds a role check inside the lease, the pool,
+the quota gate or the turn is wrong by construction.
 
 The two lanes are the one exception, and they are a capacity decision rather than a behaviour
 one: `ORCHESTRATOR_MAX_CONCURRENCY` worker slots and `ORCHESTRATOR_MAX_CHAT_CONCURRENCY` chat
