@@ -31,6 +31,22 @@ describe("mainKeyboard", () => {
     }
   });
 
+  test("leads with Compose, then Tasks", () => {
+    const keys = mainKeyboard.keyboard
+      .flat()
+      .map((key) => (typeof key === "string" ? key : key.text));
+    expect(keys.slice(0, 2)).toEqual(["Compose", "Tasks"]);
+  });
+
+  test("offers every command it maps a label for", () => {
+    const keys = new Set(
+      mainKeyboard.keyboard
+        .flat()
+        .map((key) => (typeof key === "string" ? key : key.text))
+    );
+    expect(keys).toEqual(new Set(Object.keys(BUTTON_COMMANDS)));
+  });
+
   test("ordinary text is not a command", () => {
     expect(commandForButton("ship it")).toBeNull();
     expect(commandForButton(undefined)).toBeNull();

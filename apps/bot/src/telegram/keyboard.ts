@@ -28,6 +28,7 @@ import type { BotContext } from "./context";
 /** The reply-keyboard label for each command it stands for. */
 export const BUTTON_COMMANDS: Record<string, string> = {
   Board: "/board",
+  Compose: "/compose",
   New: "/new",
   Status: "/status",
   Stop: "/stop",
@@ -38,11 +39,28 @@ export const BUTTON_COMMANDS: Record<string, string> = {
 /**
  * The persistent menu under the text box.
  *
- * Six keys, because a reply keyboard covers the conversation on a phone and
- * every extra row is a message the person has to scroll past. The rest of the
- * surface lives behind `/help`.
+ * The first slot is the one under the thumb, and it goes to *Compose*:
+ * collecting several messages into one turn is the key a hand reaches for while
+ * talking. The reads follow it.
+ *
+ * Seven keys in three rows, not four: a reply keyboard covers the conversation
+ * on a phone and every extra row is a message the person has to scroll past, so
+ * the row that grew took a third key rather than spawning a fourth row. The rest
+ * of the surface lives behind `/help`.
+ *
+ * On *Tasks* and *Board* standing beside each other: as of this writing they
+ * draw the same message but for its heading. `/tasks` hits `GET /tasks` and
+ * `/board` hits `GET /tasks/board`; the gateway builds both from the same
+ * `readColumns` and the flat list is literally the board `flatMap`ped, so the
+ * cards and their order are identical, and `boardPage` renders each card with
+ * the same icon-title-id shape `taskLine` does. That is a regression in
+ * `boardPage`, not a duplicate command: `/tasks/board` exists to keep the five
+ * columns *grouped*, and `boardPage` flattens them and draws no column headings,
+ * throwing away the only thing it asked a different endpoint for. So the fix is
+ * to make *Board* render column by column — not to drop the key.
  */
 export const mainKeyboard = new Keyboard()
+  .text("Compose")
   .text("Tasks")
   .text("Board")
   .row()
