@@ -91,6 +91,7 @@ bun run sandbox:check        # a real container       --agent uses the built ima
 bun run loop:check           # dispatch to terminus   --docker contained, --live real model
 bun run gateway:check        # a task's lifecycle over HTTP
 bun run bot:check            # the bot's handlers, with no token and no Telegram call
+bun run github:check         # what the agents' GitHub credential may do; add owner/name
 ```
 
 A claim that stops holding is a named line, not a diff in a five-hundred-line program.
@@ -125,6 +126,7 @@ Read from `.env` at the repo root. These matter before anything runs:
 | `TELEGRAM_ALLOWLIST` | required by the bot | `telegramUserId:workspaceId:userId`, comma separated |
 | `DASHBOARD_ORIGIN` | required by the dashboard | its exact origin, `http://localhost:5173` locally |
 | `OWNER_PASSWORD` | read by `db:seed` | the owner's first password; unset, nobody can sign in |
+| `ATM_GITHUB_TOKEN` | required to clone a private repo or let an agent push | needs `repo` **and** `workflow`; `bun run github:check` says what yours has, `.docs/github-credential.md` says why |
 
 Worth knowing about: `SANDBOX_MODE=local` runs turns as host processes with no isolation at all,
 which is the debugging escape hatch. `ORCHESTRATOR_GATEWAY_URL` is the gateway *as a container

@@ -46,6 +46,7 @@
     "db:store-check": "bun run scripts/store-check.ts",
     "user:add": "bun run scripts/user-add.ts",
     "agent-home:login": "bun run scripts/agent-home-login.ts",
+    "github:check": "bun run scripts/github-check.ts",
     "harness:check": "bun run scripts/harness-check.ts",
     "sandbox:check": "bun run scripts/sandbox-check.ts",
     "loop:check": "bun run scripts/loop-check.ts",

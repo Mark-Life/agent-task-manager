@@ -72,11 +72,11 @@ import {
   readExecutorMcp,
 } from "@workspace/harness";
 import {
-  AGENT_TOKEN_ENV_VAR,
   cachesDirOf,
-  GH_TOKEN_ENV_VAR,
+  credentialNotes,
   githubTokenEnv,
   orphansOf,
+  probeGithubCredential,
   readGithubToken,
   Sandbox,
   sandboxImageFor,
@@ -1029,9 +1029,13 @@ const make = Effect.gen(function* () {
    * value here is a credential, and the operator's question is which
    * capabilities a run has at all, which the names answer.
    *
-   * The GitHub line is separate because its absence has a specific consequence
-   * worth naming at boot rather than at the end of the first run that tries to
-   * push: a private repository cannot be cloned, and `gh` is not logged in.
+   * The GitHub lines are separate, and they say what the credential *can do*
+   * rather than that there is one. A token that clones and pushes and then has
+   * GitHub refuse the `.github/workflows/` half of a change is a run that
+   * half-finishes and reads as finished, and the scopes behind that refusal are
+   * one request away — so the loop asks once, here, before any task has been
+   * spent on it. Every case is a line from `credentialNotes`, missing scope and
+   * remedy included; none of them stops a boot.
    */
   const announceTurnEnv = Effect.gen(function* () {
     const names = Object.keys(turnEnv).sort();
@@ -1040,13 +1044,12 @@ const make = Effect.gen(function* () {
           `turns run with no connector tools: set ${EXECUTOR_URL_ENV_VAR} and ${EXECUTOR_KEY_ENV_VAR} to give them Executor`
         )
       : Effect.logInfo(`turns are given ${names.join(", ")}`);
-    yield* GH_TOKEN_ENV_VAR in turnEnv
-      ? Effect.logInfo(
-          "turns carry a GitHub credential: `gh` is logged in and git can push"
-        )
-      : Effect.logWarning(
-          `turns have no GitHub credential: set ${AGENT_TOKEN_ENV_VAR} to clone a private repository or let an agent open a pull request`
-        );
+    const credential = yield* probeGithubCredential();
+    yield* Effect.forEach(credentialNotes(credential), (note) =>
+      note.level === "warning"
+        ? Effect.logWarning(note.message)
+        : Effect.logInfo(note.message)
+    );
   });
 
   const run = Effect.gen(function* () {

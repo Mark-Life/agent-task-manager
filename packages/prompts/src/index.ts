@@ -41,6 +41,7 @@ export {
 } from "./render";
 export {
   ARTIFACT_RULES,
+  CREDENTIAL_RULES,
   MANAGER_RULES,
   SHARED_RULES,
   WORKER_RULES,
