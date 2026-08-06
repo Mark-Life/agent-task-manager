@@ -389,6 +389,7 @@ describe("the atm.chat row", () => {
       promptChars: 0,
       provider: null,
       queueWaitMs: null,
+      refusedShape: null,
       runId: null,
       sessionId: null,
       spanId: null,

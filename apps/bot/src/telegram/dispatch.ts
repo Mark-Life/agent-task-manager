@@ -333,7 +333,14 @@ export const makeDispatcher = Effect.fnUntraced(function* (
     }
 
     if (!isIntakeMessage(classification)) {
-      yield* observeChat({ outcome: "rejected", promptChars: 0 });
+      // The shape goes on the row, not into a log line: the next message this
+      // bot cannot read should be answerable from the ledger in one query
+      // rather than from a person describing what they sent.
+      yield* observeChat({
+        outcome: "rejected",
+        promptChars: 0,
+        refusedShape: classification.shape,
+      });
       yield* reply(ctx, refusalFor(classification.reason));
       return;
     }
