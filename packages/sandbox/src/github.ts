@@ -42,6 +42,28 @@ import { Config, Effect, Option, Redacted } from "effect";
 export const AGENT_TOKEN_ENV_VAR = "ATM_GITHUB_TOKEN";
 
 /**
+ * The credential a manager turn holds instead, when an operator wants it to be
+ * a different one.
+ *
+ * A manager reads GitHub and never writes it: it confirms a repository exists,
+ * resolves an owner and a default branch before a project is named after them,
+ * and reads an issue or a pull request somebody asked about. Everything that
+ * pushes happens in a worker run, off a card. So the useful token here is a
+ * read-only one, and this is where an operator says so.
+ *
+ * **Unset means the manager holds {@link AGENT_TOKEN_ENV_VAR}, same as a
+ * worker**, which is what it already held before this variable existed. That
+ * default is deliberate rather than lazy: a manager may move a card into
+ * `in_progress`, and the run that starts holds the pushing token — so narrowing
+ * the manager's own credential adds a step to that path without closing it,
+ * and a default of *no credential* would leave every install that never reads
+ * this file with the manager that cannot check a repository. The narrowing
+ * worth having is a token GitHub minted narrow, which is an operator's to
+ * supply and not a distinction this code can make.
+ */
+export const MANAGER_TOKEN_ENV_VAR = "ATM_MANAGER_GITHUB_TOKEN";
+
+/**
  * What the tools read, once the token is on its way in.
  *
  * `GH_TOKEN` wins over `GITHUB_TOKEN` in the CLI's own precedence, and both are
@@ -121,3 +143,18 @@ export const readGithubToken = Effect.gen(function* () {
   // from inside a clone, where nothing downstream knows what to do with it.
   Effect.orElseSucceed(() => null)
 );
+
+/**
+ * The manager's own token, or null when the operator did not name one.
+ *
+ * Null is the answer to "is there an override", not to "does a manager get a
+ * credential" — the fallback is {@link readGithubToken} and it is applied by
+ * the caller, so this stays one question with one answer. Total for the same
+ * reason as above.
+ */
+export const readManagerGithubToken = Effect.gen(function* () {
+  const configured = yield* Config.option(
+    Config.redacted(MANAGER_TOKEN_ENV_VAR)
+  );
+  return Option.getOrNull(configured);
+}).pipe(Effect.orElseSucceed(() => null));

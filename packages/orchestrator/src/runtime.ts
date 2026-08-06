@@ -74,10 +74,13 @@ import {
 import {
   cachesDirOf,
   credentialNotes,
+  GH_TOKEN_ENV_VAR,
   githubTokenEnv,
+  MANAGER_TOKEN_ENV_VAR,
   orphansOf,
   probeGithubCredential,
   readGithubToken,
+  readManagerGithubToken,
   Sandbox,
   sandboxImageFor,
 } from "@workspace/sandbox";
@@ -241,26 +244,44 @@ const bestEffort =
  * neither runs with no connector tools, which is a smaller agent and not a
  * broken one, so an unreadable configuration is an empty environment rather
  * than a loop that refuses to boot.
+ *
+ * **The role picks the GitHub credential and nothing else.** Both roles get one
+ * — a manager reads GitHub to answer for a card it is filing, a worker pushes
+ * the branch it wrote — and until this returned per role, that was true by
+ * accident: one list built at boot, handed to every run, written when the
+ * manager was still a function inside the bot with no container to hand
+ * anything to. It is a decision now, and `ATM_MANAGER_GITHUB_TOKEN` is where an
+ * operator makes it a different one. `.docs/agent-access.md` argues the
+ * default.
  */
 export const turnEnvironment = Effect.gen(function* () {
   const executor = yield* readExecutorMcp.pipe(
     Effect.orElseSucceed(() => null)
   );
   const github = yield* readGithubToken;
-  const env: Readonly<Record<string, string>> = {
-    ...(executor === null
+  const managerGithub = yield* readManagerGithubToken;
+  const shared: Readonly<Record<string, string>> =
+    executor === null
       ? {}
       : {
           [EXECUTOR_KEY_ENV_VAR]: Redacted.value(executor.key),
           [EXECUTOR_URL_ENV_VAR]: executor.url,
-        }),
+        };
+  return {
+    // A manager has no checkout and no credential helper: this is `gh` alone,
+    // there so a card names a repository that exists, on the branch it really
+    // defaults to. `MANAGER_RULES` is the other half — it says read, and it
+    // says the writing belongs in a run off a card.
+    manager: { ...shared, ...githubTokenEnv(managerGithub ?? github) },
     // The same token the host's git was given, so `gh` in the container is
     // logged in and the checkout's credential helper has something to read.
     // Without it an agent can commit and never push, which surfaces at the end
     // of a run that already did the work.
-    ...githubTokenEnv(github),
-  };
-  return env;
+    worker: { ...shared, ...githubTokenEnv(github) },
+  } as const satisfies Record<
+    RunAttachment["role"],
+    Readonly<Record<string, string>>
+  >;
 });
 
 const make = Effect.gen(function* () {
@@ -407,7 +428,9 @@ const make = Effect.gen(function* () {
         dataRoot: planned.claim.dataRoot,
         // Without this a contained turn starts with no Executor credentials at
         // all, and the connector layer is simply absent inside the sandbox.
-        env: turnEnv,
+        // Keyed by role because the GitHub credential differs between them
+        // whenever an operator has said it should.
+        env: turnEnv[context.attached.role],
         gatewayUrl: config.gatewayUrl,
         onClose: collect,
         sandboxKind: config.sandboxKind,
@@ -1037,14 +1060,27 @@ const make = Effect.gen(function* () {
    * one request away — so the loop asks once, here, before any task has been
    * spent on it. Every case is a line from `credentialNotes`, missing scope and
    * remedy included; none of them stops a boot.
+   *
+   * The names are the worker's, and the manager gets a line of its own only
+   * when it is holding something different — an operator who set
+   * `ATM_MANAGER_GITHUB_TOKEN` wants to see at boot that it took, and one who
+   * did not should not read two identical lists and wonder which applies.
+   * `probeGithubCredential` below reports the worker's token; a manager
+   * credential is read-only by intent and has no required scope to be missing.
    */
   const announceTurnEnv = Effect.gen(function* () {
-    const names = Object.keys(turnEnv).sort();
+    const names = Object.keys(turnEnv.worker).sort();
     yield* names.length === 0
       ? Effect.logWarning(
           `turns run with no connector tools: set ${EXECUTOR_URL_ENV_VAR} and ${EXECUTOR_KEY_ENV_VAR} to give them Executor`
         )
       : Effect.logInfo(`turns are given ${names.join(", ")}`);
+    yield* turnEnv.manager[GH_TOKEN_ENV_VAR] ===
+    turnEnv.worker[GH_TOKEN_ENV_VAR]
+      ? Effect.void
+      : Effect.logInfo(
+          `manager turns hold the separate GitHub credential in ${MANAGER_TOKEN_ENV_VAR}`
+        );
     const credential = yield* probeGithubCredential();
     yield* Effect.forEach(credentialNotes(credential), (note) =>
       note.level === "warning"
