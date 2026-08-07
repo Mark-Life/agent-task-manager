@@ -13,6 +13,13 @@ const TASKS = "tasks";
 const THREADS = "threads";
 const PROJECTS = "projects";
 
+/**
+ * The fourth root, and the only one that owns nothing. Remaining allowance is a
+ * fact about the machine's provider logins rather than about anything on a
+ * board, so nothing hangs off it and nothing invalidates it — it is polled.
+ */
+const USAGE = "usage";
+
 /** The list filters, taken from the client rather than restated beside it. */
 type TaskListQuery = Parameters<ApiClientShape["tasks"]["list"]>[0]["query"];
 type ThreadListQuery = Parameters<
@@ -85,4 +92,7 @@ export const keys = {
 
   /** The conversation list under whatever filters are in effect. */
   threads: (query: ThreadListQuery = {}) => [THREADS, "list", query] as const,
+
+  /** What is left in the provider subscriptions, as the loop last read it. */
+  usage: () => [USAGE] as const,
 } as const;
