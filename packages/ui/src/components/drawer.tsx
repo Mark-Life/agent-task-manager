@@ -100,8 +100,29 @@ function DrawerSwipeHandle({
 function DrawerContent({
   className,
   children,
+  overlayProps,
+  viewportProps,
   ...props
-}: DrawerPrimitive.Popup.Props) {
+}: DrawerPrimitive.Popup.Props & {
+  /**
+   * Passed straight to the backdrop, for a drawer that wants its own weight of
+   * it — or that needs `forceRender`, which the primitive requires for a drawer
+   * opened from inside another overlay.
+   */
+  overlayProps?: DrawerPrimitive.Backdrop.Props
+  /**
+   * Passed straight to the viewport, which is where a drawer's stacking order
+   * lives. The viewport is positioned and has a `z-index`, so it opens a
+   * stacking context and the popup's own `z-index` counts only against its
+   * siblings inside it — never against the backdrop. A drawer that has to sit
+   * over another overlay raises this, not the popup. The class is a string
+   * rather than the primitive's string-or-function, because it is merged with
+   * the viewport's own.
+   */
+  viewportProps?: Omit<DrawerPrimitive.Viewport.Props, "className"> & {
+    className?: string
+  }
+}) {
   const { hasSnapPoints, modal, showSwipeHandle, swipeDirection } = useDrawer()
   const swipeAxis =
     swipeDirection === "down" || swipeDirection === "up" ? "y" : "x"
@@ -109,12 +130,19 @@ function DrawerContent({
   return (
     <DrawerPortal data-slot="drawer-portal">
       {modal === true && (
-        <DrawerOverlay data-snap-points={hasSnapPoints ? "" : undefined} />
+        <DrawerOverlay
+          data-snap-points={hasSnapPoints ? "" : undefined}
+          {...overlayProps}
+        />
       )}
       <DrawerPrimitive.Viewport
         data-slot="drawer-viewport"
         data-modal={modal}
-        className="pointer-events-none fixed inset-0 z-50 select-none data-[modal=true]:pointer-events-auto"
+        {...viewportProps}
+        className={cn(
+          "pointer-events-none fixed inset-0 z-50 select-none data-[modal=true]:pointer-events-auto",
+          viewportProps?.className
+        )}
       >
         <DrawerPrimitive.Popup
           data-slot="drawer-popup"

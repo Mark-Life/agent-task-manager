@@ -1,6 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "./highlight.css";
+@import "./markdown.css";
 @source "../../../apps/**/*.{ts,tsx}";
 @source "../../../components/**/*.{ts,tsx}";
 @source "../**/*.{ts,tsx}";
@@ -53,7 +55,7 @@ html {
   --foreground: oklch(0.92 0 0);
   --card: oklch(0.218 0.008 223.9);
   --card-foreground: oklch(0.987 0.002 197.1);
-  --popover: oklch(0.218 0.008 223.9);
+  --popover: oklch(0.192 0.008 223.9);
   --popover-foreground: oklch(0.987 0.002 197.1);
   --primary-base: oklch(0.7869 0.1165 192.26);
   --primary: var(--primary-base);

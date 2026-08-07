@@ -43,14 +43,21 @@ function DialogOverlay({
 function DialogContent({
   className,
   children,
+  overlayProps,
   showCloseButton = true,
   ...props
 }: DialogPrimitive.Popup.Props & {
+  /**
+   * Passed straight to the backdrop, for a dialog that wants its own weight of
+   * it — or that needs `forceRender`, which the primitive requires for a dialog
+   * opened from inside another one.
+   */
+  overlayProps?: DialogPrimitive.Backdrop.Props
   showCloseButton?: boolean
 }) {
   return (
     <DialogPortal>
-      <DialogOverlay />
+      <DialogOverlay {...overlayProps} />
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
