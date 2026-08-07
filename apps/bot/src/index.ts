@@ -54,6 +54,7 @@ import { makeComposeBuffers } from "./telegram/compose";
 import type { BotContext } from "./telegram/context";
 import { makeDispatcher, makePendingComments } from "./telegram/dispatch";
 import { registerIntake } from "./telegram/intake";
+import { makeKeyboardRefresh } from "./telegram/keyboard";
 
 /**
  * What the raw update looks like before a handler classifies it.
@@ -158,6 +159,7 @@ export const registerHandlers = Effect.fnUntraced(function* (
   });
 
   const compose = makeComposeBuffers();
+  const keyboards = makeKeyboardRefresh();
   const notices = makeQueueNotices();
   const pending = makePendingComments();
   const dispatcher = yield* makeDispatcher({
@@ -168,7 +170,7 @@ export const registerHandlers = Effect.fnUntraced(function* (
     pending,
   });
 
-  yield* registerCommands({ bot, compose, pending });
+  yield* registerCommands({ bot, compose, keyboards, pending });
   yield* registerCallbacks({
     bot,
     compose,
@@ -181,6 +183,7 @@ export const registerHandlers = Effect.fnUntraced(function* (
   return {
     compose,
     dispatcher,
+    keyboards,
     notices,
     pending,
     runUpdate,
@@ -198,10 +201,12 @@ export const registerHandlers = Effect.fnUntraced(function* (
 export const runBot = Effect.fnUntraced(function* (wiring: BotWiring) {
   const allowlist = yield* Allowlist;
   const scan = yield* StuckScan;
-  const { notices, runUpdate, telegram } = yield* registerHandlers(wiring);
+  const { keyboards, notices, runUpdate, telegram } =
+    yield* registerHandlers(wiring);
 
   yield* Effect.forkScoped(
     runNotifyListener({
+      keyboards,
       notices,
       repairIntervalMs: wiring.env.notifyRepairIntervalMs,
     })

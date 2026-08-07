@@ -71,7 +71,7 @@ export const COMPOSE_VERBS = [
 ] as const;
 
 /** The lists that paginate in place. Closed, because the key picks a renderer. */
-export const PAGE_KEYS = ["threads", "history", "tasks", "board"] as const;
+export const PAGE_KEYS = ["threads", "history", "tasks"] as const;
 
 /** Highest page a button may address, so a crafted callback cannot ask for a huge offset. */
 export const MAX_PAGE = 999;

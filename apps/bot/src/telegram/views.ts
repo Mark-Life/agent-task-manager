@@ -22,7 +22,7 @@ import { InlineKeyboard } from "grammy";
 import { actorFor, Board } from "./board";
 import { encodeCallbackData, type PageKey } from "./callback-data";
 import type { BotContext } from "./context";
-import { bold, code, TASK_STATUS_ICONS, taskLine } from "./format";
+import { bold, taskLine } from "./format";
 import { escapeHtml } from "./helpers";
 import { appendNavRow, navKeyboard, pageIndicator, paginate } from "./paging";
 import {
@@ -172,40 +172,6 @@ export const tasksPage = Effect.fnUntraced(function* (options: {
   } satisfies RenderedPage;
 });
 
-/**
- * The board as one list, each card under the column it sits in. Flattened
- * rather than five messages: a column at a time is five notifications for one
- * question.
- */
-export const boardPage = Effect.fnUntraced(function* (options: {
-  readonly ctx: BotContext;
-  readonly page: number;
-  readonly threadId: ThreadId | null;
-}) {
-  const board = yield* Board;
-  const columns = yield* board.columns({
-    actor: actorFor({ ctx: options.ctx, threadId: options.threadId }),
-  });
-  const cards = columns.flatMap((column) =>
-    column.tasks.map((task) => ({ column: column.status, task }))
-  );
-  const page = paginate({ items: cards, page: options.page });
-
-  return {
-    keyboard: navKeyboard({ key: "board", page }),
-    text: page.isEmpty
-      ? "The board is empty."
-      : [
-          `${bold("Board")}${pageIndicator(page)}`,
-          "",
-          ...page.items.map(
-            (card) =>
-              `${TASK_STATUS_ICONS[card.column]} ${bold(card.task.title)}\n${code(card.task.id)}`
-          ),
-        ].join("\n\n"),
-  } satisfies RenderedPage;
-});
-
 /** What the router and the callbacks both need to draw a page by its key. */
 export interface PageRequest {
   readonly chatId: number;
@@ -225,9 +191,7 @@ export const renderPage = (request: PageRequest) => {
       return threadsPage(request);
     case "history":
       return historyPage(request);
-    case "tasks":
-      return tasksPage(request);
     default:
-      return boardPage(request);
+      return tasksPage(request);
   }
 };

@@ -27,7 +27,6 @@ import type { BotContext } from "./context";
 
 /** The reply-keyboard label for each command it stands for. */
 export const BUTTON_COMMANDS: Record<string, string> = {
-  Board: "/board",
   Compose: "/compose",
   New: "/new",
   Status: "/status",
@@ -43,26 +42,13 @@ export const BUTTON_COMMANDS: Record<string, string> = {
  * collecting several messages into one turn is the key a hand reaches for while
  * talking. The reads follow it.
  *
- * Seven keys in three rows, not four: a reply keyboard covers the conversation
- * on a phone and every extra row is a message the person has to scroll past, so
- * the row that grew took a third key rather than spawning a fourth row. The rest
- * of the surface lives behind `/help`.
- *
- * On *Tasks* and *Board* standing beside each other: as of this writing they
- * draw the same message but for its heading. `/tasks` hits `GET /tasks` and
- * `/board` hits `GET /tasks/board`; the gateway builds both from the same
- * `readColumns` and the flat list is literally the board `flatMap`ped, so the
- * cards and their order are identical, and `boardPage` renders each card with
- * the same icon-title-id shape `taskLine` does. That is a regression in
- * `boardPage`, not a duplicate command: `/tasks/board` exists to keep the five
- * columns *grouped*, and `boardPage` flattens them and draws no column headings,
- * throwing away the only thing it asked a different endpoint for. So the fix is
- * to make *Board* render column by column — not to drop the key.
+ * Six keys in three rows: a reply keyboard covers the conversation on a phone
+ * and every extra row is a message the person has to scroll past. The rest of
+ * the surface lives behind `/help`.
  */
 export const mainKeyboard = new Keyboard()
   .text("Compose")
   .text("Tasks")
-  .text("Board")
   .row()
   .text("Threads")
   .text("Status")
@@ -76,6 +62,41 @@ export const mainKeyboard = new Keyboard()
 /** The slash command a reply-keyboard label stands for, or null for ordinary text. */
 export const commandForButton = (text: string | undefined) =>
   text === undefined ? null : (BUTTON_COMMANDS[text] ?? null);
+
+/** Which chats have been handed the menu since this process started. */
+export interface KeyboardRefresh {
+  /**
+   * The reply markup the next plain message to this chat should carry: the menu
+   * the first time this process writes to the chat, nothing after that.
+   */
+  readonly markupFor: (chatId: number) => Keyboard | undefined;
+}
+
+/**
+ * Tracks which chats still hold a keyboard from before this process started.
+ *
+ * Telegram keeps a reply keyboard on the client until a message replaces it, so
+ * a layout that changed in the code reaches a phone only when a message carries
+ * the new markup. `/start` is one such message, but nobody types it after a
+ * deploy — so the first ordinary reply this process sends to a chat carries the
+ * menu too, and the ones after it do not.
+ *
+ * In memory, and right to be: what it holds is a guess about what a Telegram
+ * client is currently displaying, and a restart is exactly the event that makes
+ * the guess wrong.
+ */
+export const makeKeyboardRefresh = (): KeyboardRefresh => {
+  const handed = new Set<number>();
+  return {
+    markupFor: (chatId) => {
+      if (handed.has(chatId)) {
+        return;
+      }
+      handed.add(chatId);
+      return mainKeyboard;
+    },
+  };
+};
 
 /**
  * Middleware that turns a tap on the reply keyboard into the slash command it

@@ -136,6 +136,7 @@ import {
 } from "../apps/bot/src/telegram/answer";
 import { Board } from "../apps/bot/src/telegram/board";
 import { encodeCallbackData } from "../apps/bot/src/telegram/callback-data";
+import { makeKeyboardRefresh } from "../apps/bot/src/telegram/keyboard";
 import { THREAD_RELATION_MARKERS } from "../apps/bot/src/telegram/threads";
 import { TranscribeService } from "../apps/bot/src/transcribe";
 import { CheckFailed, chatRowsFor, check } from "./bot-check-claims";
@@ -335,7 +336,6 @@ const stubBoardLayer = (calls: BoardCall[]) => {
       });
   const board = {
     addComment: record("addComment"),
-    columns: record("columns"),
     listTasks: record("listTasks"),
     moveTask: record("moveTask"),
     placeTask: record("placeTask"),
@@ -1228,7 +1228,11 @@ const wiredClaims = (options: {
     yield* Effect.all(
       [
         closingOut,
-        deliverAnswer({ notices, run: { id: turn.id, workspaceId } }),
+        deliverAnswer({
+          keyboards: makeKeyboardRefresh(),
+          notices,
+          run: { id: turn.id, workspaceId },
+        }),
       ],
       { concurrency: "unbounded" }
     );

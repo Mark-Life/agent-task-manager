@@ -88,10 +88,10 @@ describe("navKeyboard", () => {
 describe("appendNavRow", () => {
   test("keeps the rows already on the keyboard", () => {
     const keyboard = navKeyboard({
-      key: "board",
+      key: "tasks",
       page: { page: 0, totalPages: 2 },
     });
-    appendNavRow({ key: "board", keyboard, page: { page: 1, totalPages: 2 } });
+    appendNavRow({ key: "tasks", keyboard, page: { page: 1, totalPages: 2 } });
     expect(keyboard.inline_keyboard).toHaveLength(2);
   });
 });

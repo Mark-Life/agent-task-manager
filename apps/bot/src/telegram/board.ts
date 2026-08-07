@@ -163,14 +163,6 @@ const make = (options: BoardOptions) =>
           }),
       });
 
-    /** The whole board, column by column, in one round trip. */
-    const columns = (input: { readonly actor: ManagerActorRef }) =>
-      call({
-        actor: input.actor,
-        operation: "bot.board.columns",
-        run: (client) => client.tasks.board({ query: {} }),
-      });
-
     /** One task, its project and the run working on it right now if there is one. */
     const taskDetail = (input: {
       readonly actor: ManagerActorRef;
@@ -290,7 +282,6 @@ const make = (options: BoardOptions) =>
 
     return {
       addComment,
-      columns,
       listTasks,
       moveTask,
       placeTask,

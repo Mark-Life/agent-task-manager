@@ -5,7 +5,7 @@
  * and there are only three kinds of them here. **Conversation** — `/new`,
  * `/compose`, `/threads`, `/switch`, `/history` — is the bot's own state, held
  * in Postgres and reached through the thread repository, except for `/compose`,
- * whose buffer is this process's. **Board** — `/tasks`, `/board`, `/stop`,
+ * whose buffer is this process's. **Board** — `/tasks`, `/stop`,
  * `/rerun`, `/next` — is not the bot's, and every one of them is a gateway call
  * under a freshly minted token; nothing here writes a task row or touches a
  * container. **Orientation** — `/start`, `/help`, `/status` — says where you
@@ -51,7 +51,7 @@ import type { BotContext } from "./context";
 import type { PendingComments } from "./dispatch";
 import { bold, code, italic } from "./format";
 import { escapeHtml, formatRelativeTime } from "./helpers";
-import { mainKeyboard } from "./keyboard";
+import { type KeyboardRefresh, mainKeyboard } from "./keyboard";
 import { sendText } from "./send";
 import {
   ensureThread,
@@ -74,7 +74,6 @@ export const BOT_COMMANDS = [
   { command: "help", description: "What this bot can do" },
   { command: "status", description: "Live runs and this conversation" },
   { command: "tasks", description: "Tasks, newest column first" },
-  { command: "board", description: "The board, column by column" },
   { command: "new", description: "Start a new conversation" },
   {
     command: "compose",
@@ -102,7 +101,6 @@ export const HELP_TEXT = [
   "",
   bold("Board"),
   `${code("/tasks")} — every task, by column`,
-  `${code("/board")} — the board`,
   `${code("/stop")} — stop the turn in flight, so what is queued is read next`,
   `${code("/stop <taskId>")} — ask the orchestrator to stop that task's run`,
   `${code("/rerun <taskId>")} — run that task again`,
@@ -159,6 +157,8 @@ export interface CommandOptions {
   readonly bot: Bot<BotContext>;
   /** The per-chat compose buffers, which `/compose` opens. */
   readonly compose: ComposeBuffers;
+  /** Which chats still hold a menu from before this process started. */
+  readonly keyboards: KeyboardRefresh;
   /** The armed comments, which opening compose spends. */
   readonly pending: PendingComments;
 }
@@ -180,7 +180,7 @@ export type CommandServices =
 export const registerCommands = Effect.fnUntraced(function* (
   options: CommandOptions
 ) {
-  const { bot, compose, pending } = options;
+  const { bot, compose, keyboards, pending } = options;
   const board = yield* Board;
   const runs = yield* RunRepo;
   const run = yield* FiberSet.makeRuntimePromise<CommandServices>();
@@ -207,17 +207,31 @@ export const registerCommands = Effect.fnUntraced(function* (
       )
     );
 
-  /** Reply with markup this module composed, never with a model's markdown. */
-  const say = (ctx: BotContext, text: string, keyboard?: InlineKeyboard) =>
-    Effect.promise(() =>
+  /**
+   * Reply with markup this module composed, never with a model's markdown.
+   *
+   * A reply carrying no inline keyboard is the one that can carry the menu, and
+   * {@link KeyboardRefresh} decides whether this chat still needs it — a message
+   * has one `reply_markup`, so a page with *Next* under it cannot also hand over
+   * the keyboard.
+   */
+  const say = (ctx: BotContext, text: string, keyboard?: InlineKeyboard) => {
+    const chatId = ctx.chat?.id;
+    const menu =
+      keyboard === undefined && chatId !== undefined
+        ? keyboards.markupFor(chatId)
+        : undefined;
+    const markup = keyboard ?? menu;
+    return Effect.promise(() =>
       ctx
         .reply(text, {
           ...HTML,
-          ...(keyboard ? { reply_markup: keyboard } : {}),
+          ...(markup ? { reply_markup: markup } : {}),
         })
         .then(() => undefined)
         .catch(() => undefined)
     );
+  };
 
   /** Draw a list from scratch, in a new message. */
   const sendPage = Effect.fnUntraced(function* (request: PageRequest) {
@@ -419,7 +433,6 @@ export const registerCommands = Effect.fnUntraced(function* (
   bot.command("switch", listCommand("switch", "threads"));
   bot.command("history", listCommand("history", "history"));
   bot.command("tasks", listCommand("tasks", "tasks"));
-  bot.command("board", listCommand("board", "board"));
 
   bot.command("stop", (ctx) =>
     runCommand(

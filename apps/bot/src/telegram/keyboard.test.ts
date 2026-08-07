@@ -6,11 +6,14 @@ import {
   BUTTON_COMMANDS,
   commandForButton,
   mainKeyboard,
+  makeKeyboardRefresh,
   runNoticeKeyboard,
   taskKeyboard,
   threadSwitchKeyboard,
 } from "./keyboard";
 
+const CHAT_ID = 4242;
+const OTHER_CHAT_ID = 4243;
 const TASK_ID = TaskId.make("0195f2a0-1c3d-7a11-8f2e-0b1c2d3e4f50");
 const THREAD_ID = ThreadId.make("0195f2a0-1c3d-7a11-8f2e-0b1c2d3e4f51");
 
@@ -50,6 +53,31 @@ describe("mainKeyboard", () => {
   test("ordinary text is not a command", () => {
     expect(commandForButton("ship it")).toBeNull();
     expect(commandForButton(undefined)).toBeNull();
+  });
+
+  test("does not offer Board, which drew what Tasks draws", () => {
+    expect(commandForButton("Board")).toBeNull();
+    expect(Object.values(BUTTON_COMMANDS)).not.toContain("/board");
+  });
+});
+
+describe("makeKeyboardRefresh", () => {
+  test("hands a chat the menu once, and not again", () => {
+    const keyboards = makeKeyboardRefresh();
+    expect(keyboards.markupFor(CHAT_ID)).toBe(mainKeyboard);
+    expect(keyboards.markupFor(CHAT_ID)).toBeUndefined();
+  });
+
+  test("tracks each chat on its own", () => {
+    const keyboards = makeKeyboardRefresh();
+    keyboards.markupFor(CHAT_ID);
+    expect(keyboards.markupFor(OTHER_CHAT_ID)).toBe(mainKeyboard);
+  });
+
+  /** A restart is exactly the event that makes a client's keyboard stale. */
+  test("a new process hands the menu over again", () => {
+    makeKeyboardRefresh().markupFor(CHAT_ID);
+    expect(makeKeyboardRefresh().markupFor(CHAT_ID)).toBe(mainKeyboard);
   });
 });
 
