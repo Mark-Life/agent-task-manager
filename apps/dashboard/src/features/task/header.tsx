@@ -30,6 +30,11 @@ interface TaskHeaderProps {
  * both checks at a glance and changes most often, and the panel below it can be
  * showing anything.
  *
+ * The pull request chip sits at the end of that second line rather than beside
+ * the title. A title is as long as somebody made it, and on a phone a chip
+ * sharing its row squeezes it into a column of two-word lines; on the status
+ * row it has the whole width to the right of a fixed-width control.
+ *
  * Deletion is not in this row. It used to sit a few pixels from the close
  * button, where a missed tap on a phone deleted the task instead of shutting
  * the panel; it lives at the foot of the Details panel now, which costs a
@@ -49,42 +54,20 @@ export const TaskHeader = ({ detail, onClose }: TaskHeaderProps) => {
         <h1 className="min-w-0 flex-1 font-heading font-medium text-lg leading-snug">
           <TaskTitle task={task} />
         </h1>
-        <div className="flex shrink-0 items-center gap-1">
-          {task.prUrl === null ? null : (
-            <Button
-              // A link that looks like a button is still a link, and saying so
-              // keeps the anchor's own semantics — open in a new tab, copy the
-              // address — instead of having button behaviour bolted over them.
-              nativeButton={false}
-              render={
-                <a
-                  href={task.prUrl}
-                  rel="noreferrer"
-                  target="_blank"
-                  title={task.prUrl}
-                />
-              }
-              size="sm"
-              variant="outline"
-            >
-              <HugeiconsIcon icon={LinkSquare02Icon} strokeWidth={2} />
-              Pull request
-            </Button>
-          )}
-          {onClose === undefined ? null : (
-            // The one target on this panel every reader hits, and on a phone it
-            // is hit with a thumb: sized up now that nothing destructive sits
-            // beside it to be caught by a miss.
-            <Button
-              aria-label="Close panel"
-              onClick={onClose}
-              size="icon-lg"
-              variant="ghost"
-            >
-              <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
-            </Button>
-          )}
-        </div>
+        {onClose === undefined ? null : (
+          // The one target on this panel every reader hits, and on a phone it
+          // is hit with a thumb: sized up now that nothing destructive sits
+          // beside it to be caught by a miss.
+          <Button
+            aria-label="Close panel"
+            className="shrink-0"
+            onClick={onClose}
+            size="icon-lg"
+            variant="ghost"
+          >
+            <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+          </Button>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-muted-foreground text-xs">
@@ -107,6 +90,33 @@ export const TaskHeader = ({ detail, onClose }: TaskHeaderProps) => {
           <Badge variant="destructive">
             parked until {formatRelative(task.parkedUntil)}
           </Badge>
+        )}
+        {task.prUrl === null ? null : (
+          <Button
+            // Pushed to the end with a margin rather than by justifying the
+            // row: the state words belong beside the status control, and
+            // `justify-between` would strand them in the middle. When the row
+            // wraps on a narrow screen the margin still lands the chip on the
+            // right of whatever line it ends up on.
+            className="ml-auto"
+            // A link that looks like a button is still a link, and saying so
+            // keeps the anchor's own semantics — open in a new tab, copy the
+            // address — instead of having button behaviour bolted over them.
+            nativeButton={false}
+            render={
+              <a
+                href={task.prUrl}
+                rel="noreferrer"
+                target="_blank"
+                title={task.prUrl}
+              />
+            }
+            size="sm"
+            variant="outline"
+          >
+            <HugeiconsIcon icon={LinkSquare02Icon} strokeWidth={2} />
+            Pull request
+          </Button>
         )}
       </div>
     </header>
