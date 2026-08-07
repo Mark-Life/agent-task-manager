@@ -23,18 +23,24 @@ const configured = (value: string | undefined) =>
   value === undefined || value === "" ? undefined : value;
 
 /**
- * The dashboard's exact origin — scheme and host, no path and no trailing
- * slash. Read from the environment rather than the typed config service because
- * this module is built at import time and the schema generator reads it with no
- * Effect runtime around it.
+ * The dashboard's origins — scheme and host each, no path and no trailing
+ * slash, comma-separated where there is more than one. Read from the
+ * environment rather than the typed config service because this module is built
+ * at import time and the schema generator reads it with no Effect runtime
+ * around it.
  *
  * A local run needs it as much as a deployed one, set to the dev server's own
  * address. Proxying the API through that server makes the two look same-origin
  * to application code, but the browser still sends the dev server's origin while
  * the proxy rewrites the host to the gateway's, so nothing matches until this
- * says so.
+ * says so. A dev server reached over the network is a second origin for the
+ * same dashboard — `http://localhost:5173,http://192.168.1.10:5173` keeps both
+ * ways in, and the first entry stays the one links are built from.
  */
-const dashboardOrigin = configured(process.env.DASHBOARD_ORIGIN);
+const dashboardOrigins = (configured(process.env.DASHBOARD_ORIGIN) ?? "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter((origin) => origin !== "");
 
 /**
  * The registrable domain the dashboard and the gateway share, written with its
@@ -183,7 +189,7 @@ export const options = {
   // Better Auth checks `Origin` on every non-GET that carries a cookie and
   // answers 403 to anything it was not told about. Its base URL's own origin is
   // already trusted, so this list is the dashboard and nothing else.
-  trustedOrigins: dashboardOrigin === undefined ? [] : [dashboardOrigin],
+  trustedOrigins: dashboardOrigins,
 } satisfies BetterAuthOptions;
 
 /**

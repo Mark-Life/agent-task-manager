@@ -1,4 +1,4 @@
-import { Config, Context, Effect, Layer } from "effect";
+import { Config, Context, Effect, Layer, Option } from "effect";
 
 /** Mirrors the default `@workspace/db` applies to `DATABASE_POOL_MAX`. */
 const DEFAULT_DATABASE_POOL_MAX = 10;
@@ -92,13 +92,20 @@ const load = Effect.gen(function* () {
     Config.string("GATEWAY_PUBLIC_URL")
   );
 
-  // The dashboard's exact origin — scheme and host, no path, no trailing slash.
-  // Two readers, one value: the gateway trusts it as an origin the browser may
-  // post from, and the bot builds the link on a notification out of it. The
-  // gateway serves no static assets, so a task link pointed at its origin is a
-  // 404 wherever the two are not the same host.
-  const dashboardOrigin = yield* Config.option(
+  // The dashboard's origin — scheme and host, no path, no trailing slash. Two
+  // readers, one value: the gateway trusts it as an origin the browser may post
+  // from, and the bot builds the link on a notification out of it. The gateway
+  // serves no static assets, so a task link pointed at its origin is a 404
+  // wherever the two are not the same host.
+  //
+  // A comma-separated list widens the first reader without touching the second:
+  // every entry is an origin the browser may post from, and the first is the
+  // one a link is built from, since a notification has to name a single address.
+  const dashboardOrigin = (yield* Config.option(
     Config.string("DASHBOARD_ORIGIN")
+  )).pipe(
+    Option.map((value) => value.split(",")[0]?.trim() ?? ""),
+    Option.filter((value) => value !== "")
   );
 
   // The registrable domain the dashboard and the gateway share, leading dot
