@@ -1,5 +1,4 @@
 import {
-  Comment01Icon,
   InformationCircleIcon,
   ReloadIcon,
   StopIcon,
@@ -17,36 +16,27 @@ import {
   useRerunTask,
   useStopRun,
 } from "@/api/run-commands";
-import { StatusSelect } from "@/features/task/status-select";
 import { failureText } from "@/lib/failure";
 
 /** How often a pending intent is re-read while waiting for the orchestrator to answer it. */
 const REFUSAL_POLL_MS = 3000;
 
-interface TaskActionsProps {
-  readonly detail: TaskDetail;
-  /** Takes the reader to the conversation, which is where commenting happens. */
-  readonly onComment?: () => void;
-}
-
 /**
- * What can be done to a task from its own page: where it sits, what to do with
- * the run on it, and saying something.
+ * What can be done to a task from its own page besides setting its fields:
+ * what to do with the run on it. Where the task sits is a property now, edited
+ * in the property rows like everything else, and verbs and values keep to their
+ * own rows.
  *
- * The column is a selector rather than a row of verbs. "Start", "Review" and
- * "Approve" were the same write dressed as three buttons that came and went with
- * the status, and between them they could only ever walk a card forwards — so
- * the one move an operator actually needed, putting a card back where it
- * belonged, was not here at all. A field showing where the task is, which can be
- * set to anywhere else, is the whole of it.
+ * Stop and rerun steer a container and are refused by the orchestrator rather
+ * than by the board, so they stay buttons and stay chosen by whether there is
+ * a run to steer; a button whose only outcome is a rejection teaches a person
+ * nothing. Commenting is not here: the Comments tab carries its own count and
+ * its own box, and a button that only scrolls to another button is furniture.
  *
- * What is left beside it is not about the column. Stop and rerun steer a
- * container and are refused by the orchestrator rather than by the board, so
- * they stay buttons and stay chosen by whether there is a run to steer; a button
- * whose only outcome is a rejection teaches a person nothing. Commenting is
- * always available: it is the one thing that is true of a task in every column.
+ * With nothing to steer the row disappears rather than holding a gap open — a
+ * task in the backlog has no run, and most of them never grow one.
  */
-export const TaskActions = ({ detail, onComment }: TaskActionsProps) => {
+export const TaskActions = ({ detail }: { readonly detail: TaskDetail }) => {
   const { liveRunId, task } = detail;
   const stop = useStopRun();
   const rerun = useRerunTask();
@@ -66,28 +56,41 @@ export const TaskActions = ({ detail, onComment }: TaskActionsProps) => {
   const inProgress = task.status === "in_progress";
   const failed = failureText(stop.error ?? rerun.error);
 
+  const canStop = liveRunId !== null;
+  const canRerun =
+    (inProgress && liveRunId === null) ||
+    task.status === "review" ||
+    task.status === "done";
+
+  if (!(canStop || canRerun) && failed === null) {
+    return <LastRefusal taskId={task.id} />;
+  }
+
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        <StatusSelect busy={busy} task={task} />
-        {liveRunId === null ? null : (
-          <Button disabled={busy} onClick={stopRun} variant="destructive">
+        {canStop ? (
+          <Button
+            disabled={busy}
+            onClick={stopRun}
+            size="sm"
+            variant="destructive"
+          >
             <HugeiconsIcon icon={StopIcon} strokeWidth={2} />
             Stop
           </Button>
-        )}
-        {(inProgress && liveRunId === null) ||
-        task.status === "review" ||
-        task.status === "done" ? (
-          <Button disabled={busy} onClick={rerunTask} variant="outline">
+        ) : null}
+        {canRerun ? (
+          <Button
+            disabled={busy}
+            onClick={rerunTask}
+            size="sm"
+            variant="outline"
+          >
             <HugeiconsIcon icon={ReloadIcon} strokeWidth={2} />
             Rerun
           </Button>
         ) : null}
-        <Button onClick={onComment} variant="ghost">
-          <HugeiconsIcon icon={Comment01Icon} strokeWidth={2} />
-          Comment
-        </Button>
       </div>
       {failed === null ? null : (
         <p className="text-destructive text-xs">{failed}</p>

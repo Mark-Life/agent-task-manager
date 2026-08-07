@@ -62,16 +62,26 @@ export const ThreadList = ({
 
   return (
     <SidebarGroup>
-      <SidebarGroupLabel>Conversations</SidebarGroupLabel>
-      <SidebarGroupAction
-        aria-label="New conversation"
-        disabled={create.isPending}
-        onClick={startConversation}
-        title="New conversation"
-      >
-        <HugeiconsIcon icon={PlusSignIcon} strokeWidth={2} />
-      </SidebarGroupAction>
-      <SidebarGroupContent>
+      {/*
+        An explicit heading row rather than the sidebar's absolutely
+        positioned group action: the button shares the "Conversations" line
+        instead of floating over the group's corner, where it read as a
+        column of its own. The whole row goes away when the sidebar
+        collapses, because the label means nothing at icon width.
+      */}
+      <div className="flex items-center gap-1 group-data-[collapsible=icon]:hidden">
+        <SidebarGroupLabel className="flex-1">Conversations</SidebarGroupLabel>
+        <SidebarGroupAction
+          aria-label="New conversation"
+          className="static shrink-0"
+          disabled={create.isPending}
+          onClick={startConversation}
+          title="New conversation"
+        >
+          <HugeiconsIcon icon={PlusSignIcon} strokeWidth={2} />
+        </SidebarGroupAction>
+      </div>
+      <SidebarGroupContent className="group-data-[collapsible=icon]:hidden">
         <SidebarMenu>
           {threads.isPending
             ? PENDING_ROWS.map((row) => (
@@ -95,6 +105,24 @@ export const ThreadList = ({
           </p>
         ) : null}
       </SidebarGroupContent>
+      {/*
+        The collapsed rail's one control. Listing conversations there renders
+        each title as a lone first letter, so the rail only offers starting a
+        new one; opening a conversation stays a job for the expanded list.
+      */}
+      <SidebarMenu className="hidden group-data-[collapsible=icon]:flex">
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            aria-label="New conversation"
+            disabled={create.isPending}
+            onClick={startConversation}
+            tooltip="New conversation"
+          >
+            <HugeiconsIcon icon={PlusSignIcon} strokeWidth={2} />
+            <span>New conversation</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      </SidebarMenu>
     </SidebarGroup>
   );
 };

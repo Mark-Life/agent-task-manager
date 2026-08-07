@@ -16,6 +16,14 @@ const optional =
 /** The project the board is narrowed to, if the URL names one that could exist. */
 export const parseProjectId = optional(Schema.decodeUnknownOption(ProjectId));
 
+/**
+ * The text the board is searched by. A plain string rather than a schema
+ * value: anything a person can type is a valid search, and the worst one finds
+ * is nothing.
+ */
+export const parseSearchText = (value: unknown) =>
+  typeof value === "string" ? value : undefined;
+
 /** The task a detail page is about. */
 export const parseTaskId = optional(Schema.decodeUnknownOption(TaskId));
 
@@ -28,10 +36,10 @@ export const parseThreadId = optional(Schema.decodeUnknownOption(ThreadId));
 /**
  * The panels of a task page, in the order they are drawn.
  *
- * Runs comes first because it is what a link from a finished or failed run is
- * about, and it is the panel the page opens on when the URL asks for nothing.
+ * Comments comes first because it is the conversation about the task, the
+ * panel the sheet opens on when nothing else is asked for.
  */
-export const TASK_TABS = ["runs", "comments", "sessions", "artifacts"] as const;
+export const TASK_TABS = ["comments", "runs", "sessions", "artifacts"] as const;
 
 /** Which panel of a task page is open. */
 export type TaskTab = (typeof TASK_TABS)[number];

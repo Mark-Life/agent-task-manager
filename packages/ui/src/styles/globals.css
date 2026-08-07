@@ -139,4 +139,34 @@ html {
   html {
     @apply font-sans;
   }
+
+  /* Scrollbars are part of the chrome: thin and quiet, tinted with the
+   * primary colour rather than the OS default, so every scroller (board,
+   * overlays, page) looks like the app and not the browser. The colour is
+   * derived from --primary-base, so the dark theme's recolouring applies
+   * here without a second rule. */
+  /* Firefox */
+  * {
+    scrollbar-color: oklch(from var(--primary-base) l c h / 0.3) transparent;
+    scrollbar-width: thin;
+  }
+
+  /* WebKit / Blink */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: oklch(from var(--primary-base) l c h / 0.3);
+    border-radius: 999px;
+    &:hover {
+      background-color: oklch(from var(--primary-base) l c h / 0.55);
+    }
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
 }

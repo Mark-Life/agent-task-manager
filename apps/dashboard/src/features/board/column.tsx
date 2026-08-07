@@ -3,26 +3,15 @@ import {
   SortableContext,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
+import { PlusSignIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import type { Task } from "@workspace/api";
 import type { ProjectId, TaskId, TaskStatus } from "@workspace/domain";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-} from "@workspace/ui/components/empty";
 import { Skeleton } from "@workspace/ui/components/skeleton";
 import { cn } from "@workspace/ui/lib/utils";
-import { type ReactNode, type Ref, useMemo } from "react";
+import { type ReactNode, type Ref, useCallback, useMemo } from "react";
 import { TaskCard } from "@/features/board/card";
-
-/** How a column is named on screen. The status itself is never shown to anyone. */
-export const STATUS_LABELS: Record<TaskStatus, string> = {
-  backlog: "Backlog",
-  done: "Done",
-  ideas: "Ideas",
-  in_progress: "In progress",
-  review: "Review",
-};
+import { STATUS_LABELS, StatusDot } from "@/features/task/status-select";
 
 /** How many placeholder cards a loading column draws before anything is known. */
 const SKELETON_CARDS = 3;
@@ -33,6 +22,8 @@ interface ColumnProps {
   /** Whether a card is being dragged and this is where it would land. */
   readonly highlighted: boolean;
   readonly liveTaskIds: ReadonlySet<TaskId>;
+  /** Opens a draft that files into this column. */
+  readonly onNewTask: (status: TaskStatus) => void;
   readonly onOpenTask: (taskId: TaskId) => void;
   readonly projectNames: ReadonlyMap<ProjectId, string>;
   readonly status: TaskStatus;
@@ -63,8 +54,11 @@ const Frame = ({ children, className, count, ref, status }: FrameProps) => (
     )}
     ref={ref}
   >
-    <header className="flex items-baseline justify-between px-1">
-      <span className="font-medium text-xs">{STATUS_LABELS[status]}</span>
+    <header className="flex items-center justify-between px-1">
+      <span className="flex items-center gap-2 font-medium text-xs">
+        <StatusDot status={status} />
+        {STATUS_LABELS[status]}
+      </span>
       <span className="text-muted-foreground text-xs tabular-nums">
         {count}
       </span>
@@ -92,6 +86,7 @@ export const Column = ({
   droppable,
   highlighted,
   liveTaskIds,
+  onNewTask,
   onOpenTask,
   projectNames,
   status,
@@ -99,6 +94,7 @@ export const Column = ({
 }: ColumnProps) => {
   const { setNodeRef } = useDroppable({ disabled: !droppable, id: status });
   const ids = useMemo(() => tasks.map((task) => task.id), [tasks]);
+  const newTask = useCallback(() => onNewTask(status), [onNewTask, status]);
 
   return (
     <Frame
@@ -110,7 +106,8 @@ export const Column = ({
       ref={setNodeRef}
       status={status}
     >
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+      {/* The 1px bleed is for the cards' ring: a ring is a shadow drawn outside the card's box, and a scrolling box clips whatever crosses its edge, so without it every card loses its ring on both sides. */}
+      <div className="-m-px flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-px">
         <SortableContext items={ids} strategy={verticalListSortingStrategy}>
           {tasks.map((task) => (
             <TaskCard
@@ -122,17 +119,35 @@ export const Column = ({
             />
           ))}
         </SortableContext>
-        {tasks.length === 0 ? (
-          <Empty className="min-h-24 border border-border">
-            <EmptyHeader>
-              <EmptyDescription>Nothing here</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : null}
+        <NewTaskCard onNewTask={newTask} />
       </div>
     </Frame>
   );
 };
+
+/**
+ * The last card in the column, which is not a task but the way to add one.
+ *
+ * It rides at the end of the list rather than being pinned under it, so it sits
+ * directly beneath the last card and lands at a different height in every
+ * column — which is what makes it read as the next card rather than as a
+ * toolbar. In an empty column it is the only thing there, so the column that
+ * has nothing in it and the column that has ten offer the same gesture in the
+ * same place relative to what they hold.
+ *
+ * Dashed and quiet: it is card-shaped without pretending to be a task, and the
+ * dashes are the same language the drop target speaks.
+ */
+const NewTaskCard = ({ onNewTask }: { readonly onNewTask: () => void }) => (
+  <button
+    className="flex w-full shrink-0 items-center gap-1.5 rounded-lg border border-border border-dashed px-3 py-2.5 text-left text-muted-foreground text-xs transition-colors hover:border-ring/40 hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+    onClick={onNewTask}
+    type="button"
+  >
+    <HugeiconsIcon className="size-3.5" icon={PlusSignIcon} strokeWidth={2} />
+    New task
+  </button>
+);
 
 /**
  * A column before its cards are known. Card-shaped rather than a spinner, so

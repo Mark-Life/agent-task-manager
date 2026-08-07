@@ -1,3 +1,4 @@
+import { File01Icon } from "@hugeicons/core-free-icons";
 import { useQuery } from "@tanstack/react-query";
 import type { Artifact } from "@workspace/api";
 import { PROMOTION_SCOPES } from "@workspace/api";
@@ -20,18 +21,11 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@workspace/ui/components/collapsible";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@workspace/ui/components/empty";
 import { Input } from "@workspace/ui/components/input";
 import {
   NativeSelect,
   NativeSelectOption,
 } from "@workspace/ui/components/native-select";
-import { Skeleton } from "@workspace/ui/components/skeleton";
 import { type ChangeEvent, useCallback, useState } from "react";
 import {
   artifactContentUrl,
@@ -39,6 +33,8 @@ import {
   usePromoteArtifact,
   useUploadArtifact,
 } from "@/api/artifacts";
+import { EmptyState } from "@/components/empty-state";
+import { Pending } from "@/components/query-state";
 import { ArtifactPreview, rendererFor } from "@/features/task/artifact-preview";
 import { failureText } from "@/lib/failure";
 import { formatRelative } from "@/lib/format";
@@ -62,24 +58,27 @@ export const TaskArtifacts = ({ taskId }: { readonly taskId: TaskId }) => {
   const artifacts = useQuery(artifactsQuery(taskId));
 
   return (
-    <section className="flex flex-col gap-6">
-      <Uploader taskId={taskId} />
-      {artifacts.isPending ? <Skeleton className="h-16 w-full" /> : null}
+    <section className="flex flex-col gap-5">
+      {artifacts.isPending ? <Pending label="Loading files" lines={3} /> : null}
       {artifacts.data?.length === 0 ? (
-        <Empty>
-          <EmptyHeader>
-            <EmptyTitle>No files yet</EmptyTitle>
-            <EmptyDescription>
-              Anything a run writes to its own folder shows up here.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
+        <EmptyState
+          description="Anything a run writes to its own folder shows up here."
+          icon={File01Icon}
+          title="No files yet"
+        />
       ) : null}
-      <ul className="flex flex-col gap-4">
-        {artifacts.data?.map((artifact) => (
-          <ArtifactRow artifact={artifact} key={artifact.id} taskId={taskId} />
-        ))}
-      </ul>
+      {artifacts.data === undefined || artifacts.data.length === 0 ? null : (
+        <ul className="flex flex-col gap-2">
+          {artifacts.data.map((artifact) => (
+            <ArtifactRow
+              artifact={artifact}
+              key={artifact.id}
+              taskId={taskId}
+            />
+          ))}
+        </ul>
+      )}
+      <Uploader taskId={taskId} />
     </section>
   );
 };
@@ -101,9 +100,9 @@ const ArtifactRow = ({ artifact, taskId }: RowProps) => {
   const href = artifactContentUrl(taskId, artifact.id);
 
   return (
-    <li className="flex flex-col gap-1.5 text-xs">
+    <li className="flex flex-col gap-1.5 rounded-lg border bg-card p-3 text-xs">
       <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
-        <span className="font-medium font-mono text-foreground">
+        <span className="font-medium font-mono text-foreground text-sm">
           {artifact.path}
         </span>
         <span>{formatBytes(artifact.bytes)}</span>
@@ -235,17 +234,26 @@ const Uploader = ({ taskId }: { readonly taskId: TaskId }) => {
   }, [file, mutate, path, taskId]);
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Input className="max-w-64" onChange={onFile} type="file" />
-      <Input
-        className="max-w-48"
-        onChange={onPath}
-        placeholder="path in the folder"
-        value={path}
-      />
-      <Button disabled={file === null || upload.isPending} onClick={send}>
-        Upload
-      </Button>
+    <div className="flex flex-col gap-2 rounded-lg border border-dashed p-3">
+      <span className="font-medium text-muted-foreground text-xs">
+        Add a file
+      </span>
+      <div className="flex flex-wrap items-center gap-2">
+        <Input className="max-w-64" onChange={onFile} type="file" />
+        <Input
+          className="max-w-48"
+          onChange={onPath}
+          placeholder="path in the folder"
+          value={path}
+        />
+        <Button
+          disabled={file === null || upload.isPending}
+          onClick={send}
+          size="sm"
+        >
+          Upload
+        </Button>
+      </div>
       {failureText(upload.error) === null ? null : (
         <p className="text-destructive text-xs">{failureText(upload.error)}</p>
       )}
