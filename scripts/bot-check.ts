@@ -63,6 +63,13 @@
  * **The notice.** A finished run renders into a message a person can read, with
  * the buttons its task's status earns.
  *
+ * **The restart.** A process start puts one line into the allow-listed chat —
+ * resolved from the allow-list, because there is no task to trace a
+ * conversation from — and a second start inside the quiet window adds nothing,
+ * which is the whole defence against a crash loop. A graceful stop leaves the
+ * row the next start reads back, so the line it sends says how long the system
+ * was down and that it was stopped on purpose rather than lost.
+ *
  * **The stuck rule.** A window of repeated tool calls with no file edit is
  * `stuck`; the same window one edit later is not.
  *
@@ -98,6 +105,7 @@ import { BunRuntime, BunServices } from "@effect/platform-bun";
 import {
   AgentSessionRepo,
   ChatMessageRepo,
+  ChatNotificationRepo,
   ChatThreadRepo,
   RunRepo,
   storeLayer,
@@ -121,7 +129,11 @@ import type { Transformer } from "grammy";
 import type { Update } from "grammy/types";
 import { registerHandlers } from "../apps/bot/src/index";
 import { appLayer, type BotWiring } from "../apps/bot/src/layers";
-import { renderNotice } from "../apps/bot/src/notify";
+import {
+  announceShutdown,
+  announceStartup,
+  renderNotice,
+} from "../apps/bot/src/notify";
 import { type RunEventSample, stuckVerdict } from "../apps/bot/src/stuck/rule";
 import { NOT_ALLOWED_REPLY } from "../apps/bot/src/telegram/access";
 import {
@@ -182,6 +194,12 @@ const THREAD_LOOKBACK = 50;
 
 /** The chat id is minted from the clock, kept inside Telegram's signed 32-bit group range. */
 const CHAT_ID_RANGE = 1_000_000_000;
+
+/** A window wide enough that two announcements a millisecond apart are inside it. */
+const QUIET_WINDOW_MS = 900_000;
+
+/** What this check tells the announcement it is running, so the line carries something. */
+const CHECK_BUILD = "checksha";
 
 /** What `getFile` answers for the voice note this check sends. */
 const VOICE_FILE_PATH = "voice/file_1.oga";
@@ -601,6 +619,86 @@ const pureClaims = Effect.gen(function* () {
     step: "the same window with one file edit in it is a run that is working",
   });
 });
+
+/**
+ * What the bot says about itself, driven as the process lifetime drives it.
+ *
+ * The quiet window is zero for the claims about *what* it says, because this
+ * check shares a workspace with every previous run of it and a fifteen-minute
+ * window would make them depend on when it was last run. The suppression gets
+ * its own pair of calls, where that history cannot lend a false pass: whatever
+ * the first one decides, the second must add nothing.
+ */
+const restartClaims = (options: {
+  readonly calls: ApiCall[];
+  readonly workspaceId: WorkspaceId;
+}) =>
+  Effect.gen(function* () {
+    const { calls, workspaceId } = options;
+    const notifications = yield* ChatNotificationRepo;
+    const announce = { build: CHECK_BUILD, quietMs: 0 };
+    const said = (text: string) => (call: ApiCall) =>
+      String(call.payload.text ?? "").includes(text);
+
+    const beforeUp = calls.length;
+    yield* announceStartup(announce);
+    const restartLine = calls.slice(beforeUp).find(said("System restarted"));
+    yield* check({
+      detail: `the bot said ${JSON.stringify(restartLine?.payload.text)}`,
+      ok: restartLine !== undefined,
+      step: "a process start announces itself without being asked",
+    });
+    yield* check({
+      detail: `it went to chat ${String(restartLine?.payload.chat_id)}`,
+      ok: Number(restartLine?.payload.chat_id) === ALLOWED_TELEGRAM_USER,
+      step: "the announcement is addressed from the allow-list, with no task to trace",
+    });
+
+    // The claim is what suppresses the next one, so it has to be on the ledger
+    // — with no task on it, which is the column the migration made nullable.
+    const claimed = yield* notifications.newestOfKind({
+      kind: "system_up",
+      workspaceId,
+    });
+    yield* check({
+      detail: `the ledger holds ${String(claimed?.dedupeKey)} with taskId ${String(claimed?.taskId)}`,
+      ok:
+        claimed !== null && claimed.taskId === null && claimed.sentAt !== null,
+      step: "the announcement is a delivered claim on the ledger, naming no task",
+    });
+
+    const quiet = { build: CHECK_BUILD, quietMs: QUIET_WINDOW_MS };
+    yield* announceStartup(quiet);
+    const afterFirst = calls.length;
+    yield* announceStartup(quiet);
+    yield* check({
+      detail: `${calls.length - afterFirst} message(s) sent by the second start`,
+      ok: calls.length === afterFirst,
+      step: "a second start inside the quiet window says nothing at all",
+    });
+
+    // The stop, and what the start after it can say because of it.
+    const beforeDown = calls.length;
+    yield* announceShutdown(announce);
+    const goingDown = calls.slice(beforeDown).find(said("System going down"));
+    yield* check({
+      detail: `the bot said ${JSON.stringify(goingDown?.payload.text)}`,
+      ok: goingDown !== undefined,
+      step: "a graceful stop says so before it goes",
+    });
+
+    const beforeBack = calls.length;
+    yield* announceStartup(announce);
+    const backUp = calls.slice(beforeBack).find(said("System restarted"));
+    const backUpText = String(backUp?.payload.text ?? "");
+    yield* check({
+      detail: `the bot said ${JSON.stringify(backUpText)}`,
+      ok:
+        backUpText.includes("down for") &&
+        !backUpText.includes("crash or a hard reboot"),
+      step: "the start after a graceful stop reports the downtime rather than a crash",
+    });
+  });
 
 /** The claims that need the whole bot standing up. */
 const wiredClaims = (options: {
@@ -1205,6 +1303,8 @@ const wiredClaims = (options: {
       ok: tapped.some((row) => row.updateKind === "callback"),
       step: "the tap leaves a row of its own, classified as a callback",
     });
+
+    yield* restartClaims({ calls, workspaceId });
   });
 
 /**

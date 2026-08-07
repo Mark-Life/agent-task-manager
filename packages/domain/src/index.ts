@@ -6,6 +6,7 @@ export * from "./chat";
 export * from "./comment";
 export * from "./enums";
 export * from "./ids";
+export * from "./notify";
 export * from "./primitives";
 export * from "./project";
 export * from "./project-env";

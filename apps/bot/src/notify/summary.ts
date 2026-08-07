@@ -24,10 +24,10 @@
 
 import { RunRepo, TaskRepo } from "@workspace/db";
 import type {
-  NotifyKind,
   Run,
   RunEventKind,
   RunId,
+  RunNotifyKind,
   Task,
   TaskId,
   WorkspaceId,
@@ -59,7 +59,7 @@ export interface NoticeRequest {
   /** The run event that woke us, where one did. */
   readonly eventKind?: RunEventKind | null;
   /** Already decided, when a claim is being re-sent rather than made. */
-  readonly kind?: NotifyKind | null;
+  readonly kind?: RunNotifyKind | null;
   readonly runId: RunId | null;
   readonly taskId: TaskId;
   readonly workspaceId: WorkspaceId;
@@ -67,7 +67,7 @@ export interface NoticeRequest {
 
 /** A notice with everything a message about it needs. */
 export interface DescribedNotice {
-  readonly kind: NotifyKind;
+  readonly kind: RunNotifyKind;
   readonly notice: RunNotice;
   readonly run: Run | null;
   readonly task: Task;
@@ -87,7 +87,7 @@ export const notifyKindOf = (options: {
   readonly eventKind: RunEventKind | null;
   readonly run: Run | null;
   readonly task: Task;
-}): NotifyKind | null => {
+}): RunNotifyKind | null => {
   const { eventKind, run, task } = options;
   const ended = run !== null && !isRunLive(run) ? run.outcome : null;
   const clean =

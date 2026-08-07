@@ -10,6 +10,8 @@ const DEFAULT_DATABASE_CONNECT_TIMEOUT_MS = 10_000;
 // the only reader; these are here so one file lists the whole contract.
 const DEFAULT_BOT_SHUTDOWN_GRACE_MS = 15_000;
 const DEFAULT_BOT_SPLIT_AT = 4000;
+const DEFAULT_BOT_ANNOUNCE_RESTART = true;
+const DEFAULT_BOT_ANNOUNCE_QUIET_MS = 900_000;
 const DEFAULT_BOT_GATEWAY_URL = "http://localhost:3100";
 const DEFAULT_NOTIFY_REPAIR_INTERVAL_MS = 60_000;
 const DEFAULT_NOTIFY_RETRY_GRACE_MS = 60_000;
@@ -128,6 +130,21 @@ const load = Effect.gen(function* () {
     Config.withDefault(DEFAULT_BOT_SPLIT_AT)
   );
 
+  // Whether the bot says anything about its own restarts. On by default: an
+  // unexplained silence is the failure this exists to fix, and a deployment
+  // that would rather have quiet chats can say so.
+  const botAnnounceRestart = yield* Config.boolean("BOT_ANNOUNCE_RESTART").pipe(
+    Config.withDefault(DEFAULT_BOT_ANNOUNCE_RESTART)
+  );
+
+  // How long the bot stays quiet about itself after saying something. This is
+  // the whole defence against a crash loop or a rolling deploy filling a chat,
+  // and it is counted on the notification ledger rather than in the process,
+  // because the process is the thing that keeps restarting.
+  const botAnnounceQuietMs = yield* Config.int("BOT_ANNOUNCE_QUIET_MS").pipe(
+    Config.withDefault(DEFAULT_BOT_ANNOUNCE_QUIET_MS)
+  );
+
   // How long a claimed-but-undelivered notification waits before the repair
   // pass sends it again.
   const notifyRetryGraceMs = yield* Config.int("NOTIFY_RETRY_GRACE_MS").pipe(
@@ -204,6 +221,8 @@ const load = Effect.gen(function* () {
     anthropicApiKey,
     authCookieDomain,
     betterAuthUrl,
+    botAnnounceQuietMs,
+    botAnnounceRestart,
     botGatewayUrl,
     botShutdownGraceMs,
     botSplitAt,
