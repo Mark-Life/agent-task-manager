@@ -4,7 +4,6 @@
   "compilerOptions": {
     "declaration": true,
     "declarationMap": true,
-    "esModuleInterop": true,
     "incremental": true,
     "verbatimModuleSyntax": true,
     "lib": ["es2022", "DOM", "DOM.Iterable"],
@@ -17,6 +16,55 @@
     "noImplicitOverride": true,
     "sourceMap": true,
     "strict": true,
-    "target": "ES2022"
+    "target": "ES2022",
+
+    // The Effect language service, supplied by `@effect/tsgo` — a superset of
+    // Microsoft's `tsgo` that embeds a pinned TypeScript-Go plus these
+    // diagnostics. It runs during the `tsc` typecheck phase, so `bun run
+    // typecheck` is the single gate and the program is checked once rather
+    // than twice. `effect-tsgo patch`, wired into the root `prepare` script,
+    // is what puts the binary behind `tsc`; without it these rules silently
+    // do nothing.
+    //
+    // Every workspace inherits this by extending base.json. `nextjs.json`
+    // restates it because tsconfig `extends` replaces a `plugins` array rather
+    // than merging it, so a config that names the `next` plugin has to name
+    // this one too.
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+
+        // Which severities fail the build, stated rather than inherited.
+        // Errors and warnings are the gate; suggestions are printed and
+        // ignored, which is what makes it safe to park a rule at `suggestion`
+        // below and still see every occurrence in the output.
+        "ignoreEffectErrorsInTscExitCode": false,
+        "ignoreEffectWarningsInTscExitCode": false,
+        "ignoreEffectSuggestionsInTscExitCode": true,
+
+        // Rules held below their default severity, each with the cleanup it
+        // is waiting on. Nothing here is off — the diagnostics still print on
+        // every typecheck, they just do not block. Anything not listed runs at
+        // the rule's own default, so a new violation of any other rule fails
+        // the build.
+        "diagnosticSeverity": {
+          // Default: warning. 7 sites, all in test setup, all of them
+          // dependency-ordered chains — `Effect.provide(gate)` followed by
+          // `Effect.provide(BunFileSystem.layer)` because the gate needs the
+          // filesystem. Collapsing those is not a merge; it is a rewrite into
+          // `Layer.provide` composition, decided per site, and getting the
+          // direction wrong changes layer lifetime silently.
+          "multipleEffectProvide": "suggestion",
+
+          // Default: warning. 11 sites. The four in production code discard
+          // the error one combinator later (`Effect.orElseSucceed`), so the
+          // fix is not a rename — it is deciding which of these failures
+          // deserve tagged error types and threading those through their
+          // callers' error channels.
+          "globalErrorInEffectCatch": "suggestion",
+          "globalErrorInEffectFailure": "suggestion"
+        }
+      }
+    ]
   }
 }
