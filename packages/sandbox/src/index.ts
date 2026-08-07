@@ -219,8 +219,6 @@ export {
   FALLBACK_BASE_REF,
   MIRRORS_SEGMENT,
   mirrorDirOf,
-  parseRepoUrl,
-  type RepoIdentity,
   type RepoSourceInput,
   repoLabelOf,
   repoSourceFor,

@@ -61,7 +61,11 @@
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
-import type { TaskId } from "@workspace/domain";
+import {
+  parseRepoUrl,
+  type RepoIdentity,
+  type TaskId,
+} from "@workspace/domain";
 import { Effect, Layer, Schedule } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { CloneFailed } from "./errors";
@@ -119,90 +123,8 @@ export const DEFAULT_COMMITTER: Committer = {
   name: "Agent Task Manager",
 };
 
-/** A URL with a scheme, as opposed to the `git@host:owner/name` shorthand. */
-const SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
-
-/** The `[user@]host:path` form ssh remotes are usually written in. */
-const SCP_RE = /^(?:[^@/]+@)?([^:/]+):(.+)$/;
-
-/** `owner/name`, with an optional `.git` suffix and trailing slash. */
-const OWNER_NAME_RE = /^\/?([^/]+)\/([^/]+?)(?:\.git)?\/?$/;
-
-/** One path segment of a mirror directory: no slashes, no leading dot. */
-const SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-/** A single trailing slash, which a pasted URL usually has and a remote never wants. */
-const TRAILING_SLASH_RE = /\/$/;
-
 /** A single trailing `.git`, stripped from a mirror directory to recover its name. */
 const TRAILING_GIT_RE = /\.git$/;
-
-/**
- * A repo, taken apart. `slug` is what a failure and a span are named after —
- * `owner/name` carries no credential, which {@link RepoIdentity.cloneUrl} may.
- */
-export interface RepoIdentity {
-  /** The URL as given, minus a trailing slash. Fed to git, never to a log. */
-  readonly cloneUrl: string;
-  /** Lowercased, because a hostname is case-insensitive and a directory is not. */
-  readonly host: string;
-  readonly name: string;
-  readonly owner: string;
-  /** `owner/name`. Safe to put on an event. */
-  readonly slug: string;
-}
-
-/** The host and `owner/name` path of a remote, in whichever form it was written. */
-const splitRemote = (raw: string) => {
-  if (SCHEME_RE.test(raw)) {
-    try {
-      const url = new URL(raw);
-      return { host: url.hostname, path: url.pathname };
-    } catch {
-      return null;
-    }
-  }
-  const scp = SCP_RE.exec(raw);
-  return scp === null ? null : { host: scp[1] ?? "", path: scp[2] ?? "" };
-};
-
-/**
- * Takes a clone URL apart, or answers null for anything that is not one.
- *
- * Total and pure, and null rather than a guess: a project whose repo field
- * holds prose or a bare name would otherwise become a mirror directory named
- * after that prose and a clone that fails much later, against a path nobody can
- * trace back to what was typed. Every host is accepted — GitHub is what this
- * runs against today, and rejecting the others would be a check that only
- * catches the honest cases.
- */
-export const parseRepoUrl = (raw: string): RepoIdentity | null => {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-  const split = splitRemote(trimmed);
-  if (split === null || split.host.length === 0) {
-    return null;
-  }
-  const match = OWNER_NAME_RE.exec(split.path);
-  const owner = match?.[1];
-  const name = match?.[2];
-  if (
-    owner === undefined ||
-    name === undefined ||
-    !(SEGMENT_RE.test(owner) && SEGMENT_RE.test(name))
-  ) {
-    return null;
-  }
-  return {
-    cloneUrl: trimmed.replace(TRAILING_SLASH_RE, ""),
-    host: split.host.toLowerCase(),
-    name,
-    owner,
-    slug: `${owner}/${name}`,
-  };
-};
 
 /** Where a repo's bare mirror lives on the host. Pure; the path encodes the slug. */
 export const mirrorDirOf = (input: {

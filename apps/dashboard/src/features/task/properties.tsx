@@ -10,6 +10,7 @@ import { InlineLink, InlineText, PropertyRow } from "@/features/task/inline";
 import { NextSessionSelect } from "@/features/task/next-session";
 import { PropertySelect } from "@/features/task/property-select";
 import { failureText } from "@/lib/failure";
+import { REPO_URL_PLACEHOLDER, repoUrlProblem } from "@/lib/repo-url";
 import { prettyUrl } from "@/lib/url";
 
 /** The select's spelling of "no project" — null never travels through a value-typed control. */
@@ -73,6 +74,10 @@ interface OptionalField {
   readonly isUrl: boolean;
   readonly label: string;
   readonly onCommit: (next: string) => void;
+  /** The shape the box wants, for a field where knowing it is half the work. */
+  readonly placeholder?: string;
+  /** What the field refuses, or nothing where it takes whatever is typed. */
+  readonly problemOf?: (next: string) => string | null;
   readonly value: string;
 }
 
@@ -85,6 +90,8 @@ const OptionalValue = ({ field }: { readonly field: OptionalField }) => {
       editLabel={field.editLabel}
       emptyText="Empty"
       onCommit={field.onCommit}
+      placeholder={field.placeholder}
+      problemOf={field.problemOf}
       value={field.value}
     />
   );
@@ -142,6 +149,11 @@ export const TaskProperties = ({ task }: { readonly task: Task }) => {
       isUrl: true,
       label: "Repository",
       onCommit: saveRepoUrl,
+      // The same box as the project form's, because it overrides that project's
+      // repo for this one task — so it is checked against the same rule and
+      // offers the same example rather than a second opinion.
+      placeholder: REPO_URL_PLACEHOLDER,
+      problemOf: repoUrlProblem,
       value: task.repoUrl ?? "",
     },
     {

@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { BunFileSystem } from "@effect/platform-bun";
-import { newTaskId, type TaskId } from "@workspace/domain";
+import { newTaskId, parseRepoUrl, type TaskId } from "@workspace/domain";
 import { Effect, Layer } from "effect";
 import type { FileSystem } from "effect/FileSystem";
 import { CloneFailed } from "./errors";
@@ -24,57 +24,11 @@ import {
   ensureMirror,
   materializeRepo,
   mirrorDirOf,
-  parseRepoUrl,
   refreshMirror,
   repoLabelOf,
   repoSourceFor,
 } from "./repo";
 import type { RepoSource } from "./spec";
-
-describe("parseRepoUrl", () => {
-  test("takes an https url apart", () => {
-    expect(parseRepoUrl("https://github.com/Mark-Life/factory.git")).toEqual({
-      cloneUrl: "https://github.com/Mark-Life/factory.git",
-      host: "github.com",
-      name: "factory",
-      owner: "Mark-Life",
-      slug: "Mark-Life/factory",
-    });
-  });
-
-  test("takes the ssh shorthand apart", () => {
-    expect(parseRepoUrl("git@github.com:Mark-Life/factory.git")?.slug).toBe(
-      "Mark-Life/factory"
-    );
-    expect(parseRepoUrl("ssh://git@github.com/Mark-Life/factory")?.name).toBe(
-      "factory"
-    );
-  });
-
-  test("normalizes the host and the trailing slash", () => {
-    const repo = parseRepoUrl("  https://GitHub.com/o/n/  ");
-    expect(repo?.host).toBe("github.com");
-    expect(repo?.cloneUrl).toBe("https://GitHub.com/o/n");
-  });
-
-  test("accepts a host that is not github", () => {
-    expect(parseRepoUrl("https://gitlab.com/o/n.git")?.host).toBe("gitlab.com");
-  });
-
-  test("answers null for anything that is not a clone url", () => {
-    for (const raw of [
-      "",
-      "   ",
-      "the marketing site repo",
-      "owner/name",
-      "https://github.com/owner",
-      "https://github.com/owner/name/tree/main/pkg",
-      "/Users/me/code/project",
-    ]) {
-      expect(parseRepoUrl(raw)).toBeNull();
-    }
-  });
-});
 
 describe("paths and names", () => {
   test("a mirror path encodes the slug, and the label reads it back", () => {
