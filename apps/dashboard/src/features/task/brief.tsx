@@ -7,31 +7,19 @@ import { Label } from "@workspace/ui/components/label";
 import { Textarea } from "@workspace/ui/components/textarea";
 import { type ChangeEvent, type ReactNode, useCallback, useState } from "react";
 import { usePatchTask } from "@/api/tasks";
+import { InlineMarkdown } from "@/features/task/inline";
 import { failureText } from "@/lib/failure";
 
 /** How the metadata blob is written when a person is about to edit it. */
 const INDENT = 2;
 
-/** What the editor holds: three strings, because a textarea has nothing else. */
-interface Draft {
-  readonly acceptance: string;
-  readonly brief: string;
-  readonly metadata: string;
-}
-
-const draftOf = (task: Task): Draft => ({
-  acceptance: task.acceptance ?? "",
-  brief: task.brief,
-  metadata: JSON.stringify(task.metadata, null, INDENT),
-});
-
 /**
  * Reads the metadata box back, refusing anything that is not an object.
  *
  * The column is a map of keys an agent invented, so an array or a bare number
- * would decode on the wire and then be unreadable by everything that expects to
- * look a key up. Failing here, before the request, is the difference between a
- * correction and a 422.
+ * would decode on the wire and then be unreadable by everything that expects
+ * to look a key up. Failing here, before the request, is the difference
+ * between a correction and a 422.
  */
 const parseMetadata = (source: string): ParsedMetadata => {
   const text = source.trim();
@@ -58,134 +46,145 @@ interface ParsedMetadata {
 /**
  * What the task asks for, and what it will be judged by.
  *
- * Editing happens in place rather than in a dialog because these three fields
- * are the page's subject — a modal would hide the thing being changed behind
- * the form changing it. The metadata blob is edited as raw JSON on purpose:
- * agents put arbitrary keys there, and a form that only knew the keys we
- * thought of would quietly drop the rest.
+ * Both are markdown, written by agents and read by the next one, so they are
+ * drawn as documents and edited as their source — in place like the rest of the
+ * body, behind a pencil rather than a click on the text, because a rendered
+ * document has links of its own that clicking should follow. The metadata blob
+ * is the exception: it is raw JSON on purpose, since agents put arbitrary keys there
+ * and a form that only knew the keys we thought of would quietly drop the
+ * rest, and JSON needs a parse with a verdict, which is what its explicit
+ * save is.
  */
 export const TaskBrief = ({ task }: { readonly task: Task }) => {
-  const [draft, setDraft] = useState<Draft | null>(null);
+  const patch = usePatchTask();
+  const { mutate } = patch;
+
+  const saveBrief = useCallback(
+    (next: string) => mutate({ patch: { brief: next }, taskId: task.id }),
+    [mutate, task.id]
+  );
+
+  const saveAcceptance = useCallback(
+    (next: string) =>
+      mutate({
+        patch: { acceptance: next === "" ? null : next },
+        taskId: task.id,
+      }),
+    [mutate, task.id]
+  );
+
+  const failed = failureText(patch.error);
+
+  return (
+    <section className="flex flex-col gap-4">
+      <Field label="Brief">
+        <InlineMarkdown
+          className="text-[0.8125rem] text-foreground"
+          editLabel="Edit brief"
+          emptyText="Add a brief"
+          onCommit={saveBrief}
+          rows={10}
+          value={task.brief}
+        />
+      </Field>
+      <Field label="Acceptance">
+        <InlineMarkdown
+          className="text-[0.8125rem]"
+          editLabel="Edit acceptance criteria"
+          emptyText="Add acceptance criteria"
+          onCommit={saveAcceptance}
+          rows={5}
+          value={task.acceptance ?? ""}
+        />
+      </Field>
+      <MetadataField task={task} />
+      {failed === null ? null : (
+        <p className="text-destructive text-xs">{failed}</p>
+      )}
+    </section>
+  );
+};
+
+/**
+ * The metadata blob, behind a pencil because it is the field a person edits
+ * last and wrongliest: the agent writes it, a human mostly reads it, and a
+ * malformed save has to be refused in place rather than committed on blur.
+ * Editing keeps its own draft and its own verdict, separately from the commit
+ * lifecycle the prose fields share.
+ */
+const MetadataField = ({ task }: { readonly task: Task }) => {
+  const [draft, setDraft] = useState<string | null>(null);
   const [invalid, setInvalid] = useState<string | null>(null);
   const patch = usePatchTask();
   const { mutate } = patch;
 
-  const edit = useCallback(() => setDraft(draftOf(task)), [task]);
+  const edit = useCallback(
+    () =>
+      setDraft(
+        Object.keys(task.metadata).length === 0
+          ? ""
+          : JSON.stringify(task.metadata, null, INDENT)
+      ),
+    [task.metadata]
+  );
   const cancel = useCallback(() => {
     setDraft(null);
     setInvalid(null);
   }, []);
 
-  const onBrief = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
-    const { value } = event.target;
-    setDraft((current) =>
-      current === null ? null : { ...current, brief: value }
-    );
-  }, []);
-
-  const onAcceptance = useCallback(
-    (event: ChangeEvent<HTMLTextAreaElement>) => {
-      const { value } = event.target;
-      setDraft((current) =>
-        current === null ? null : { ...current, acceptance: value }
-      );
-    },
-    []
-  );
-
   const onMetadata = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
-    const { value } = event.target;
-    setDraft((current) =>
-      current === null ? null : { ...current, metadata: value }
-    );
+    setDraft(event.target.value);
   }, []);
 
   const save = useCallback(() => {
     if (draft === null) {
       return;
     }
-    const parsed = parseMetadata(draft.metadata);
+    const parsed = parseMetadata(draft);
     if (parsed.metadata === null) {
       setInvalid(parsed.error);
       return;
     }
     setInvalid(null);
     mutate(
-      {
-        patch: {
-          acceptance: draft.acceptance.trim() === "" ? null : draft.acceptance,
-          brief: draft.brief,
-          metadata: parsed.metadata,
-        },
-        taskId: task.id,
-      },
+      { patch: { metadata: parsed.metadata }, taskId: task.id },
       { onSuccess: cancel }
     );
   }, [cancel, draft, mutate, task.id]);
 
   if (draft === null) {
+    if (Object.keys(task.metadata).length === 0) {
+      return null;
+    }
     return (
-      <section className="flex flex-col gap-4">
-        <div className="flex items-start justify-between gap-4">
-          <Field label="Brief">
-            <p className="whitespace-pre-wrap text-foreground">{task.brief}</p>
-          </Field>
-          <Button
-            aria-label="Edit brief"
-            onClick={edit}
-            size="icon-sm"
-            variant="ghost"
-          >
-            <HugeiconsIcon icon={PencilEdit01Icon} strokeWidth={2} />
-          </Button>
-        </div>
-        {task.acceptance === null ? null : (
-          <Field label="Acceptance">
-            <p className="whitespace-pre-wrap">{task.acceptance}</p>
-          </Field>
-        )}
-        {Object.keys(task.metadata).length === 0 ? null : (
-          <Field label="Metadata">
-            <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-xs">
-              {JSON.stringify(task.metadata, null, INDENT)}
-            </pre>
-          </Field>
-        )}
-      </section>
+      <div className="flex items-start justify-between gap-4">
+        <Field label="Metadata">
+          <pre className="overflow-x-auto whitespace-pre-wrap font-mono text-foreground text-xs">
+            {JSON.stringify(task.metadata, null, INDENT)}
+          </pre>
+        </Field>
+        <Button
+          aria-label="Edit metadata"
+          onClick={edit}
+          size="icon-sm"
+          variant="ghost"
+        >
+          <HugeiconsIcon icon={PencilEdit01Icon} strokeWidth={2} />
+        </Button>
+      </div>
     );
   }
 
   return (
-    <section className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="task-brief">Brief</Label>
-        <Textarea
-          id="task-brief"
-          onChange={onBrief}
-          rows={8}
-          value={draft.brief}
-        />
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="task-acceptance">Acceptance</Label>
-        <Textarea
-          id="task-acceptance"
-          onChange={onAcceptance}
-          placeholder="What has to be true for this to be done."
-          rows={4}
-          value={draft.acceptance}
-        />
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="task-metadata">Metadata</Label>
-        <Textarea
-          className="font-mono"
-          id="task-metadata"
-          onChange={onMetadata}
-          rows={6}
-          value={draft.metadata}
-        />
-      </div>
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor="task-metadata">Metadata</Label>
+      <Textarea
+        className="font-mono"
+        id="task-metadata"
+        onChange={onMetadata}
+        rows={6}
+        value={draft}
+      />
       {invalid === null ? null : (
         <p className="text-destructive text-xs">{invalid}</p>
       )}
@@ -200,11 +199,11 @@ export const TaskBrief = ({ task }: { readonly task: Task }) => {
           Cancel
         </Button>
       </div>
-    </section>
+    </div>
   );
 };
 
-/** One labelled block of read-only prose, so the three fields read as one column. */
+/** One labelled block of prose, so the two paragraphs read as one column. */
 const Field = ({
   children,
   label,
@@ -212,10 +211,8 @@ const Field = ({
   readonly children: ReactNode;
   readonly label: string;
 }) => (
-  <div className="flex flex-1 flex-col gap-1.5 text-muted-foreground text-xs">
-    <span className="font-medium text-muted-foreground uppercase tracking-wide">
-      {label}
-    </span>
+  <div className="flex flex-1 flex-col gap-1.5">
+    <span className="font-medium text-muted-foreground text-xs">{label}</span>
     {children}
   </div>
 );

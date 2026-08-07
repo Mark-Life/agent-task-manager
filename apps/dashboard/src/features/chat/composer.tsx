@@ -1,19 +1,13 @@
-import { SentIcon, StopIcon } from "@hugeicons/core-free-icons";
+import { StopIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { ThreadId } from "@workspace/domain";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupTextarea,
-} from "@workspace/ui/components/input-group";
-import {
-  type ChangeEvent,
-  type KeyboardEvent,
-  useCallback,
-  useState,
-} from "react";
+import { Button } from "@workspace/ui/components/button";
+import { useCallback } from "react";
 import { usePostMessage, useStopThread } from "@/api/threads";
+import {
+  type ComposerSend,
+  MessageComposer,
+} from "@/features/messaging/composer";
 
 /**
  * What a failed send means, in the reader's terms. Only the failures this
@@ -50,39 +44,16 @@ interface ComposerProps {
  * starts by reading what was just said.
  */
 export const Composer = ({ isTurnRunning, threadId }: ComposerProps) => {
-  const [body, setBody] = useState("");
   const post = usePostMessage();
   const stop = useStopThread();
   const { mutate: postMessage } = post;
   const { mutate: stopTurn } = stop;
 
-  const clear = useCallback(() => setBody(""), []);
-
-  const onChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
-    setBody(event.target.value);
-  }, []);
-
-  const send = useCallback(() => {
-    const text = body.trim();
-    if (text === "") {
-      return;
-    }
-    postMessage({ body: text, threadId }, { onSuccess: clear });
-  }, [body, clear, postMessage, threadId]);
-
-  /**
-   * Enter sends and shift-Enter breaks the line, which is what every chat box
-   * this replaces does.
-   */
-  const onKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.key !== "Enter" || event.shiftKey) {
-        return;
-      }
-      event.preventDefault();
-      send();
+  const send = useCallback(
+    ({ body, sent }: ComposerSend) => {
+      postMessage({ body, threadId }, { onSuccess: sent });
     },
-    [send]
+    [postMessage, threadId]
   );
 
   /**
@@ -96,49 +67,31 @@ export const Composer = ({ isTurnRunning, threadId }: ComposerProps) => {
   }, [stopTurn, threadId]);
 
   const isQueued = post.data?.queued === true && isTurnRunning;
-  const failure = failureText(post.error) ?? failureText(stop.error);
 
   return (
-    <div className="flex flex-col gap-2 border-border border-t p-4">
-      {isQueued ? (
-        <p className="text-muted-foreground text-xs">
-          Queued. The running turn will not see it — the next one reads it with
-          anything else that arrives. Stop the turn to have it answered now.
-        </p>
-      ) : null}
-      {failure === null ? null : (
-        <p className="text-destructive text-xs">{failure}</p>
-      )}
-      <InputGroup>
-        <InputGroupTextarea
-          onChange={onChange}
-          onKeyDown={onKeyDown}
-          placeholder="Message the manager"
-          rows={3}
-          value={body}
-        />
-        <InputGroupAddon align="block-end">
-          {isTurnRunning ? (
-            <InputGroupButton
-              disabled={stop.isPending}
-              onClick={stopLiveTurn}
-              variant="outline"
-            >
-              <HugeiconsIcon icon={StopIcon} strokeWidth={2} />
-              Stop turn
-            </InputGroupButton>
-          ) : null}
-          <InputGroupButton
-            className="ml-auto"
-            disabled={post.isPending || body.trim() === ""}
-            onClick={send}
-            variant="default"
+    <MessageComposer
+      actions={
+        isTurnRunning ? (
+          <Button
+            disabled={stop.isPending}
+            onClick={stopLiveTurn}
+            size="sm"
+            variant="outline"
           >
-            <HugeiconsIcon icon={SentIcon} strokeWidth={2} />
-            Send
-          </InputGroupButton>
-        </InputGroupAddon>
-      </InputGroup>
-    </div>
+            <HugeiconsIcon icon={StopIcon} strokeWidth={2} />
+            Stop turn
+          </Button>
+        ) : null
+      }
+      error={failureText(post.error) ?? failureText(stop.error)}
+      isPending={post.isPending}
+      notice={
+        isQueued
+          ? "Queued. The running turn will not see it — the next one reads it with anything else that arrives. Stop the turn to have it answered now."
+          : undefined
+      }
+      onSend={send}
+      placeholder="Message the manager"
+    />
   );
 };

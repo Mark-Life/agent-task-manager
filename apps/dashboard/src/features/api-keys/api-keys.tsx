@@ -34,6 +34,7 @@ import {
   ItemGroup,
   ItemTitle,
 } from "@workspace/ui/components/item";
+import { SidebarTrigger } from "@workspace/ui/components/sidebar";
 import { useCallback, useState } from "react";
 import { type IssuedKey, useApiKeys, useRevokeApiKey } from "@/api/api-keys";
 import { authClient } from "@/auth/client";
@@ -175,8 +176,11 @@ export const ApiKeys = () => {
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-8">
       <header className="flex items-start justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <h1 className="font-heading font-medium text-base">API keys</h1>
+        <div className="flex min-w-0 flex-col gap-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <SidebarTrigger className="shrink-0 md:hidden" />
+            <h1 className="font-heading font-medium text-base">API keys</h1>
+          </div>
           <p className="text-muted-foreground text-sm">
             A key lets a script or an agent reach this board's HTTP API as you.
             Send it as the <code className="font-mono">x-api-key</code> header;

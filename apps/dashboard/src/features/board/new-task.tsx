@@ -1,40 +1,40 @@
 import { PlusSignIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import type { TaskId } from "@workspace/domain";
 import { Button } from "@workspace/ui/components/button";
-import { useCallback, useState } from "react";
-import { TaskFormDialog } from "@/features/task/task-form";
+import { useCallback } from "react";
 
 interface NewTaskProps {
-  /** Where a freshly filed task leads, which is straight to its own page. */
-  readonly onCreated: (taskId: TaskId) => void;
+  /** Opens the draft panel. Nothing is filed until something in it changes. */
+  readonly onOpen: () => void;
 }
 
 /**
  * Filing a task by hand, from the board.
  *
- * The same dialog the task page edits with is used to create, so a field can
- * never mean one thing on one screen and something else on the other. New work
- * lands in ideas: the board's leftmost column is where a thought goes before
- * anybody has decided it is worth a run, and starting one is a deliberate drag
- * rather than a checkbox on a form.
+ * The button only opens the draft: a task nobody has named yet lives entirely
+ * on the client, so closing the panel without touching it files nothing. The
+ * first changed value is the decision to keep it, and is what the draft
+ * sends — there is no "File it" to press, because there is no form to be
+ * wrong with in the meantime.
+ *
+ * On a narrow screen the label drops and the plus stands alone, so the whole
+ * toolbar keeps to one row. The accessible name stays either way.
  */
-export const NewTask = ({ onCreated }: NewTaskProps) => {
-  const [open, setOpen] = useState(false);
-  const openForm = useCallback(() => setOpen(true), []);
+export const NewTask = ({ onOpen }: NewTaskProps) => {
+  const open = useCallback(() => onOpen(), [onOpen]);
 
   return (
-    <>
-      <Button onClick={openForm} size="sm" variant="outline">
-        <HugeiconsIcon icon={PlusSignIcon} strokeWidth={2} />
-        New task
-      </Button>
-      <TaskFormDialog
-        defaultStatus="ideas"
-        onCreated={onCreated}
-        onOpenChange={setOpen}
-        open={open}
-      />
-    </>
+    <Button
+      aria-label="New task"
+      // Square while the label is hidden: the row's other icon buttons are
+      // 28px across, and the default padding would leave this one wider than
+      // it is tall.
+      className="shrink-0 max-md:size-7 max-md:px-0"
+      onClick={open}
+      variant="outline"
+    >
+      <HugeiconsIcon icon={PlusSignIcon} strokeWidth={2} />
+      <span className="hidden md:inline">New task</span>
+    </Button>
   );
 };

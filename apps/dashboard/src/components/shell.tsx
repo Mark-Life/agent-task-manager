@@ -3,6 +3,7 @@ import {
   KanbanIcon,
   Key01Icon,
   Logout01Icon,
+  TerminalIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -27,8 +28,9 @@ import {
   SidebarMenuItem,
   SidebarProvider,
   SidebarTrigger,
+  useSidebar,
 } from "@workspace/ui/components/sidebar";
-import { type ReactNode, useCallback } from "react";
+import { type ReactNode, useCallback, useEffect } from "react";
 import { signOut, useSession } from "@/auth/client";
 import { WorkspacePicker } from "@/auth/workspace";
 import { ModeToggle } from "@/components/theme";
@@ -68,6 +70,28 @@ const initialsOf = (name: string) =>
     .slice(0, 2)
     .map((part) => part.charAt(0).toUpperCase())
     .join("");
+
+/**
+ * Shuts the mobile sidebar once the route changes.
+ *
+ * On a narrow screen the sidebar is a sheet over the page, not a column next
+ * to it, so tapping a destination swaps the page underneath while the sheet
+ * stays up and hides it. Watching the pathname catches navigation from the
+ * conversation list as well as from the destination menu, which a per-link
+ * click handler would miss. The desktop collapse state is a different flag and
+ * stays as it was.
+ */
+const CloseMobileSidebarOnRouteChange = ({
+  pathname,
+}: {
+  readonly pathname: string;
+}) => {
+  const { setOpenMobile } = useSidebar();
+  useEffect(() => {
+    setOpenMobile(false);
+  }, [pathname, setOpenMobile]);
+  return null;
+};
 
 /**
  * Who is signed in, and the way out.
@@ -110,7 +134,7 @@ const AccountMenu = () => {
         <DropdownMenuTrigger
           render={
             <SidebarMenuButton
-              className="h-9"
+              className="h-9 group-data-[collapsible=icon]:justify-center"
               size="lg"
               tooltip={email === "" ? name : email}
             />
@@ -121,7 +145,13 @@ const AccountMenu = () => {
               {initialsOf(name)}
             </AvatarFallback>
           </Avatar>
-          <span className="truncate">{name}</span>
+          {/*
+            The rail is one avatar wide; the name only fits while the
+            sidebar is open. The tooltip still carries it when collapsed.
+          */}
+          <span className="truncate group-data-[collapsible=icon]:hidden">
+            {name}
+          </span>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-48" side="top">
           {email === "" ? null : (
@@ -182,9 +212,47 @@ export const Shell = ({ children, conversations }: ShellProps) => {
   });
 
   return (
-    <SidebarProvider>
+    /*
+      The frame is exactly one viewport tall and never scrolls itself. The
+      wrapper ships with `min-h-svh`, which is a floor and not a ceiling: a tall
+      page pushes the whole document down, and every `h-full` and `min-h-0`
+      beneath it resolves against a box that keeps growing, so an inner
+      `overflow-auto` never has a height to scroll inside. Capping it here is
+      what lets a screen decide where its own scroll lives — for the board, in
+      each column, with the toolbar and the column headings staying put.
+    */
+    <SidebarProvider className="h-svh overflow-hidden">
+      <CloseMobileSidebarOnRouteChange pathname={pathname} />
       <Sidebar collapsible="icon">
         <SidebarHeader>
+          {/**
+           * The desktop collapse button lives in the sidebar itself rather
+           * than in a strip above the page: one row saved on every screen,
+           * and the button stays reachable with the sidebar collapsed to the
+           * icon rail, which is when it is most needed. The mobile sheet
+           * hides it — its own close gesture serves the same turn there.
+           */}
+          {/*
+            The product's mark and name first, then its one ambient control.
+            The icon rail keeps only the trigger: the name goes with the
+            words, and the rail's one job is to widen again.
+          */}
+          <div className="flex items-center gap-1 group-data-[collapsible=icon]:justify-center">
+            <div className="flex min-w-0 flex-1 items-center gap-1.5 group-data-[collapsible=icon]:hidden">
+              <HugeiconsIcon
+                className="size-4 shrink-0 text-primary"
+                icon={TerminalIcon}
+                strokeWidth={2}
+              />
+              <span className="truncate font-heading font-medium text-sm">
+                Agent Task Manager
+              </span>
+            </div>
+            <SidebarTrigger
+              aria-label="Toggle sidebar"
+              className="shrink-0 max-md:hidden"
+            />
+          </div>
           <div className="group-data-[collapsible=icon]:hidden">
             <WorkspacePicker />
           </div>
@@ -229,10 +297,20 @@ export const Shell = ({ children, conversations }: ShellProps) => {
         engages and the sidebar slides off-screen with the content.
       */}
       <SidebarInset className="min-w-0">
-        <header className="flex h-12 shrink-0 items-center gap-2 px-3">
-          <SidebarTrigger />
-        </header>
-        <div className="min-h-0 min-w-0 flex-1">
+        {/*
+          No strip of its own above the page. On a narrow screen the sidebar is
+          a sheet with nowhere to keep its button, so each screen draws the
+          trigger at the head of its own top row — one row of vertical space
+          back, which on a phone is most of what the board has to spend. On a
+          desktop the trigger sits in the sidebar header instead.
+        */}
+        {/*
+          The default scroll for a page that is simply long — the project list,
+          the keys, a task. A screen that would rather scroll in pieces takes
+          `h-full` on its own root, which fills this box exactly and so leaves
+          nothing here to scroll.
+        */}
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           <Outlet />
         </div>
       </SidebarInset>

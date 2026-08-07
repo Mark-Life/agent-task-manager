@@ -36,6 +36,7 @@ import {
   ItemGroup,
   ItemTitle,
 } from "@workspace/ui/components/item";
+import { SidebarTrigger } from "@workspace/ui/components/sidebar";
 import { useCallback, useState } from "react";
 import { projectsQuery, useDeleteProject } from "@/api/projects";
 import { Failed, Pending } from "@/components/query-state";
@@ -176,7 +177,10 @@ export const Projects = () => {
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-8">
       <header className="flex items-center justify-between gap-4">
-        <h1 className="font-heading font-medium text-base">Projects</h1>
+        <div className="flex min-w-0 items-center gap-2">
+          <SidebarTrigger className="shrink-0 md:hidden" />
+          <h1 className="font-heading font-medium text-base">Projects</h1>
+        </div>
         <Button onClick={openNew} size="sm">
           <HugeiconsIcon icon={PlusSignIcon} strokeWidth={2} />
           New project

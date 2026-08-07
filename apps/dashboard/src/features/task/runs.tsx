@@ -1,18 +1,14 @@
+import { PlayCircleIcon } from "@hugeicons/core-free-icons";
 import { useQuery } from "@tanstack/react-query";
 import type { Run } from "@workspace/api";
 import { isRunLive, type RunId, type TaskId } from "@workspace/domain";
 import { Badge } from "@workspace/ui/components/badge";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@workspace/ui/components/empty";
 import { Item, ItemContent } from "@workspace/ui/components/item";
-import { Skeleton } from "@workspace/ui/components/skeleton";
 import { Spinner } from "@workspace/ui/components/spinner";
 import { useCallback } from "react";
 import { runsQuery } from "@/api/runs";
+import { EmptyState } from "@/components/empty-state";
+import { Pending } from "@/components/query-state";
 import {
   formatCost,
   formatDuration,
@@ -65,18 +61,15 @@ export const TaskRuns = ({
   });
 
   if (runs.isPending) {
-    return <Skeleton className="h-16 w-full" />;
+    return <Pending label="Loading attempts" lines={3} />;
   }
   if (runs.data === undefined || runs.data.length === 0) {
     return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyTitle>No attempts yet</EmptyTitle>
-          <EmptyDescription>
-            Moving this task into progress is what starts one.
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
+      <EmptyState
+        description="Moving this task into progress is what starts one."
+        icon={PlayCircleIcon}
+        title="No attempts yet"
+      />
     );
   }
 

@@ -1,15 +1,11 @@
+import { HistoryIcon } from "@hugeicons/core-free-icons";
 import type { RunId, TaskId } from "@workspace/domain";
 import { Button } from "@workspace/ui/components/button";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@workspace/ui/components/empty";
-import { Skeleton } from "@workspace/ui/components/skeleton";
 import { Spinner } from "@workspace/ui/components/spinner";
 import { useCallback } from "react";
 import { useRunEvents } from "@/api/runs";
+import { EmptyState } from "@/components/empty-state";
+import { Pending } from "@/components/query-state";
 import { TimelineEvent } from "@/features/task/timeline-event";
 import { failureText } from "@/lib/failure";
 
@@ -37,18 +33,15 @@ export const RunTimeline = ({ live, runId, taskId }: RunTimelineProps) => {
   }, [fetchNextPage]);
 
   if (query.isPending) {
-    return <Skeleton className="h-24 w-full" />;
+    return <Pending label="Loading events" lines={4} />;
   }
   if (events.length === 0) {
     return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyTitle>Nothing recorded yet</EmptyTitle>
-          <EmptyDescription>
-            Events arrive as the container writes them.
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
+      <EmptyState
+        description="Events arrive as the container writes them."
+        icon={HistoryIcon}
+        title="Nothing recorded yet"
+      />
     );
   }
 

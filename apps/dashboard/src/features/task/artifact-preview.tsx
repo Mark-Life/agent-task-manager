@@ -1,25 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import type { Artifact } from "@workspace/api";
 import type { TaskId } from "@workspace/domain";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@workspace/ui/components/alert-dialog";
-import { Button } from "@workspace/ui/components/button";
-import { Skeleton } from "@workspace/ui/components/skeleton";
+import { CodeBlock, Markdown } from "@workspace/ui/components/markdown";
 import { Textarea } from "@workspace/ui/components/textarea";
-import { type ChangeEvent, useCallback, useState } from "react";
-import { artifactContentUrl, useUploadArtifact } from "@/api/artifacts";
+import type { ChangeEvent } from "react";
+import { useCallback } from "react";
+import { artifactContentUrl } from "@/api/artifacts";
 import { keys } from "@/api/keys";
-import { taskQuery } from "@/api/tasks";
-import { failureText } from "@/lib/failure";
 
 /** Extensions worth showing inline as text, whatever they hold. */
 const TEXT_EXTS = new Set([
@@ -53,6 +40,9 @@ const IMAGE_EXTS = new Set([
   "webp",
 ]);
 
+/** Extensions that are a document rather than code, and are drawn as one. */
+const MARKDOWN_EXTS = new Set(["markdown", "md"]);
+
 const INDENT = 2;
 
 /**
@@ -60,14 +50,15 @@ const INDENT = 2;
  *
  * The index records the extension and the server deliberately guesses no
  * content type, so this is the only signal there is — and anything unrecognised
- * is offered as a download rather than drawn wrongly. Markdown is shown as its
- * source: nothing here renders it, and a half-rendered document is worse than
- * the text somebody wrote.
+ * is offered as a download rather than drawn wrongly.
  */
 export const rendererFor = (ext: string | null) => {
   const lower = ext?.toLowerCase() ?? "";
   if (lower === "json") {
     return "json" as const;
+  }
+  if (MARKDOWN_EXTS.has(lower)) {
+    return "markdown" as const;
   }
   if (IMAGE_EXTS.has(lower)) {
     return "image" as const;
@@ -75,8 +66,15 @@ export const rendererFor = (ext: string | null) => {
   return TEXT_EXTS.has(lower) ? ("text" as const) : ("download" as const);
 };
 
+/** What `rendererFor` can answer. */
+export type Renderer = ReturnType<typeof rendererFor>;
+
+/** Whether a file is one this app can put in a box and let somebody retype. */
+export const isEditable = (renderer: Renderer) =>
+  renderer !== "download" && renderer !== "image";
+
 /** Pretty-printed when it parses, verbatim when it does not. */
-const reindent = (source: string) => {
+export const reindent = (source: string) => {
   try {
     return JSON.stringify(JSON.parse(source), null, INDENT);
   } catch {
@@ -84,144 +82,21 @@ const reindent = (source: string) => {
   }
 };
 
-interface PreviewProps {
-  readonly artifact: Artifact;
-  readonly renderer: "image" | "json" | "text";
-  readonly taskId: TaskId;
-}
-
-interface TextProps extends Omit<PreviewProps, "renderer"> {
-  readonly renderer: "json" | "text";
-  /** The bytes as they are on disk, which is what an edit starts from. */
-  readonly source: string;
-}
-
 /**
- * The text of a file, and the way to change it.
+ * The bytes as text.
  *
- * There is no edit endpoint: an upload to a path that already exists replaces
- * that file, so saving is an upload of the same path, and the row keeps its id
- * and its promotion. Two consequences earn the confirmation — nothing is
- * versioned, and the write reindexes the folder, clearing every row's record of
- * which run produced it. The button is out while a run holds the folder, which
- * is mounted into it writable.
+ * Through `fetch` rather than the typed client, because the content endpoint
+ * answers raw octets. Cached forever: a file's bytes only change when somebody
+ * writes them, and writing goes through the upload, which invalidates this.
  */
-const EditableText = ({ artifact, renderer, source, taskId }: TextProps) => {
-  const [draft, setDraft] = useState<string | null>(null);
-  const detail = useQuery(taskQuery(taskId));
-  const upload = useUploadArtifact();
-  const { mutate, reset } = upload;
-  const live = (detail.data?.liveRunId ?? null) !== null;
-
-  const open = useCallback(() => setDraft(source), [source]);
-
-  const cancel = useCallback(() => {
-    setDraft(null);
-    reset();
-  }, [reset]);
-
-  const onDraft = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
-    setDraft(event.target.value);
-  }, []);
-
-  const save = useCallback(() => {
-    if (draft === null) {
-      return;
-    }
-    mutate(
-      { file: new File([draft], artifact.path), path: artifact.path, taskId },
-      { onSuccess: () => setDraft(null) }
-    );
-  }, [artifact.path, draft, mutate, taskId]);
-
-  if (draft === null) {
-    return (
-      <div className="flex flex-col gap-2">
-        <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-muted/50 p-3 font-mono text-xs">
-          {renderer === "json" ? reindent(source) : source}
-        </pre>
-        <Button disabled={live} onClick={open} size="xs" variant="outline">
-          Edit
-        </Button>
-        {live ? (
-          <p className="text-muted-foreground text-xs">
-            A run has this folder open. Editing waits until it ends.
-          </p>
-        ) : null}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-2">
-      <Textarea
-        className="max-h-96 overflow-auto font-mono"
-        onChange={onDraft}
-        rows={16}
-        value={draft}
-      />
-      {renderer === "json" ? (
-        <p className="text-muted-foreground text-xs">
-          Shown pretty-printed, edited as stored.
-        </p>
-      ) : null}
-      <div className="flex items-center gap-2">
-        <AlertDialog>
-          <AlertDialogTrigger
-            disabled={draft === source || upload.isPending}
-            render={<Button size="xs" />}
-          >
-            Save
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Replace {artifact.path}?</AlertDialogTitle>
-              <AlertDialogDescription>
-                The file is written over and nothing keeps the old bytes, so
-                this cannot be undone. Writing also reindexes the folder, which
-                clears which run produced each file in it.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction disabled={upload.isPending} onClick={save}>
-                Replace
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-        <Button onClick={cancel} size="xs" variant="ghost">
-          Cancel
-        </Button>
-      </div>
-      {failureText(upload.error) === null ? null : (
-        <p className="text-destructive text-xs">{failureText(upload.error)}</p>
-      )}
-    </div>
-  );
-};
-
-/**
- * The bytes, drawn according to the extension.
- *
- * An image is left to the browser, which streams it straight off the content
- * endpoint; text and JSON are read as text so they can be shown in place, and
- * that read goes through `fetch` rather than the typed client because the
- * endpoint answers raw octets. JSON is re-indented when it parses and shown
- * verbatim when it does not — a file claiming to be JSON and failing to be is
- * exactly the file somebody opened this panel to look at.
- *
- * Text and JSON can also be changed here; an image cannot, since replacing one
- * means bringing a new file rather than typing it.
- */
-export const ArtifactPreview = ({
-  artifact,
-  renderer,
-  taskId,
-}: PreviewProps) => {
+export const useArtifactText = (
+  taskId: TaskId,
+  artifact: Artifact,
+  enabled: boolean
+) => {
   const href = artifactContentUrl(taskId, artifact.id);
-  const text = useQuery({
-    enabled: renderer !== "image",
+  return useQuery({
+    enabled,
     queryFn: async ({ signal }) => {
       const response = await fetch(href, { credentials: "include", signal });
       if (!response.ok) {
@@ -232,27 +107,67 @@ export const ArtifactPreview = ({
     queryKey: [...keys.artifacts(taskId), artifact.id, "content"],
     staleTime: Number.POSITIVE_INFINITY,
   });
+};
 
-  if (renderer === "image") {
+interface FileBodyProps {
+  readonly ext: Artifact["ext"];
+  readonly renderer: Renderer;
+  readonly source: string;
+}
+
+/**
+ * A file as the thing it is: a document rendered, code highlighted.
+ *
+ * The extension is the only signal about the contents, and it is passed to the
+ * highlighter as the language name — its own aliases cover the short forms, and
+ * anything it does not know falls back to plain text, which is a file drawn
+ * without colour rather than a file drawn wrongly. Lines are numbered because
+ * this is a whole file: the thing a reader wants to say about it is where in it
+ * something is.
+ *
+ * No height of its own: the panel around it decides how tall a file may be.
+ */
+export const FileBody = ({ ext, renderer, source }: FileBodyProps) => {
+  if (renderer === "markdown") {
     return (
-      // biome-ignore lint/performance/noImgElement: this is a Vite app, with no framework image component behind the rule.
-      // biome-ignore lint/correctness/useImageSize: an artifact's dimensions are not in the index, and a guessed pair would distort it.
-      <img alt={artifact.path} className="max-h-96 rounded-md" src={href} />
+      <div className="text-[0.8125rem]">
+        <Markdown>{source}</Markdown>
+      </div>
     );
-  }
-  if (text.isPending) {
-    return <Skeleton className="h-16 w-full" />;
-  }
-  if (text.data === undefined) {
-    return <p className="text-destructive text-xs">{text.error?.message}</p>;
   }
 
   return (
-    <EditableText
-      artifact={artifact}
-      renderer={renderer}
-      source={text.data}
-      taskId={taskId}
+    <CodeBlock
+      className="[&_pre]:max-h-none [&_pre]:rounded-none [&_pre]:border-0"
+      code={renderer === "json" ? reindent(source) : source}
+      lang={ext ?? undefined}
+      lineNumbers
+    />
+  );
+};
+
+interface FileSourceProps {
+  readonly onChange: (next: string) => void;
+  readonly value: string;
+}
+
+/**
+ * The file as its source.
+ *
+ * Always the source, never the rendered document: what gets written back is
+ * bytes, and a rendered document is not the bytes.
+ */
+export const FileSource = ({ onChange, value }: FileSourceProps) => {
+  const change = useCallback(
+    (event: ChangeEvent<HTMLTextAreaElement>) => onChange(event.target.value),
+    [onChange]
+  );
+
+  return (
+    <Textarea
+      className="h-full min-h-0 resize-none rounded-none border-0 font-mono focus-visible:ring-0"
+      onChange={change}
+      value={value}
     />
   );
 };

@@ -200,7 +200,10 @@ function Sidebar({
             <SheetTitle>Sidebar</SheetTitle>
             <SheetDescription>Displays the mobile sidebar.</SheetDescription>
           </SheetHeader>
-          <div className="flex h-full w-full flex-col">{children}</div>
+          {/* `min-w-0` so the sheet is what decides the width and the rows truncate into it, rather than a long conversation title deciding for it. */}
+          <div className="flex h-full w-full min-w-0 flex-col overflow-hidden">
+            {children}
+          </div>
         </SheetContent>
       </Sheet>
     )
@@ -375,7 +378,13 @@ function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
       data-slot="sidebar-content"
       data-sidebar="content"
       className={cn(
-        "no-scrollbar flex min-h-0 flex-1 flex-col gap-0 overflow-auto group-data-[collapsible=icon]:overflow-hidden",
+        // Vertical only. `overflow-auto` scrolls both ways, and a sidebar is
+        // never wider than itself on purpose — so the sideways axis only ever
+        // carried the odd stray pixel, which on a touch screen is a drag that
+        // moves the list and springs it back. `overscroll-contain` keeps a
+        // flick that reaches either end from being handed to the page behind,
+        // which on a phone is the sheet's backdrop.
+        "no-scrollbar flex min-h-0 min-w-0 flex-1 flex-col gap-0 overflow-y-auto overflow-x-hidden overscroll-contain group-data-[collapsible=icon]:overflow-hidden",
         className
       )}
       {...props}
