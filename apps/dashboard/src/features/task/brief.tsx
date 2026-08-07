@@ -7,7 +7,7 @@ import { Label } from "@workspace/ui/components/label";
 import { Textarea } from "@workspace/ui/components/textarea";
 import { type ChangeEvent, type ReactNode, useCallback, useState } from "react";
 import { usePatchTask } from "@/api/tasks";
-import { InlineArea } from "@/features/task/inline";
+import { InlineMarkdown } from "@/features/task/inline";
 import { failureText } from "@/lib/failure";
 
 /** How the metadata blob is written when a person is about to edit it. */
@@ -46,10 +46,11 @@ interface ParsedMetadata {
 /**
  * What the task asks for, and what it will be judged by.
  *
- * Both paragraphs edit in place like the rest of the body — click the text,
- * change it, walk away — because they are the page's subject and a form would
- * sit between the reader and the thing being said. The metadata blob is the
- * exception: it is raw JSON on purpose, since agents put arbitrary keys there
+ * Both are markdown, written by agents and read by the next one, so they are
+ * drawn as documents and edited as their source — in place like the rest of the
+ * body, behind a pencil rather than a click on the text, because a rendered
+ * document has links of its own that clicking should follow. The metadata blob
+ * is the exception: it is raw JSON on purpose, since agents put arbitrary keys there
  * and a form that only knew the keys we thought of would quietly drop the
  * rest, and JSON needs a parse with a verdict, which is what its explicit
  * save is.
@@ -77,22 +78,22 @@ export const TaskBrief = ({ task }: { readonly task: Task }) => {
   return (
     <section className="flex flex-col gap-4">
       <Field label="Brief">
-        <InlineArea
-          className="text-foreground text-sm/relaxed"
+        <InlineMarkdown
+          className="text-[0.8125rem] text-foreground"
           editLabel="Edit brief"
           emptyText="Add a brief"
           onCommit={saveBrief}
-          rows={8}
+          rows={10}
           value={task.brief}
         />
       </Field>
       <Field label="Acceptance">
-        <InlineArea
-          className="text-sm/relaxed"
+        <InlineMarkdown
+          className="text-[0.8125rem]"
           editLabel="Edit acceptance criteria"
           emptyText="Add acceptance criteria"
           onCommit={saveAcceptance}
-          rows={3}
+          rows={5}
           value={task.acceptance ?? ""}
         />
       </Field>

@@ -9,7 +9,6 @@ import { usePatchTask } from "@/api/tasks";
 import { InlineLink, InlineText, PropertyRow } from "@/features/task/inline";
 import { NextSessionSelect } from "@/features/task/next-session";
 import { PropertySelect } from "@/features/task/property-select";
-import { StatusSelect } from "@/features/task/status-select";
 import { failureText } from "@/lib/failure";
 import { prettyUrl } from "@/lib/url";
 
@@ -100,6 +99,9 @@ const OptionalValue = ({ field }: { readonly field: OptionalField }) => {
  * are empty, behind one toggle that reveals them all.
  * One mutation serves them all, which is why its failure sits once under the
  * column rather than once per row.
+ *
+ * Status is not among them. It is the field a reader wants visible whichever
+ * panel they are on, so it sits in the header instead of behind this one.
  */
 export const TaskProperties = ({ task }: { readonly task: Task }) => {
   const patch = usePatchTask();
@@ -160,9 +162,6 @@ export const TaskProperties = ({ task }: { readonly task: Task }) => {
 
   return (
     <section aria-label="Task properties" className="flex flex-col gap-0.5">
-      <PropertyRow label="Status">
-        <StatusSelect task={task} />
-      </PropertyRow>
       <PropertyRow label="Project">
         <ProjectSelect onChange={saveProject} value={task.projectId} />
       </PropertyRow>

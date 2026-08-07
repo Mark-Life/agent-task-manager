@@ -36,18 +36,31 @@ export const parseThreadId = optional(Schema.decodeUnknownOption(ThreadId));
 /**
  * The panels of a task page, in the order they are drawn.
  *
- * Comments comes first because it is the conversation about the task, the
- * panel the sheet opens on when nothing else is asked for.
+ * Details comes first, and is what a task opens on when the link asks for
+ * nothing else: it is what the task *is* — its brief, what it will be judged
+ * by, the fields it sits under — and the panel that answers "what is this"
+ * for a reader who has just clicked a card they did not write.
  */
-export const TASK_TABS = ["comments", "runs", "sessions", "artifacts"] as const;
+export const TASK_TABS = [
+  "details",
+  "messages",
+  "runs",
+  "sessions",
+  "artifacts",
+] as const;
 
 /** Which panel of a task page is open. */
 export type TaskTab = (typeof TASK_TABS)[number];
 
-/** Name to panel, so an unknown string reads back as a plain absent value. */
-const BY_NAME: Record<string, TaskTab> = Object.fromEntries(
-  TASK_TABS.map((tab) => [tab, tab])
-);
+/**
+ * Name to panel, so an unknown string reads back as a plain absent value. The
+ * messages panel answers to its old name as well: links to `?tab=comments` are
+ * already in people's history and in whatever they pasted into a chat.
+ */
+const BY_NAME: Record<string, TaskTab> = {
+  ...Object.fromEntries(TASK_TABS.map((tab) => [tab, tab])),
+  comments: "messages",
+};
 
 /** The panel a URL asks for, or undefined when it asks for nothing sensible. */
 export const parseTaskTab = (value: unknown) =>

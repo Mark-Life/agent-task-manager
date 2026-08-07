@@ -212,7 +212,16 @@ export const Shell = ({ children, conversations }: ShellProps) => {
   });
 
   return (
-    <SidebarProvider>
+    /*
+      The frame is exactly one viewport tall and never scrolls itself. The
+      wrapper ships with `min-h-svh`, which is a floor and not a ceiling: a tall
+      page pushes the whole document down, and every `h-full` and `min-h-0`
+      beneath it resolves against a box that keeps growing, so an inner
+      `overflow-auto` never has a height to scroll inside. Capping it here is
+      what lets a screen decide where its own scroll lives — for the board, in
+      each column, with the toolbar and the column headings staying put.
+    */
+    <SidebarProvider className="h-svh overflow-hidden">
       <CloseMobileSidebarOnRouteChange pathname={pathname} />
       <Sidebar collapsible="icon">
         <SidebarHeader>
@@ -289,15 +298,19 @@ export const Shell = ({ children, conversations }: ShellProps) => {
       */}
       <SidebarInset className="min-w-0">
         {/*
-          Only the small screen keeps this strip: its sidebar is a sheet over
-          the page with no place of its own for the button. On a desktop the
-          trigger sits in the sidebar header, so the pages start one row
-          higher.
+          No strip of its own above the page. On a narrow screen the sidebar is
+          a sheet with nowhere to keep its button, so each screen draws the
+          trigger at the head of its own top row — one row of vertical space
+          back, which on a phone is most of what the board has to spend. On a
+          desktop the trigger sits in the sidebar header instead.
         */}
-        <header className="flex h-12 shrink-0 items-center gap-2 px-3 md:hidden">
-          <SidebarTrigger />
-        </header>
-        <div className="min-h-0 min-w-0 flex-1">
+        {/*
+          The default scroll for a page that is simply long — the project list,
+          the keys, a task. A screen that would rather scroll in pieces takes
+          `h-full` on its own root, which fills this box exactly and so leaves
+          nothing here to scroll.
+        */}
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           <Outlet />
         </div>
       </SidebarInset>

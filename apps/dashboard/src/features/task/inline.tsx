@@ -1,5 +1,6 @@
 import { PencilEdit01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { Markdown } from "@workspace/ui/components/markdown";
 import { cn } from "@workspace/ui/lib/utils";
 import {
   type ChangeEvent,
@@ -277,21 +278,36 @@ export const InlineLink = ({
       >
         {prettyUrl(value)}
       </a>
-      <button
-        aria-label={editLabel}
-        className="shrink-0 rounded-sm p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 group-hover:opacity-100"
-        onClick={begin}
-        type="button"
-      >
-        <HugeiconsIcon
-          className="size-3.5"
-          icon={PencilEdit01Icon}
-          strokeWidth={2}
-        />
-      </button>
+      <EditPencil label={editLabel} onClick={begin} />
     </span>
   );
 };
+
+/**
+ * The way into an edit when the value itself has to keep its own clicks: a link
+ * that should follow, a document whose links should follow. Quiet until the row
+ * is hovered, and always reachable by keyboard.
+ */
+const EditPencil = ({
+  label,
+  onClick,
+}: {
+  readonly label: string;
+  readonly onClick: () => void;
+}) => (
+  <button
+    aria-label={label}
+    className="shrink-0 rounded-sm p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 group-hover:opacity-100"
+    onClick={onClick}
+    type="button"
+  >
+    <HugeiconsIcon
+      className="size-3.5"
+      icon={PencilEdit01Icon}
+      strokeWidth={2}
+    />
+  </button>
+);
 
 interface InlineAreaProps extends InlineEditProps {
   /** Where the area starts while editing; it grows with the text. */
@@ -356,6 +372,86 @@ export const InlineArea = ({
       rows={rows}
       value={draft ?? ""}
     />
+  );
+};
+
+/**
+ * A document of the record, read as a document and edited as its source.
+ *
+ * The brief and the acceptance criteria are written by agents in markdown, so
+ * shown verbatim they read as punctuation around the sentences. Rendered, they
+ * gain links and lists — and a rendered document cannot also be a click-to-edit
+ * target, because clicking one of its links would open an edit instead of the
+ * page. So this follows the link field's answer: the document keeps its own
+ * clicks and the pencil starts the edit. An empty one has no document to
+ * protect, so the whole row is the invitation to write one.
+ *
+ * Editing is the source, not a rich editor. What is stored is markdown, agents
+ * write it directly, and a box showing exactly what they will read next is the
+ * one that cannot silently rewrite it.
+ */
+export const InlineMarkdown = ({
+  className,
+  editLabel,
+  emptyText,
+  onCommit,
+  rows = 6,
+  value,
+}: InlineAreaProps) => {
+  const { abandon, begin, change, commit, draft, editing } = useInlineEdit({
+    onCommit,
+    value,
+  });
+
+  const onChange = useCallback(
+    (event: ChangeEvent<HTMLTextAreaElement>) => change(event.target.value),
+    [change]
+  );
+
+  if (editing) {
+    return (
+      <textarea
+        // oxlint-disable-next-line jsx-a11y/no-autofocus
+        autoFocus
+        className={cn(
+          "field-sizing-content -mx-1 min-h-0 w-full resize-none whitespace-pre-wrap rounded-sm bg-muted/40 px-1 py-0 font-mono text-xs leading-relaxed outline-none ring-2 ring-ring/30",
+          className
+        )}
+        onBlur={commit}
+        onChange={onChange}
+        onKeyDown={editKeyHandler(abandon, commit, true)}
+        rows={rows}
+        value={draft ?? ""}
+      />
+    );
+  }
+
+  if (value === "") {
+    return (
+      <button
+        aria-label={editLabel}
+        className={cn(
+          "-mx-1 w-full rounded-sm px-1 py-0 text-left text-muted-foreground hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+          className
+        )}
+        onClick={begin}
+        type="button"
+      >
+        {emptyText}
+      </button>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        "group -mx-1 flex items-start gap-1 rounded-sm px-1 hover:bg-muted/60",
+        className
+      )}
+    >
+      <Markdown className="min-w-0 flex-1">{value}</Markdown>
+      <EditPencil label={editLabel} onClick={begin} />
+    </div>
   );
 };
 

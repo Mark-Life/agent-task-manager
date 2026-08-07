@@ -8,6 +8,7 @@ import {
   MouseSensor,
   pointerWithin,
   rectIntersection,
+  TouchSensor,
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
@@ -20,6 +21,8 @@ import {
   type TaskId,
   type TaskStatus,
 } from "@workspace/domain";
+import { SidebarTrigger } from "@workspace/ui/components/sidebar";
+import { cn } from "@workspace/ui/lib/utils";
 import { type ReactNode, useCallback, useMemo, useState } from "react";
 import { projectsQuery } from "@/api/projects";
 import {
@@ -42,6 +45,24 @@ import { DraftTask } from "@/features/task/draft";
  * opens the task rather than nudging it half a pixel down its column.
  */
 const DRAG_DISTANCE = 4;
+
+/**
+ * How long a finger rests on a card before the press becomes a drag.
+ *
+ * A finger has no hover and no second button, so the same touch has to serve
+ * both of the card's gestures and only time can tell them apart: let go before
+ * this and the task opens, hold past it and the card comes up. Long enough that
+ * a tap is never mistaken for a hold, short enough that a hold does not feel
+ * like the board has stopped responding.
+ */
+const TOUCH_HOLD_MS = 250;
+
+/**
+ * How far the finger may wander during that wait before the press is read as a
+ * scroll instead. Without it a column could not be scrolled by a finger that
+ * happens to start on a card, which is most of the column.
+ */
+const TOUCH_TOLERANCE = 6;
 
 /** How often the board re-reads itself while nobody is dragging on it. */
 const BOARD_POLL_MS = 10_000;
@@ -137,9 +158,34 @@ const useLiveRuns = (tasks: readonly Task[]) => {
   return useQueries({ combine: liveIdsOf, queries });
 };
 
-/** The five columns, side by side, scrolling sideways rather than shrinking to nothing. */
-const Columns = ({ children }: { readonly children: ReactNode }) => (
-  <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto pb-2">
+/**
+ * The five columns, side by side, scrolling sideways rather than shrinking to
+ * nothing.
+ *
+ * Sideways is the only direction this box scrolls: each column scrolls its own
+ * cards, so the row of headings above them stays where it is and the operator
+ * always knows which column they are reading. On a phone the sideways scroll
+ * snaps, because five columns will not fit whatever is done to them and a
+ * half-column resting under the thumb is the state worth making unreachable.
+ */
+const Columns = ({
+  children,
+  dragging = false,
+}: {
+  readonly children: ReactNode;
+  /**
+   * Snapping is off while a card is in the air. Carrying one to a column that
+   * is off-screen means this strip scrolls under it, and a mandatory snap
+   * fights every one of those scrolls back to the column it came from.
+   */
+  readonly dragging?: boolean;
+}) => (
+  <div
+    className={cn(
+      "flex min-h-0 flex-1 gap-3 overflow-x-auto overflow-y-hidden pb-2",
+      dragging ? "snap-none" : "snap-x snap-mandatory sm:snap-none"
+    )}
+  >
     {children}
   </div>
 );
@@ -211,9 +257,16 @@ export const Board = ({
   );
   const targets = dragged === undefined ? null : allowedTargets(dragged.status);
 
+  // A pointer says what it means by moving; a finger says it by waiting.
   const sensors = useSensors(
     useSensor(MouseSensor, {
       activationConstraint: { distance: DRAG_DISTANCE },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: TOUCH_HOLD_MS,
+        tolerance: TOUCH_TOLERANCE,
+      },
     })
   );
 
@@ -288,8 +341,14 @@ export const Board = ({
   );
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 p-4">
-      <div className="flex items-center justify-between gap-3">
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-3 p-3 sm:gap-4 sm:p-4">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+        {/* The way back to the sidebar, which on a phone is a sheet over this. */}
+        <SidebarTrigger
+          className="shrink-0 md:hidden"
+          size="icon"
+          variant="outline"
+        />
         <BoardFilters
           onProjectChange={onProjectChange}
           onQueryChange={onQueryChange}
@@ -331,7 +390,7 @@ export const Board = ({
           onDragStart={onDragStart}
           sensors={sensors}
         >
-          <Columns>
+          <Columns dragging={draggingId !== null}>
             {TASK_STATUSES.map((status) => (
               <Column
                 droppable={targets === null || targets.has(status)}

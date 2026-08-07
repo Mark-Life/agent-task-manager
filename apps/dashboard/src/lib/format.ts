@@ -143,3 +143,10 @@ export const formatCost = (cost: CostUsd | null | undefined) => {
   }
   return `$${value.toFixed(2)}`;
 };
+
+/** How many bytes go in a kilobyte, for a size a person reads rather than counts. */
+const KILO = 1024;
+
+/** A file's size, rounded to something a reader takes in at a glance. */
+export const formatBytes = (bytes: number) =>
+  bytes < KILO ? `${bytes} B` : `${Math.round(bytes / KILO)} kB`;

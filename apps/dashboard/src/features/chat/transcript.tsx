@@ -8,6 +8,7 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@workspace/ui/components/empty";
+import { Markdown } from "@workspace/ui/components/markdown";
 import { Marker, MarkerContent } from "@workspace/ui/components/marker";
 import {
   Message,
@@ -26,7 +27,8 @@ import { Skeleton } from "@workspace/ui/components/skeleton";
 import { Spinner } from "@workspace/ui/components/spinner";
 import { useEffect, useMemo } from "react";
 import { threadMessagesQuery } from "@/api/threads";
-import { formatAbsolute, formatRelative } from "@/lib/format";
+import { withDayMarkers } from "@/features/messaging/days";
+import { formatRelative } from "@/lib/format";
 
 /** How often the conversation is re-read while a turn is being written. */
 const LIVE_POLL_MS = 3000;
@@ -39,10 +41,6 @@ const AUTHOR_LABELS = {
   manager: "Manager",
   user: "You",
 } as const;
-
-/** The day a message belongs to, in the reader's own zone. */
-const dayOf = (message: ThreadMessage) =>
-  formatAbsolute(message.createdAt, { timeStyle: undefined });
 
 /**
  * Where a message came in from, when that is not the obvious answer.
@@ -61,23 +59,6 @@ const sourceOf = (message: ThreadMessage) => {
   }
   return null;
 };
-
-/**
- * The conversation, split into days.
- *
- * A divider belongs to the message that opens a day rather than to a list of
- * its own, so the rows stay one flat array and the scroller keeps one item per
- * message — which is what its anchoring counts.
- */
-const withDayMarkers = (messages: readonly ThreadMessage[]) =>
-  messages.map((message, index) => {
-    const previous = messages[index - 1];
-    const day = dayOf(message);
-    if (previous === undefined || dayOf(previous) !== day) {
-      return { day, message };
-    }
-    return { day: null, message };
-  });
 
 interface TranscriptProps {
   /** A turn is being written right now, which is polled for rather than streamed. */
@@ -139,16 +120,13 @@ export const Transcript = ({ isTurnRunning, threadId }: TranscriptProps) => {
               </Empty>
             ) : null}
             {rows.map((row) => (
-              <MessageScrollerItem
-                key={row.message.id}
-                messageId={row.message.id}
-              >
+              <MessageScrollerItem key={row.item.id} messageId={row.item.id}>
                 {row.day === null ? null : (
                   <Marker className="pb-4" variant="separator">
                     <MarkerContent>{row.day}</MarkerContent>
                   </Marker>
                 )}
-                <MessageRow message={row.message} />
+                <MessageRow message={row.item} />
               </MessageScrollerItem>
             ))}
             {hasNextPage ? (
@@ -178,9 +156,11 @@ export const Transcript = ({ isTurnRunning, threadId }: TranscriptProps) => {
  * One thing that was said.
  *
  * The operator's own words sit right and accented, the manager's left and
- * quiet, which is the only cue a reader needs at a glance. Bodies are rendered
- * with their newlines intact: the manager answers in short paragraphs and
- * collapsing them turns a list of tasks into a sentence.
+ * quiet, which is the only cue a reader needs at a glance. The manager writes
+ * markdown — a board answer is a list, a plan is headings — so its turns are
+ * rendered as the document they are. The operator's are not: somebody typing an
+ * asterisk into a chat box meant an asterisk, and their newlines are kept as
+ * they were.
  */
 const MessageRow = ({ message }: { readonly message: ThreadMessage }) => {
   const isOperator = message.role === "user";
@@ -195,8 +175,12 @@ const MessageRow = ({ message }: { readonly message: ThreadMessage }) => {
           {source === null ? null : <span>{source}</span>}
         </MessageHeader>
         <Bubble variant={isOperator ? "default" : "muted"}>
-          <BubbleContent className="whitespace-pre-wrap">
-            {message.body}
+          <BubbleContent className="px-3 py-2 text-[0.8125rem]/relaxed">
+            {isOperator ? (
+              <p className="whitespace-pre-wrap">{message.body}</p>
+            ) : (
+              <Markdown>{message.body}</Markdown>
+            )}
           </BubbleContent>
         </Bubble>
       </MessageContent>

@@ -64,7 +64,7 @@ interface TaskPeekProps {
  * them when one open task is swapped for another.
  */
 const TaskPeek = ({ onClosed, taskId }: TaskPeekProps) => {
-  const [tab, setTab] = useState<TaskTab>("comments");
+  const [tab, setTab] = useState<TaskTab>("details");
   const [runId, setRunId] = useState<RunId | undefined>(undefined);
 
   const selectRun = useCallback((next: RunId) => {
@@ -73,10 +73,10 @@ const TaskPeek = ({ onClosed, taskId }: TaskPeekProps) => {
   }, []);
 
   return (
-    // The scroll container the tab bar sticks to, and the reason its padding is
-    // spelled on the sides rather than all round: the sticky bar has to reach
-    // the top of the scrolled area, not stop a gap short of it.
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pt-5 pb-8">
+    // The panel's own box, not a scroll container: the body inside decides what
+    // scrolls, so the conversation can keep its footing at the bottom of the
+    // sheet instead of below however many messages there are.
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col p-4 sm:p-5">
       <TaskDetailView
         onClose={onClosed}
         onDeleted={onClosed}

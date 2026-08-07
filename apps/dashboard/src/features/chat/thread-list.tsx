@@ -162,9 +162,12 @@ const ThreadRow = ({ isActive, onOpenThread, thread }: ThreadRowProps) => {
   return (
     <SidebarMenuItem>
       <SidebarMenuButton isActive={isActive} onClick={open} tooltip={label}>
-        <span className="flex-1 truncate">{label}</span>
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {/* The badge keeps its size and the title gives way, rather than the two splitting the row and a long title pushing the badge off the end. */}
         {thread.isCurrent ? (
-          <span className="text-[0.625rem] text-muted-foreground">current</span>
+          <span className="shrink-0 text-[0.625rem] text-muted-foreground">
+            current
+          </span>
         ) : null}
       </SidebarMenuButton>
       <DropdownMenu>

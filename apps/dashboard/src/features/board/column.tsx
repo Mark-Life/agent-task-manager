@@ -49,12 +49,16 @@ interface FrameProps {
 const Frame = ({ children, className, count, ref, status }: FrameProps) => (
   <section
     className={cn(
-      "flex min-h-0 min-w-56 flex-1 flex-col gap-2 rounded-lg p-1 transition-colors",
+      // Almost the whole width on a phone, so one column is what is being read
+      // and the sliver of the next is the hint that there are more; from `sm`
+      // up the five share the width and stop being a carousel.
+      "flex min-h-0 w-[86%] shrink-0 snap-start flex-col gap-2 rounded-lg p-1 transition-colors sm:w-auto sm:min-w-56 sm:flex-1 sm:shrink",
       className
     )}
     ref={ref}
   >
-    <header className="flex items-center justify-between px-1">
+    {/* Outside the scrolling body below, so the status and its count stay on screen however far down the column is read. */}
+    <header className="flex shrink-0 items-center justify-between px-1">
       <span className="flex items-center gap-2 font-medium text-xs">
         <StatusDot status={status} />
         {STATUS_LABELS[status]}
@@ -107,7 +111,8 @@ export const Column = ({
       status={status}
     >
       {/* The 1px bleed is for the cards' ring: a ring is a shadow drawn outside the card's box, and a scrolling box clips whatever crosses its edge, so without it every card loses its ring on both sides. */}
-      <div className="-m-px flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-px">
+      {/* `overscroll-contain` keeps a flick that reaches the end of this column from being handed to the strip behind it, which on a phone is how a vertical gesture ends up scrolling sideways. */}
+      <div className="-m-px flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-contain p-px">
         <SortableContext items={ids} strategy={verticalListSortingStrategy}>
           {tasks.map((task) => (
             <TaskCard

@@ -1,61 +1,59 @@
-import { File01Icon } from "@hugeicons/core-free-icons";
+import { Download04Icon, File01Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { useQuery } from "@tanstack/react-query";
 import type { Artifact } from "@workspace/api";
-import { PROMOTION_SCOPES } from "@workspace/api";
-import type { TaskId } from "@workspace/domain";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@workspace/ui/components/alert-dialog";
+import type { ArtifactId, TaskId } from "@workspace/domain";
 import { Badge } from "@workspace/ui/components/badge";
 import { Button } from "@workspace/ui/components/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@workspace/ui/components/collapsible";
 import { Input } from "@workspace/ui/components/input";
 import {
-  NativeSelect,
-  NativeSelectOption,
-} from "@workspace/ui/components/native-select";
-import { type ChangeEvent, useCallback, useState } from "react";
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from "@workspace/ui/components/item";
+import { type ChangeEvent, useCallback, useMemo, useState } from "react";
 import {
   artifactContentUrl,
   artifactsQuery,
-  usePromoteArtifact,
   useUploadArtifact,
 } from "@/api/artifacts";
 import { EmptyState } from "@/components/empty-state";
 import { Pending } from "@/components/query-state";
-import { ArtifactPreview, rendererFor } from "@/features/task/artifact-preview";
+import { FileViewer } from "@/features/task/file-viewer";
 import { failureText } from "@/lib/failure";
-import { formatRelative } from "@/lib/format";
-
-/** How many bytes go in a kilobyte, for a size a person reads rather than counts. */
-const KILO = 1024;
-
-const formatBytes = (bytes: number) =>
-  bytes < KILO ? `${bytes} B` : `${Math.round(bytes / KILO)} kB`;
+import { formatBytes, formatRelative } from "@/lib/format";
 
 /**
- * The files a run kept, newest write first, with the one verb that outlives the
- * task: promotion.
+ * The files a run kept, newest write first.
  *
- * Only the task's own folder is writable — the project's and the global folder
- * are read-only mounts to every run — so promoting is how material survives the
- * task that produced it, and the copy is deliberate rather than a side effect
- * of writing to a shared path.
+ * A list and nothing more: names, sizes, when they changed. Everything anybody
+ * does to a file — reading it, editing it, promoting it out of the task —
+ * happens after they have opened one, which is the shape every file browser
+ * already has and the reason a row carries no panel of its own.
+ *
+ * Which file is open is local state rather than an address: a file is a thing
+ * inside a task, not a place, and the task's own URL already says where the
+ * reader is.
  */
 export const TaskArtifacts = ({ taskId }: { readonly taskId: TaskId }) => {
   const artifacts = useQuery(artifactsQuery(taskId));
+  const [openId, setOpenId] = useState<ArtifactId | null>(null);
+
+  // Read out of the list rather than held as a copy, so a row that changes
+  // under an open viewer — a promotion, a save — is the row the viewer shows.
+  const open = useMemo(
+    () => artifacts.data?.find((file) => file.id === openId) ?? null,
+    [artifacts.data, openId]
+  );
+
+  const close = useCallback((next: boolean) => {
+    if (!next) {
+      setOpenId(null);
+    }
+  }, []);
 
   return (
     <section className="flex flex-col gap-5">
@@ -68,140 +66,88 @@ export const TaskArtifacts = ({ taskId }: { readonly taskId: TaskId }) => {
         />
       ) : null}
       {artifacts.data === undefined || artifacts.data.length === 0 ? null : (
-        <ul className="flex flex-col gap-2">
+        <ItemGroup className="gap-0.5">
           {artifacts.data.map((artifact) => (
             <ArtifactRow
               artifact={artifact}
               key={artifact.id}
+              onOpen={setOpenId}
               taskId={taskId}
             />
           ))}
-        </ul>
+        </ItemGroup>
       )}
       <Uploader taskId={taskId} />
+      <FileViewer artifact={open} onOpenChange={close} taskId={taskId} />
     </section>
   );
 };
 
 interface RowProps {
   readonly artifact: Artifact;
+  readonly onOpen: (artifactId: ArtifactId) => void;
   readonly taskId: TaskId;
 }
 
 /**
- * One file: what it is, and the things that can be done with it.
+ * One file on one line.
+ *
+ * The row is the button that opens it, so the whole line is the target rather
+ * than a word in it. Download stays here as a mark at the end: it is the one
+ * thing somebody wants without looking inside first, and it is a link rather
+ * than a button so the browser's own "save as" and middle-click still work.
  *
  * The badge says only "promoted", never where to: a promotion stamps this row
  * and writes the destination onto the copy, and the copy belongs to a folder
  * this list does not read. Naming a destination here could only be a guess.
  */
-const ArtifactRow = ({ artifact, taskId }: RowProps) => {
-  const renderer = rendererFor(artifact.ext);
-  const href = artifactContentUrl(taskId, artifact.id);
+const ArtifactRow = ({ artifact, onOpen, taskId }: RowProps) => {
+  const open = useCallback(() => onOpen(artifact.id), [artifact.id, onOpen]);
 
   return (
-    <li className="flex flex-col gap-1.5 rounded-lg border bg-card p-3 text-xs">
-      <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
-        <span className="font-medium font-mono text-foreground text-sm">
-          {artifact.path}
-        </span>
-        <span>{formatBytes(artifact.bytes)}</span>
-        <span>{formatRelative(artifact.modifiedAt)}</span>
+    <Item
+      className="hover:bg-muted/50"
+      onClick={open}
+      render={<button type="button" />}
+      size="xs"
+    >
+      <ItemMedia variant="icon">
+        <HugeiconsIcon icon={File01Icon} strokeWidth={2} />
+      </ItemMedia>
+      <ItemContent className="min-w-0">
+        <ItemTitle className="w-full min-w-0">
+          <span className="truncate font-mono" title={artifact.path}>
+            {artifact.path}
+          </span>
+        </ItemTitle>
+      </ItemContent>
+      <ItemActions className="shrink-0 gap-2 text-muted-foreground text-xs">
         {artifact.promotedAt === null ? null : (
           <Badge variant="outline">promoted</Badge>
         )}
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
+        <span className="tabular-nums">{formatBytes(artifact.bytes)}</span>
+        <span className="max-sm:hidden">
+          {formatRelative(artifact.modifiedAt)}
+        </span>
         <Button
+          aria-label={`Download ${artifact.path}`}
           nativeButton={false}
-          render={<a download href={href} />}
-          size="xs"
-          variant="outline"
+          // The row is a button and this sits inside it, so the click has to
+          // stop here or downloading would also open the viewer behind it.
+          onClick={stopPropagation}
+          render={<a download href={artifactContentUrl(taskId, artifact.id)} />}
+          size="icon-xs"
+          variant="ghost"
         >
-          Download
+          <HugeiconsIcon icon={Download04Icon} strokeWidth={2} />
         </Button>
-        {artifact.promotedAt === null ? (
-          <PromoteDialog artifact={artifact} taskId={taskId} />
-        ) : null}
-        {renderer === "download" ? null : (
-          <Collapsible>
-            <CollapsibleTrigger render={<Button size="xs" variant="ghost" />}>
-              Preview
-            </CollapsibleTrigger>
-            <CollapsibleContent className="pt-2">
-              <ArtifactPreview
-                artifact={artifact}
-                renderer={renderer}
-                taskId={taskId}
-              />
-            </CollapsibleContent>
-          </Collapsible>
-        )}
-      </div>
-    </li>
+      </ItemActions>
+    </Item>
   );
 };
 
-/**
- * Promotion, behind a confirmation and a choice of destination.
- *
- * It copies the bytes rather than pointing at them, so a later edit to this
- * file cannot retroactively change what another task worked from, and it can
- * only happen once — which is why the button disappears afterwards instead of
- * staying live and being refused.
- */
-const PromoteDialog = ({ artifact, taskId }: RowProps) => {
-  const [scope, setScope] =
-    useState<(typeof PROMOTION_SCOPES)[number]>("project");
-  const promote = usePromoteArtifact();
-  const { mutate } = promote;
-
-  const onScope = useCallback((event: ChangeEvent<HTMLSelectElement>) => {
-    setScope(event.target.value === "global" ? "global" : "project");
-  }, []);
-
-  const confirm = useCallback(() => {
-    mutate({ artifactId: artifact.id, scope, taskId });
-  }, [artifact.id, mutate, scope, taskId]);
-
-  return (
-    <AlertDialog>
-      <AlertDialogTrigger render={<Button size="xs" variant="ghost" />}>
-        Promote
-      </AlertDialogTrigger>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Promote {artifact.path}?</AlertDialogTitle>
-          <AlertDialogDescription>
-            A copy is placed in the shared folder and keeps its own record of
-            where it came from. Runs can read those folders and cannot write to
-            them, so the copy stays as it is until somebody promotes over it.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <NativeSelect className="w-full" onChange={onScope} value={scope}>
-          {PROMOTION_SCOPES.map((candidate) => (
-            <NativeSelectOption key={candidate} value={candidate}>
-              {candidate === "project"
-                ? "The project's folder"
-                : "The global folder"}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-        {failureText(promote.error) === null ? null : (
-          <p className="text-destructive text-xs">
-            {failureText(promote.error)}
-          </p>
-        )}
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction disabled={promote.isPending} onClick={confirm}>
-            Promote
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-};
+const stopPropagation = (event: { stopPropagation: () => void }) =>
+  event.stopPropagation();
 
 /**
  * Putting a file into the task's folder by hand. The path is the natural key,

@@ -1,4 +1,9 @@
-import { BubbleChatIcon, FileBlockIcon } from "@hugeicons/core-free-icons";
+import {
+  BubbleChatIcon,
+  FileBlockIcon,
+  Robot01Icon,
+} from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { useQuery } from "@tanstack/react-query";
 import type { AgentSession, Task } from "@workspace/api";
 import type { TaskId } from "@workspace/domain";
@@ -9,6 +14,15 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@workspace/ui/components/collapsible";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from "@workspace/ui/components/item";
 import { sessionsQuery, useTranscript } from "@/api/sessions";
 import { EmptyState } from "@/components/empty-state";
 import { Pending } from "@/components/query-state";
@@ -44,11 +58,11 @@ export const TaskSessions = ({ task }: { readonly task: Task }) => {
   }
 
   return (
-    <ol className="flex flex-col gap-2">
+    <ItemGroup className="gap-1">
       {sessions.data.map((session) => (
         <SessionRow key={session.id} session={session} taskId={task.id} />
       ))}
-    </ol>
+    </ItemGroup>
   );
 };
 
@@ -64,44 +78,53 @@ interface SessionRowProps {
  * runs that a reader cannot account for.
  */
 const SessionRow = ({ session, taskId }: SessionRowProps) => (
-  <li className="flex flex-col gap-1.5 rounded-lg border bg-card p-3 text-xs">
-    <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
-      <span className="font-medium text-foreground text-sm">
-        {session.provider}
-      </span>
-      <Badge variant={session.status === "failed" ? "destructive" : "outline"}>
-        {session.status}
-      </Badge>
-      <span className="font-mono" title={session.id}>
-        {session.id.slice(0, ID_PREFIX)}
-      </span>
-      <span>started {formatRelative(session.createdAt)}</span>
-      {session.endedAt === null ? null : (
-        <span>ended {formatRelative(session.endedAt)}</span>
-      )}
-    </div>
-    {session.errorMessage === null ? null : (
-      <p className="whitespace-pre-wrap text-destructive">
-        {session.errorMessage}
-      </p>
-    )}
-    <Collapsible>
-      <CollapsibleTrigger
-        render={
-          <Button
-            className="-ml-2 text-muted-foreground"
-            size="xs"
-            variant="ghost"
-          />
-        }
-      >
-        Transcript
-      </CollapsibleTrigger>
-      <CollapsibleContent className="pt-2">
-        <SessionTranscript sessionId={session.id} taskId={taskId} />
-      </CollapsibleContent>
-    </Collapsible>
-  </li>
+  <Collapsible className="rounded-md border border-border">
+    <Item size="sm">
+      <ItemMedia variant="icon">
+        <HugeiconsIcon icon={Robot01Icon} strokeWidth={2} />
+      </ItemMedia>
+      <ItemContent>
+        <ItemTitle className="flex-wrap gap-2 text-muted-foreground">
+          <span className="font-medium text-foreground">
+            {session.provider}
+          </span>
+          <Badge
+            variant={session.status === "failed" ? "destructive" : "outline"}
+          >
+            {session.status}
+          </Badge>
+          <span className="font-mono text-[0.625rem]" title={session.id}>
+            {session.id.slice(0, ID_PREFIX)}
+          </span>
+          <span>started {formatRelative(session.createdAt)}</span>
+          {session.endedAt === null ? null : (
+            <span>ended {formatRelative(session.endedAt)}</span>
+          )}
+        </ItemTitle>
+        {session.errorMessage === null ? null : (
+          <ItemDescription className="line-clamp-none whitespace-pre-wrap text-destructive">
+            {session.errorMessage}
+          </ItemDescription>
+        )}
+      </ItemContent>
+      <ItemActions>
+        <CollapsibleTrigger
+          render={
+            <Button
+              className="text-muted-foreground"
+              size="xs"
+              variant="ghost"
+            />
+          }
+        >
+          Transcript
+        </CollapsibleTrigger>
+      </ItemActions>
+    </Item>
+    <CollapsibleContent className="px-3 pb-2.5">
+      <SessionTranscript sessionId={session.id} taskId={taskId} />
+    </CollapsibleContent>
+  </Collapsible>
 );
 
 interface TranscriptProps {

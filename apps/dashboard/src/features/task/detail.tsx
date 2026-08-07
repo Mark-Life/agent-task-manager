@@ -1,15 +1,15 @@
 import {
   BubbleChatIcon,
-  Comment01Icon,
   File01Icon,
+  Note01Icon,
   PlayCircleIcon,
+  Robot01Icon,
 } from "@hugeicons/core-free-icons";
 import type { IconSvgElement } from "@hugeicons/react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useQuery } from "@tanstack/react-query";
 import type { TaskDetail } from "@workspace/api";
 import type { RunId, TaskId } from "@workspace/domain";
-import { Separator } from "@workspace/ui/components/separator";
 import {
   Tabs,
   TabsContent,
@@ -24,10 +24,9 @@ import { taskQuery } from "@/api/tasks";
 import { Failed, Pending } from "@/components/query-state";
 import { TaskActions } from "@/features/task/actions";
 import { TaskArtifacts } from "@/features/task/artifacts";
-import { TaskBrief } from "@/features/task/brief";
-import { TaskComments } from "@/features/task/comments";
+import { TaskDetails } from "@/features/task/details";
 import { TaskHeader } from "@/features/task/header";
-import { TaskProperties } from "@/features/task/properties";
+import { TaskMessages } from "@/features/task/messages";
 import { TaskRuns, useCurrentRun } from "@/features/task/runs";
 import { TaskSessions } from "@/features/task/sessions";
 import { RunTimeline } from "@/features/task/timeline";
@@ -39,9 +38,10 @@ const TASK_POLL_MS = 5000;
 /** What each panel is called, and the mark it is recognised by. */
 const TAB_FACES: Record<TaskTab, { icon: IconSvgElement; label: string }> = {
   artifacts: { icon: File01Icon, label: "Files" },
-  comments: { icon: Comment01Icon, label: "Comments" },
+  details: { icon: Note01Icon, label: "Details" },
+  messages: { icon: BubbleChatIcon, label: "Messages" },
   runs: { icon: PlayCircleIcon, label: "Runs" },
-  sessions: { icon: BubbleChatIcon, label: "Sessions" },
+  sessions: { icon: Robot01Icon, label: "Sessions" },
 };
 
 /**
@@ -61,8 +61,11 @@ const isUnsettled = (detail: TaskDetail) =>
  * counts are read here, above the tabs, which also means the panel a reader
  * switches to is already in the cache and draws without a skeleton. Undefined
  * until the list arrives, so a count never flashes zero on the way to five.
+ *
+ * Details is absent on purpose: a task has one brief, and "1" beside it counts
+ * nothing a reader was wondering about.
  */
-const useTabCounts = (taskId: TaskId): Record<TaskTab, number | undefined> => {
+const useTabCounts = (taskId: TaskId): Partial<Record<TaskTab, number>> => {
   const artifacts = useQuery(artifactsQuery(taskId));
   const comments = useQuery(commentsQuery(taskId));
   const runs = useQuery(runsQuery(taskId));
@@ -70,7 +73,7 @@ const useTabCounts = (taskId: TaskId): Record<TaskTab, number | undefined> => {
 
   return {
     artifacts: artifacts.data?.length,
-    comments: comments.data?.length,
+    messages: comments.data?.length,
     runs: runs.data?.length,
     sessions: sessions.data?.length,
   };
@@ -134,15 +137,19 @@ interface TaskDetailViewProps {
  *
  * The task is read in one place here and handed down, so the header, the
  * property rows, the buttons and the brief cannot disagree about what status
- * the task is in or whether a run is on it. What is behind a tab is the
- * material a reader goes looking for rather than the state they need at a
- * glance, which stays above.
+ * the task is in or whether a run is on it.
  *
- * The body reads top to bottom as what the task is, then what it asks for, then
- * what has happened to it, with a rule between each — three questions rather
- * than one column of everything. The tab bar sticks to the top of whatever is
- * scrolling, because a long conversation otherwise scrolls the only way out of
- * itself off the screen.
+ * Two parts, not three: a fixed head — what the task is called, where it sits,
+ * what can be done to the run on it — and one panel under the tab strip that
+ * takes the whole of the rest and scrolls inside itself. The brief and the
+ * property rows are a panel now like any other, which is what lets the head
+ * stay short: they used to stand above the strip, so opening a task with a long
+ * brief meant scrolling past it to reach the conversation every time.
+ *
+ * The panel is unframed. A card inside a sheet is a border inside a border, and
+ * with the tab strip's own rule under it the reader was being shown three
+ * nested edges to be told one thing — that this is the part that changes when
+ * you pick a tab, which the strip already says.
  */
 export const TaskDetailView = ({
   onClose,
@@ -178,25 +185,32 @@ export const TaskDetailView = ({
   }
 
   return (
-    <>
-      <TaskHeader
-        detail={detail.data}
-        onClose={onClose}
-        onDeleted={onDeleted}
-      />
-      <TaskActions detail={detail.data} />
+    // `min-w-0` all the way down: a flex item defaults to `min-width: auto`, so
+    // without it any row that cannot fit — a tab strip, a file path — widens
+    // this column instead of scrolling inside itself, and on a phone the whole
+    // panel slides off the side of the screen.
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+      {/* The head keeps its height: it is two lines and a row of verbs, and
+          nothing here is worth taking from the panel below. */}
+      <div className="flex min-w-0 shrink-0 flex-col gap-3">
+        <TaskHeader detail={detail.data} onClose={onClose} />
+        <TaskActions detail={detail.data} />
+      </div>
 
-      {/* The rules sit closer to what they divide than the column's own rhythm
-          would put them: a full gap on each side of a hairline reads as two
-          gaps, and the top of this panel is mostly gap already. */}
-      <Separator className="-my-1" />
-      <TaskProperties task={detail.data.task} />
+      <Tabs
+        className="flex min-h-96 min-w-0 flex-1 flex-col gap-0 overflow-hidden"
+        onValueChange={onSelectTab}
+        value={tab}
+      >
+        {/* The active tab is marked by a rule two pixels under it, which is
+            what the bottom padding lines up with the border for — one line, not
+            two parallel ones.
 
-      <Separator className="-my-1" />
-      <TaskBrief task={detail.data.task} />
-
-      <Tabs className="gap-0" onValueChange={onSelectTab} value={tab}>
-        <div className="sticky top-0 z-10 bg-background pt-2 pb-1">
+            Five names and their counts do not fit across a phone, so the strip
+            scrolls sideways rather than growing the panel. Its scrollbar is
+            hidden: the row is one line tall and a bar under it would sit on the
+            active tab's mark. */}
+        <div className="flex min-w-0 shrink-0 items-center overflow-x-auto border-border border-b pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <TabsList className="w-full justify-start" variant="line">
             {TASK_TABS.map((name) => (
               <TabsTrigger className="flex-none" key={name} value={name}>
@@ -207,7 +221,27 @@ export const TaskDetailView = ({
             ))}
           </TabsList>
         </div>
-        <TabsContent className="pt-5" value="runs">
+
+        {/* Messages fill the body and hold their own scroller and their own
+            box to type into, so this panel only makes room. The rest scroll as
+            ordinary content, with `pr` leaving the scrollbar its own lane so
+            the text does not shift when one appears. */}
+        <TabsContent
+          className="min-h-0 min-w-0 flex-1 overflow-y-auto py-4 pr-1"
+          value="details"
+        >
+          <TaskDetails onDeleted={onDeleted} task={detail.data.task} />
+        </TabsContent>
+        <TabsContent
+          className="flex min-h-0 min-w-0 flex-1 flex-col"
+          value="messages"
+        >
+          <TaskMessages taskId={taskId} />
+        </TabsContent>
+        <TabsContent
+          className="min-h-0 min-w-0 flex-1 overflow-y-auto py-4 pr-1"
+          value="runs"
+        >
           <RunsPanel
             liveRunId={detail.data.liveRunId}
             onSelectRun={onSelectRun}
@@ -215,16 +249,19 @@ export const TaskDetailView = ({
             taskId={taskId}
           />
         </TabsContent>
-        <TabsContent className="pt-5" value="comments">
-          <TaskComments taskId={taskId} />
-        </TabsContent>
-        <TabsContent className="pt-5" value="sessions">
+        <TabsContent
+          className="min-h-0 min-w-0 flex-1 overflow-y-auto py-4 pr-1"
+          value="sessions"
+        >
           <TaskSessions task={detail.data.task} />
         </TabsContent>
-        <TabsContent className="pt-5" value="artifacts">
+        <TabsContent
+          className="min-h-0 min-w-0 flex-1 overflow-y-auto py-4 pr-1"
+          value="artifacts"
+        >
           <TaskArtifacts taskId={taskId} />
         </TabsContent>
       </Tabs>
-    </>
+    </div>
   );
 };

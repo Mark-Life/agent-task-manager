@@ -16,14 +16,25 @@ interface NewTaskProps {
  * first changed value is the decision to keep it, and is what the draft
  * sends — there is no "File it" to press, because there is no form to be
  * wrong with in the meantime.
+ *
+ * On a narrow screen the label drops and the plus stands alone, so the whole
+ * toolbar keeps to one row. The accessible name stays either way.
  */
 export const NewTask = ({ onOpen }: NewTaskProps) => {
   const open = useCallback(() => onOpen(), [onOpen]);
 
   return (
-    <Button onClick={open} size="sm" variant="outline">
+    <Button
+      aria-label="New task"
+      // Square while the label is hidden: the row's other icon buttons are
+      // 28px across, and the default padding would leave this one wider than
+      // it is tall.
+      className="shrink-0 max-md:size-7 max-md:px-0"
+      onClick={open}
+      variant="outline"
+    >
       <HugeiconsIcon icon={PlusSignIcon} strokeWidth={2} />
-      New task
+      <span className="hidden md:inline">New task</span>
     </Button>
   );
 };

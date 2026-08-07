@@ -1,6 +1,7 @@
 import { LinkBackwardIcon } from "@hugeicons/core-free-icons";
 import { createRoute } from "@tanstack/react-router";
 import type { RunId, TaskId } from "@workspace/domain";
+import { SidebarTrigger } from "@workspace/ui/components/sidebar";
 import { useCallback } from "react";
 import { EmptyState } from "@/components/empty-state";
 import { RouteError } from "@/components/error-boundary";
@@ -65,7 +66,16 @@ const TaskPage = ({ runId, tab, taskId }: TaskPageProps) => {
   }, [navigate]);
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-6 py-8">
+    // Bounded rather than growing, for the same reason the overlay is: the
+    // conversation panel below holds its own scroller and the box to type into,
+    // and both need a height to sit in.
+    <div className="mx-auto flex h-full min-h-0 w-full min-w-0 max-w-4xl flex-col px-4 py-4 sm:px-6 sm:py-6">
+      {/*
+        The task's own header is shared with the overlay, which opens over a
+        page that already has this button — so the trigger sits here, on the
+        page, rather than in there.
+      */}
+      <SidebarTrigger className="mb-2 shrink-0 self-start md:hidden" />
       <TaskDetailView
         onDeleted={goToBoard}
         onSelectRun={selectRun}
@@ -101,7 +111,7 @@ const TaskScreen = () => {
     );
   }
 
-  return <TaskPage runId={runId} tab={tab ?? "comments"} taskId={parsed} />;
+  return <TaskPage runId={runId} tab={tab ?? "details"} taskId={parsed} />;
 };
 
 /**
