@@ -40,6 +40,7 @@ export { RunsGroup } from "./groups/runs";
 export { SessionsGroup } from "./groups/sessions";
 export { TasksGroup } from "./groups/tasks";
 export { ThreadsGroup } from "./groups/threads";
+export { UsageGroup } from "./groups/usage";
 export {
   Artifact,
   ArtifactPromotion,
@@ -97,6 +98,7 @@ export {
   ThreadMessagePosted,
   ThreadPatch,
 } from "./schemas/thread";
+export { ProviderUsageSnapshot } from "./schemas/usage";
 export {
   AdminAccess,
   AdminToken,

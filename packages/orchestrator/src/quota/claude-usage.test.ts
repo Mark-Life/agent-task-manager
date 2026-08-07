@@ -27,6 +27,10 @@ describe("parseOauthUsage", () => {
       Date.parse("2026-06-16T14:30:00.351191+00:00")
     );
     expect(usage.reachedWindow).toBeNull();
+    // The span is stated by this body in its key names, and read as a number so
+    // whoever renders the figure can say which window it belongs to.
+    expect(usage.primary?.windowSeconds).toBe(18_000);
+    expect(usage.secondary?.windowSeconds).toBe(604_800);
   });
 
   test("a per-model weekly window can be the binding one", () => {
@@ -112,17 +116,20 @@ const withTempAuth = (contents: string | null) => {
     writeFileSync(authPath, contents);
   }
   return {
-    authPath,
+    agentHomeDir: dir,
     cleanup: () => rmSync(dir, { force: true, recursive: true }),
   };
 };
 
-const readUsage = (options: ClaudeUsageOptions) =>
+const readUsage = (input: {
+  readonly agentHomeDir: string;
+  readonly options: ClaudeUsageOptions;
+}) =>
   Effect.runPromise(
     Effect.gen(function* () {
       const fs = yield* FileSystem;
       const http = yield* HttpClient.HttpClient;
-      return yield* fetchClaudeUsage({ fs, http, options });
+      return yield* fetchClaudeUsage({ ...input, fs, http });
     }).pipe(
       Effect.provide(BunFileSystem.layer),
       Effect.provide(FetchHttpClient.layer)
@@ -131,9 +138,12 @@ const readUsage = (options: ClaudeUsageOptions) =>
 
 describe("fetchClaudeUsage", () => {
   test("a missing credentials file fails open rather than failing the dispatch", async () => {
-    const { authPath, cleanup } = withTempAuth(null);
+    const { agentHomeDir, cleanup } = withTempAuth(null);
     try {
-      const usage = await readUsage({ authPath, url: "http://127.0.0.1:1/" });
+      const usage = await readUsage({
+        agentHomeDir,
+        options: { url: "http://127.0.0.1:1/" },
+      });
       expect(usage.available).toBe(false);
       expect(usage.limitReached).toBe(false);
     } finally {
@@ -142,9 +152,14 @@ describe("fetchClaudeUsage", () => {
   });
 
   test("a credentials file with no token fails open too", async () => {
-    const { authPath, cleanup } = withTempAuth(JSON.stringify({ other: 1 }));
+    const { agentHomeDir, cleanup } = withTempAuth(
+      JSON.stringify({ other: 1 })
+    );
     try {
-      const usage = await readUsage({ authPath, url: "http://127.0.0.1:1/" });
+      const usage = await readUsage({
+        agentHomeDir,
+        options: { url: "http://127.0.0.1:1/" },
+      });
       expect(usage.available).toBe(false);
     } finally {
       cleanup();
@@ -152,15 +167,15 @@ describe("fetchClaudeUsage", () => {
   });
 
   test("an unreachable endpoint fails open with a token in hand", async () => {
-    const { authPath, cleanup } = withTempAuth(
+    const { agentHomeDir, cleanup } = withTempAuth(
       JSON.stringify({ claudeAiOauth: { accessToken: "test-token" } })
     );
     try {
       const usage = await readUsage({
-        authPath,
+        agentHomeDir,
         // Port 1 refuses immediately, so this is a connection failure and not a
         // test that waits on a timeout.
-        url: "http://127.0.0.1:1/usage",
+        options: { url: "http://127.0.0.1:1/usage" },
       });
       expect(usage.available).toBe(false);
     } finally {

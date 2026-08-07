@@ -92,6 +92,7 @@ bun run loop:check           # dispatch to terminus   --docker contained, --live
 bun run gateway:check        # a task's lifecycle over HTTP
 bun run bot:check            # the bot's handlers, with no token and no Telegram call
 bun run github:check         # what the agents' GitHub credential may do; add owner/name
+bun run quota:check          # what is left on both subscriptions, per window
 ```
 
 A claim that stops holding is a named line, not a diff in a five-hundred-line program.

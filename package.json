@@ -50,6 +50,7 @@
     "harness:check": "bun run scripts/harness-check.ts",
     "sandbox:check": "bun run scripts/sandbox-check.ts",
     "loop:check": "bun run scripts/loop-check.ts",
+    "quota:check": "bun run scripts/quota-check.ts",
     "dashboard:dev": "turbo dev --filter=gateway --filter=dashboard",
     "dashboard:build": "bun run --cwd apps/dashboard build",
     "dashboard:publish": "rsync -a --delete apps/dashboard/dist/ \"${ATM_DASHBOARD_ROOT:?set it to the directory Caddy serves the dashboard from}\"/",
