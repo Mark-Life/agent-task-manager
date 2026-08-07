@@ -1,3 +1,5 @@
+import type { TaskId } from "@workspace/domain";
+
 /** A GitHub pull request path, which is the link this app carries most often. */
 const PR_PATH = /^\/([^/]+\/[^/]+)\/pull\/(\d+)\/?$/;
 
@@ -6,6 +8,23 @@ const WWW = /^www\./;
 
 /** A trailing slash carries no information in a link a person is reading. */
 const TRAILING_SLASH = /\/$/;
+
+/**
+ * Where a task lives, as a link that can be handed to someone else.
+ *
+ * `/tasks/<taskId>` is a contract, not a preference: the Telegram bot builds
+ * the same address, and the manager agent reads a task out of one — so this is
+ * spelled the way `taskRoute` and the bot spell it, and carries the id
+ * verbatim. Whole URL rather than the bare uuid because the two readers want
+ * different halves of it: a person clicks it, an agent parses the id back out.
+ *
+ * The origin is a parameter so this stays a function of its inputs; in the app
+ * it is whichever host the reader already has open.
+ */
+export const taskUrl = (
+  taskId: TaskId,
+  origin: string = window.location.origin
+) => `${origin.replace(TRAILING_SLASH, "")}/tasks/${taskId}`;
 
 /**
  * Whether this text is something a browser can open in a new tab.

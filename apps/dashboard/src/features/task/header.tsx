@@ -6,10 +6,12 @@ import { Button } from "@workspace/ui/components/button";
 import { Spinner } from "@workspace/ui/components/spinner";
 import { useCallback } from "react";
 import { usePatchTask } from "@/api/tasks";
+import { CopyButton } from "@/components/copy-button";
 import { InlineText } from "@/features/task/inline";
 import { StatusSelect } from "@/features/task/status-select";
 import { failureText } from "@/lib/failure";
 import { formatRelative } from "@/lib/format";
+import { taskUrl } from "@/lib/url";
 
 interface TaskHeaderProps {
   readonly detail: TaskDetail;
@@ -29,6 +31,10 @@ interface TaskHeaderProps {
  * rather than down among the property rows because it is the one field a reader
  * both checks at a glance and changes most often, and the panel below it can be
  * showing anything.
+ *
+ * The action row carries the ways out of the panel and the one way to take the
+ * task somewhere else: a copy of its address, which is how a person hands this
+ * exact task to the manager agent in chat.
  *
  * Deletion is not in this row. It used to sit a few pixels from the close
  * button, where a missed tap on a phone deleted the task instead of shutting
@@ -71,6 +77,18 @@ export const TaskHeader = ({ detail, onClose }: TaskHeaderProps) => {
               Pull request
             </Button>
           )}
+          {/*
+            The address of this task, for pasting into a message to the manager
+            agent: a title drifts when it is edited and reads the same as the
+            next card, an id resolves to exactly one task. Icon-only and ghost
+            so it stays quiet next to the close button, and sized to match it
+            because both are hit with a thumb.
+          */}
+          <CopyButton
+            label="Copy link to this task"
+            size="icon-lg"
+            value={taskUrl(task.id)}
+          />
           {onClose === undefined ? null : (
             // The one target on this panel every reader hits, and on a phone it
             // is hit with a thumb: sized up now that nothing destructive sits
