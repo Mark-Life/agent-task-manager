@@ -12,7 +12,7 @@
     "@base-ui/react": "^1.6.0",
     "@hugeicons/core-free-icons": "^4.2.2",
     "@hugeicons/react": "^1.1.9",
-    "@shadcn/react": "^0.2.1",
+    "@shadcn/react": "^0.3.0",
     "@tanstack/highlight": "^0.0.10",
     "@tanstack/markdown": "^0.0.13",
     "class-variance-authority": "^0.7.1",
