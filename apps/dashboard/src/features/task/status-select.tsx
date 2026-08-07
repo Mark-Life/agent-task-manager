@@ -1,16 +1,96 @@
 import type { Task } from "@workspace/api";
 import { TASK_STATUSES, type TaskStatus } from "@workspace/domain";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select";
+import { cn } from "@workspace/ui/lib/utils";
 import { useCallback, useMemo } from "react";
 import { useTransitionTask } from "@/api/tasks";
-import { STATUS_LABELS } from "@/features/task/task-fields";
+import { PropertySelect } from "@/features/task/property-select";
 import { failureText } from "@/lib/failure";
+
+/**
+ * How each column is written wherever a status is shown to a person. The stored
+ * values are snake_case identifiers, and reading `in_progress` off a screen is
+ * a small tax charged every time; one table pays it once, and every surface
+ * that names a column agrees with every other.
+ */
+export const STATUS_LABELS = {
+  backlog: "Backlog",
+  done: "Done",
+  ideas: "Ideas",
+  in_progress: "In progress",
+  review: "Review",
+} as const satisfies Record<TaskStatus, string>;
+
+/**
+ * The colour each column is recognised by.
+ *
+ * Five labels in one list are read word by word; five colours are read at a
+ * glance, and the order they run in — cool for the ideas nobody has started,
+ * warm for the work waiting on a person, green for finished — is the board's
+ * own left-to-right order. The map is one place so the dot on a column heading
+ * and the dot in the status picker can never disagree.
+ */
+export const STATUS_TONES = {
+  backlog: "bg-slate-400",
+  done: "bg-emerald-500",
+  ideas: "bg-violet-400",
+  in_progress: "bg-sky-500",
+  review: "bg-amber-500",
+} as const satisfies Record<TaskStatus, string>;
+
+/** The status as a colour, for the places that already say the word beside it. */
+export const StatusDot = ({
+  className,
+  status,
+}: {
+  readonly className?: string;
+  readonly status: TaskStatus;
+}) => (
+  <span
+    aria-hidden="true"
+    className={cn(
+      "size-2 shrink-0 rounded-full",
+      STATUS_TONES[status],
+      className
+    )}
+  />
+);
+
+interface StatusPickerProps {
+  readonly disabled?: boolean;
+  readonly onChange: (status: TaskStatus) => void;
+  readonly value: TaskStatus;
+}
+
+/**
+ * A column, chosen. The control with no opinion about what choosing means:
+ * the task body sends a transition, the draft panel only remembers, and both
+ * spell the five columns the same way because there is one list.
+ */
+export const StatusPicker = ({
+  disabled = false,
+  onChange,
+  value,
+}: StatusPickerProps) => {
+  const items = useMemo(
+    () =>
+      TASK_STATUSES.map((status) => ({
+        label: STATUS_LABELS[status],
+        tone: STATUS_TONES[status],
+        value: status,
+      })),
+    []
+  );
+
+  return (
+    <PropertySelect
+      ariaLabel="Task status"
+      disabled={disabled}
+      items={items}
+      onChange={onChange}
+      value={value}
+    />
+  );
+};
 
 interface StatusSelectProps {
   /** Whether something else on the page is already writing to this task. */
@@ -41,18 +121,9 @@ export const StatusSelect = ({ busy = false, task }: StatusSelectProps) => {
   const transition = useTransitionTask();
   const { mutate } = transition;
 
-  const items = useMemo(
-    () =>
-      TASK_STATUSES.map((status) => ({
-        label: STATUS_LABELS[status],
-        value: status,
-      })),
-    []
-  );
-
-  const onValueChange = useCallback(
-    (next: TaskStatus | null) => {
-      if (next === null || next === task.status) {
+  const onChange = useCallback(
+    (next: TaskStatus) => {
+      if (next === task.status) {
         return;
       }
       mutate({ taskId: task.id, to: next });
@@ -63,23 +134,12 @@ export const StatusSelect = ({ busy = false, task }: StatusSelectProps) => {
   const failed = failureText(transition.error);
 
   return (
-    <div className="flex items-center gap-2">
-      <Select items={items} onValueChange={onValueChange} value={task.status}>
-        <SelectTrigger
-          aria-label="Task status"
-          className="w-40"
-          disabled={busy || transition.isPending}
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {items.map((item) => (
-            <SelectItem key={item.value} value={item.value}>
-              {item.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+    <div className="flex flex-col gap-1">
+      <StatusPicker
+        disabled={busy || transition.isPending}
+        onChange={onChange}
+        value={task.status}
+      />
       {failed === null ? null : (
         <p className="text-destructive text-xs">{failed}</p>
       )}

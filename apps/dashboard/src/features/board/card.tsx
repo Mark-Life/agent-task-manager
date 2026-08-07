@@ -14,7 +14,7 @@ import {
 import { Spinner } from "@workspace/ui/components/spinner";
 import { cn } from "@workspace/ui/lib/utils";
 import { DateTime } from "effect";
-import { useCallback } from "react";
+import { type MouseEvent as ReactMouseEvent, useCallback } from "react";
 import { formatAbsolute } from "@/lib/format";
 
 /** What a card knows about itself, plus the two things only the board can tell it. */
@@ -73,6 +73,9 @@ const runMarker = (task: Task, live: boolean) => {
   return <Badge variant="outline">waiting</Badge>;
 };
 
+/** The card around it opens the task, so a link inside keeps its click to itself. */
+const keepClick = (event: ReactMouseEvent) => event.stopPropagation();
+
 /**
  * A card's face, with no drag machinery attached.
  *
@@ -96,14 +99,20 @@ export const TaskCardFace = ({
     projectName !== null || marker !== null || task.prUrl !== null;
 
   return (
-    <Card className="gap-2" size="sm">
+    // The whole card is the way in, not only the title: the title stays the
+    // control a keyboard or screen reader finds, and the card around it takes
+    // the click a pointer actually aims at. The drag sensor's activation
+    // distance keeps a press from becoming a drag before either happens.
+    // Nothing on a card is selectable. Both of the card's gestures are presses
+    // on the same words, so a press that lingers would otherwise raise the
+    // browser's own text selection over the drag the operator meant — and the
+    // title is not worth selecting here anyway: the task itself is one tap away
+    // and has the whole of it.
+    <Card className="select-none gap-2" onClick={open} size="sm">
       <CardHeader>
         <CardTitle className="text-xs">
-          <button
-            className="line-clamp-3 text-left"
-            onClick={open}
-            type="button"
-          >
+          {/** No handler of its own: the click bubbles up to the card, so pointer and keyboard open the task exactly once. */}
+          <button className="line-clamp-3 text-left" type="button">
             {task.title}
           </button>
         </CardTitle>
@@ -118,6 +127,7 @@ export const TaskCardFace = ({
             <a
               className="inline-flex items-center gap-1 hover:text-foreground"
               href={task.prUrl}
+              onClick={keepClick}
               rel="noreferrer"
               target="_blank"
             >
@@ -149,13 +159,19 @@ export const TaskCard = ({ live, onOpen, projectNames, task }: CardProps) => {
 
   return (
     // The sortable's `attributes` are deliberately not spread here. They exist
-    // to drive a keyboard drag, and the board registers a pointer sensor only —
-    // so all they would contribute is a `role="button"` and a tab stop wrapped
-    // around the title button and the pull request link, which is a control
-    // inside a control and reads to a screen reader as one unusable thing. The
-    // title stays the card's accessible action.
+    // to drive a keyboard drag, and the board registers pointer and touch
+    // sensors only — so all they would contribute is a `role="button"` and a
+    // tab stop wrapped around the title button and the pull request link, which
+    // is a control inside a control and reads to a screen reader as one
+    // unusable thing. The title stays the card's accessible action.
+    //
+    // `touch-manipulation` and not `touch-none`: the sensor waits before it
+    // claims the touch, so the browser must keep panning — a finger that starts
+    // on a card is how the column is scrolled. What it gives up is the
+    // double-tap zoom, whose 300ms wait sat in front of every card opened by
+    // tapping it.
     <div
-      className={cn("touch-none", isDragging && "opacity-30")}
+      className={cn("touch-manipulation", isDragging && "opacity-30")}
       ref={setNodeRef}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       {...listeners}

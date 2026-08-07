@@ -5,12 +5,14 @@ import {
   type DragOverEvent,
   DragOverlay,
   type DragStartEvent,
-  PointerSensor,
+  MouseSensor,
   pointerWithin,
   rectIntersection,
+  TouchSensor,
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
+import { Alert02Icon } from "@hugeicons/core-free-icons";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import type { BoardColumn, Task, TaskDetail } from "@workspace/api";
 import {
@@ -19,12 +21,8 @@ import {
   type TaskId,
   type TaskStatus,
 } from "@workspace/domain";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@workspace/ui/components/empty";
+import { SidebarTrigger } from "@workspace/ui/components/sidebar";
+import { cn } from "@workspace/ui/lib/utils";
 import { type ReactNode, useCallback, useMemo, useState } from "react";
 import { projectsQuery } from "@/api/projects";
 import {
@@ -33,11 +31,13 @@ import {
   usePlaceTask,
   useTransitionTask,
 } from "@/api/tasks";
+import { EmptyState } from "@/components/empty-state";
 import { TaskCardFace } from "@/features/board/card";
 import { Column, ColumnSkeleton } from "@/features/board/column";
 import { BoardFilters } from "@/features/board/filters";
 import { NewTask } from "@/features/board/new-task";
 import { allowedTargets, destinationOf, planDrop } from "@/features/board/rank";
+import { DraftTask } from "@/features/task/draft";
 
 /**
  * How far the pointer travels before a press becomes a drag. Small enough that
@@ -45,6 +45,24 @@ import { allowedTargets, destinationOf, planDrop } from "@/features/board/rank";
  * opens the task rather than nudging it half a pixel down its column.
  */
 const DRAG_DISTANCE = 4;
+
+/**
+ * How long a finger rests on a card before the press becomes a drag.
+ *
+ * A finger has no hover and no second button, so the same touch has to serve
+ * both of the card's gestures and only time can tell them apart: let go before
+ * this and the task opens, hold past it and the card comes up. Long enough that
+ * a tap is never mistaken for a hold, short enough that a hold does not feel
+ * like the board has stopped responding.
+ */
+const TOUCH_HOLD_MS = 250;
+
+/**
+ * How far the finger may wander during that wait before the press is read as a
+ * scroll instead. Without it a column could not be scrolled by a finger that
+ * happens to start on a card, which is most of the column.
+ */
+const TOUCH_TOLERANCE = 6;
 
 /** How often the board re-reads itself while nobody is dragging on it. */
 const BOARD_POLL_MS = 10_000;
@@ -76,12 +94,37 @@ const overOrNear: CollisionDetection = (args) => {
   return under.length > 0 ? under : rectIntersection(args);
 };
 
-/** What the board needs from whoever mounted it: the filter, and where a card leads. */
+/** What the board needs from whoever mounted it: the filters, and where a card leads. */
 interface BoardProps {
   readonly onOpenTask: (taskId: TaskId) => void;
   readonly onProjectChange: (projectId: ProjectId | null) => void;
+  readonly onQueryChange: (query: string) => void;
   readonly projectId: ProjectId | null;
+  readonly query: string;
 }
+
+/**
+ * What a search keeps on screen: cards whose title or brief carries the text,
+ * case and column blind. An empty search keeps everything, and keeps it by
+ * reference, so the rendering below re-reads nothing for a filter nobody set.
+ */
+const filterColumns = (
+  columns: readonly BoardColumn[],
+  query: string
+): readonly BoardColumn[] => {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") {
+    return columns;
+  }
+  return columns.map((column) => ({
+    ...column,
+    tasks: column.tasks.filter(
+      (task) =>
+        task.title.toLowerCase().includes(needle) ||
+        task.brief.toLowerCase().includes(needle)
+    ),
+  }));
+};
 
 const liveIdsOf = (
   results: readonly { readonly data?: TaskDetail | undefined }[]
@@ -115,9 +158,34 @@ const useLiveRuns = (tasks: readonly Task[]) => {
   return useQueries({ combine: liveIdsOf, queries });
 };
 
-/** The five columns, side by side, scrolling sideways rather than shrinking to nothing. */
-const Columns = ({ children }: { readonly children: ReactNode }) => (
-  <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto pb-2">
+/**
+ * The five columns, side by side, scrolling sideways rather than shrinking to
+ * nothing.
+ *
+ * Sideways is the only direction this box scrolls: each column scrolls its own
+ * cards, so the row of headings above them stays where it is and the operator
+ * always knows which column they are reading. On a phone the sideways scroll
+ * snaps, because five columns will not fit whatever is done to them and a
+ * half-column resting under the thumb is the state worth making unreachable.
+ */
+const Columns = ({
+  children,
+  dragging = false,
+}: {
+  readonly children: ReactNode;
+  /**
+   * Snapping is off while a card is in the air. Carrying one to a column that
+   * is off-screen means this strip scrolls under it, and a mandatory snap
+   * fights every one of those scrolls back to the column it came from.
+   */
+  readonly dragging?: boolean;
+}) => (
+  <div
+    className={cn(
+      "flex min-h-0 flex-1 gap-3 overflow-x-auto overflow-y-hidden pb-2",
+      dragging ? "snap-none" : "snap-x snap-mandatory sm:snap-none"
+    )}
+  >
     {children}
   </div>
 );
@@ -140,10 +208,14 @@ const Columns = ({ children }: { readonly children: ReactNode }) => (
 export const Board = ({
   onOpenTask,
   onProjectChange,
+  onQueryChange,
   projectId,
+  query,
 }: BoardProps) => {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overStatus, setOverStatus] = useState<TaskStatus | null>(null);
+  /** The column a draft would file into, or null while no draft is open. */
+  const [drafting, setDrafting] = useState<TaskStatus | null>(null);
   const board = useQuery({
     ...boardQuery(projectId),
     refetchInterval: draggingId === null ? BOARD_POLL_MS : false,
@@ -153,6 +225,13 @@ export const Board = ({
   const { mutate: placeTask } = usePlaceTask();
 
   const columns = board.data ?? NO_COLUMNS;
+  // The search narrows what is drawn; dragging, the live-run reads and the
+  // drop maths keep the full board, so a card a filter hides keeps its place
+  // rather than vanishing from the gesture it is part of.
+  const visibleColumns = useMemo(
+    () => filterColumns(columns, query),
+    [columns, query]
+  );
   const inProgress = useMemo(
     () =>
       columns.find((column) => column.status === "in_progress")?.tasks ?? [],
@@ -178,9 +257,16 @@ export const Board = ({
   );
   const targets = dragged === undefined ? null : allowedTargets(dragged.status);
 
+  // A pointer says what it means by moving; a finger says it by waiting.
   const sensors = useSensors(
-    useSensor(PointerSensor, {
+    useSensor(MouseSensor, {
       activationConstraint: { distance: DRAG_DISTANCE },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: TOUCH_HOLD_MS,
+        tolerance: TOUCH_TOLERANCE,
+      },
     })
   );
 
@@ -231,12 +317,53 @@ export const Board = ({
     [columns, placeTask, transitionTask]
   );
 
+  // Where a new task lands is decided by the button that was pressed: the
+  // toolbar files into ideas, a column's own button files into that column.
+  const openDraft = useCallback(() => setDrafting("ideas"), []);
+  const openDraftIn = useCallback(
+    (status: TaskStatus) => setDrafting(status),
+    []
+  );
+  const closeDraft = useCallback((open: boolean) => {
+    if (!open) {
+      setDrafting(null);
+    }
+  }, []);
+
+  // A filed draft stops being a draft the moment it exists: the panel closes
+  // and the board's own "open a task" gesture takes over with the real id.
+  const filedDraft = useCallback(
+    (taskId: TaskId) => {
+      setDrafting(null);
+      onOpenTask(taskId);
+    },
+    [onOpenTask]
+  );
+
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 p-4">
-      <div className="flex items-center justify-between gap-3">
-        <BoardFilters onProjectChange={onProjectChange} projectId={projectId} />
-        <NewTask onCreated={onOpenTask} />
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-3 p-3 sm:gap-4 sm:p-4">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+        {/* The way back to the sidebar, which on a phone is a sheet over this. */}
+        <SidebarTrigger
+          className="shrink-0 md:hidden"
+          size="icon"
+          variant="outline"
+        />
+        <BoardFilters
+          onProjectChange={onProjectChange}
+          onQueryChange={onQueryChange}
+          projectId={projectId}
+          query={query}
+        />
+        <NewTask onOpen={openDraft} />
       </div>
+
+      <DraftTask
+        onFiled={filedDraft}
+        onOpenChange={closeDraft}
+        open={drafting !== null}
+        status={drafting ?? "ideas"}
+      />
 
       {board.isPending ? (
         <Columns>
@@ -247,14 +374,11 @@ export const Board = ({
       ) : null}
 
       {board.error === null ? null : (
-        <Empty className="border border-border">
-          <EmptyHeader>
-            <EmptyTitle>The board could not be read</EmptyTitle>
-            <EmptyDescription>
-              Nothing was changed. It will be retried on the next refresh.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
+        <EmptyState
+          description="Nothing was changed. It will be retried on the next refresh."
+          icon={Alert02Icon}
+          title="The board could not be read"
+        />
       )}
 
       {board.data === undefined ? null : (
@@ -266,19 +390,20 @@ export const Board = ({
           onDragStart={onDragStart}
           sensors={sensors}
         >
-          <Columns>
+          <Columns dragging={draggingId !== null}>
             {TASK_STATUSES.map((status) => (
               <Column
                 droppable={targets === null || targets.has(status)}
                 highlighted={overStatus === status}
                 key={status}
                 liveTaskIds={liveTaskIds}
+                onNewTask={openDraftIn}
                 onOpenTask={onOpenTask}
                 projectNames={projectNames}
                 status={status}
                 tasks={
-                  columns.find((column) => column.status === status)?.tasks ??
-                  []
+                  visibleColumns.find((column) => column.status === status)
+                    ?.tasks ?? []
                 }
               />
             ))}

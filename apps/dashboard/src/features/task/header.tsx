@@ -1,58 +1,53 @@
-import {
-  Delete02Icon,
-  LinkSquare02Icon,
-  PencilEdit01Icon,
-} from "@hugeicons/core-free-icons";
+import { Cancel01Icon, LinkSquare02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { TaskDetail } from "@workspace/api";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@workspace/ui/components/alert-dialog";
 import { Badge } from "@workspace/ui/components/badge";
 import { Button } from "@workspace/ui/components/button";
 import { Spinner } from "@workspace/ui/components/spinner";
-import { useCallback, useState } from "react";
-import { useDeleteTask } from "@/api/tasks";
-import { TaskFormDialog } from "@/features/task/task-form";
+import { useCallback } from "react";
+import { usePatchTask } from "@/api/tasks";
+import { InlineText } from "@/features/task/inline";
+import { StatusSelect } from "@/features/task/status-select";
+import { failureText } from "@/lib/failure";
 import { formatRelative } from "@/lib/format";
 
 interface TaskHeaderProps {
   readonly detail: TaskDetail;
-  /** Where to go once the task is gone — the page it was on no longer resolves. */
-  readonly onDeleted?: () => void;
+  /**
+   * Draws a close button at the end of the action row. Set by the overlay,
+   * which drops the sheet's own floating close so it does not sit on top of
+   * these buttons; the page keeps its URL instead.
+   */
+  readonly onClose?: () => void;
 }
 
 /**
- * What the task is, in one line, and the handful of verbs that are about the
- * record rather than the work: open its pull request, edit it, delete it.
+ * What the task is and where it sits, above whatever panel is open.
  *
- * The column the task sits in is not repeated here. It is a control now rather
- * than a label — the status selector below — and a badge beside it would be the
- * same fact twice, one of them not clickable.
+ * Two lines: the name, edited in place like everything else on this body, and
+ * the column it is filed in as the control that moves it. The status is here
+ * rather than down among the property rows because it is the one field a reader
+ * both checks at a glance and changes most often, and the panel below it can be
+ * showing anything.
+ *
+ * Deletion is not in this row. It used to sit a few pixels from the close
+ * button, where a missed tap on a phone deleted the task instead of shutting
+ * the panel; it lives at the foot of the Details panel now, which costs a
+ * deliberate visit to reach.
  *
  * A task sitting in progress with no live run is drawn as waiting rather than
  * running, because those are different situations for the reader — one is an
  * agent working and the other is a queue or a stall — and a spinner on both
  * would hide the difference.
  */
-export const TaskHeader = ({ detail, onDeleted }: TaskHeaderProps) => {
-  const [editing, setEditing] = useState(false);
-  const openEditor = useCallback(() => setEditing(true), []);
-  const { liveRunId, project, task } = detail;
+export const TaskHeader = ({ detail, onClose }: TaskHeaderProps) => {
+  const { liveRunId, task } = detail;
 
   return (
-    <header className="flex flex-col gap-3">
-      <div className="flex items-start justify-between gap-6">
-        <h1 className="font-heading font-medium text-base leading-snug">
-          {task.title}
+    <header className="flex flex-col gap-2">
+      <div className="flex items-start justify-between gap-4">
+        <h1 className="min-w-0 flex-1 font-heading font-medium text-lg leading-snug">
+          <TaskTitle task={task} />
         </h1>
         <div className="flex shrink-0 items-center gap-1">
           {task.prUrl === null ? null : (
@@ -76,21 +71,29 @@ export const TaskHeader = ({ detail, onDeleted }: TaskHeaderProps) => {
               Pull request
             </Button>
           )}
-          <Button
-            aria-label="Edit task"
-            onClick={openEditor}
-            size="icon-sm"
-            variant="ghost"
-          >
-            <HugeiconsIcon icon={PencilEdit01Icon} strokeWidth={2} />
-          </Button>
-          <DeleteTask onDeleted={onDeleted} task={task} />
+          {onClose === undefined ? null : (
+            // The one target on this panel every reader hits, and on a phone it
+            // is hit with a thumb: sized up now that nothing destructive sits
+            // beside it to be caught by a miss.
+            <Button
+              aria-label="Close panel"
+              onClick={onClose}
+              size="icon-lg"
+              variant="ghost"
+            >
+              <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+            </Button>
+          )}
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 text-muted-foreground text-xs">
-        {project === null ? null : <span>{project.name}</span>}
-        <span>here {formatRelative(task.statusChangedAt)}</span>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-muted-foreground text-xs">
+        {/* The trigger fills whatever it is given, so it is given a width here
+            rather than being allowed to take the row and push what follows it
+            onto a second line. */}
+        <div className="w-36 shrink-0">
+          <StatusSelect task={task} />
+        </div>
         {liveRunId === null ? null : (
           <span className="flex items-center gap-1.5 text-foreground">
             <Spinner className="size-3" />
@@ -106,59 +109,40 @@ export const TaskHeader = ({ detail, onDeleted }: TaskHeaderProps) => {
           </Badge>
         )}
       </div>
-
-      <TaskFormDialog onOpenChange={setEditing} open={editing} task={task} />
     </header>
   );
 };
 
-interface DeleteTaskProps {
-  readonly onDeleted?: () => void;
-  readonly task: TaskDetail["task"];
-}
-
 /**
- * Deletion behind a confirmation, because it takes the task's comments,
- * sessions, runs and artifacts with it — the evidence of what happened, not
- * just the card. The dialog says so rather than asking "are you sure", which
- * tells a reader nothing they did not already know.
+ * The title, edited where it is read. The one field with no neutral state — a
+ * task is not allowed to be nameless — so an emptied box reverts rather than
+ * erasing, which the input enforces by refusing to commit an empty string.
  */
-const DeleteTask = ({ onDeleted, task }: DeleteTaskProps) => {
-  const remove = useDeleteTask();
-  const { mutate } = remove;
+const TaskTitle = ({ task }: { readonly task: TaskDetail["task"] }) => {
+  const patch = usePatchTask();
+  const { mutate } = patch;
 
-  const confirm = useCallback(() => {
-    mutate(task.id, { onSuccess: onDeleted });
-  }, [mutate, onDeleted, task.id]);
+  const commit = useCallback(
+    (next: string) => mutate({ patch: { title: next }, taskId: task.id }),
+    [mutate, task.id]
+  );
+
+  const failed = failureText(patch.error);
 
   return (
-    <AlertDialog>
-      <AlertDialogTrigger
-        render={
-          <Button aria-label="Delete task" size="icon-sm" variant="ghost" />
-        }
-      >
-        <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-      </AlertDialogTrigger>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete “{task.title}”?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Its comments, sessions, runs and artifacts go with it. There is no
-            undo.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Keep</AlertDialogCancel>
-          <AlertDialogAction
-            disabled={remove.isPending}
-            onClick={confirm}
-            variant="destructive"
-          >
-            Delete
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <span className="flex flex-col gap-1">
+      <InlineText
+        allowEmpty={false}
+        editLabel="Edit title"
+        emptyText="Untitled"
+        onCommit={commit}
+        value={task.title}
+      />
+      {failed === null ? null : (
+        <span className="font-normal font-sans text-destructive text-xs">
+          {failed}
+        </span>
+      )}
+    </span>
   );
 };

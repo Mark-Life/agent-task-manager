@@ -16,6 +16,14 @@ const optional =
 /** The project the board is narrowed to, if the URL names one that could exist. */
 export const parseProjectId = optional(Schema.decodeUnknownOption(ProjectId));
 
+/**
+ * The text the board is searched by. A plain string rather than a schema
+ * value: anything a person can type is a valid search, and the worst one finds
+ * is nothing.
+ */
+export const parseSearchText = (value: unknown) =>
+  typeof value === "string" ? value : undefined;
+
 /** The task a detail page is about. */
 export const parseTaskId = optional(Schema.decodeUnknownOption(TaskId));
 
@@ -28,18 +36,31 @@ export const parseThreadId = optional(Schema.decodeUnknownOption(ThreadId));
 /**
  * The panels of a task page, in the order they are drawn.
  *
- * Runs comes first because it is what a link from a finished or failed run is
- * about, and it is the panel the page opens on when the URL asks for nothing.
+ * Details comes first, and is what a task opens on when the link asks for
+ * nothing else: it is what the task *is* — its brief, what it will be judged
+ * by, the fields it sits under — and the panel that answers "what is this"
+ * for a reader who has just clicked a card they did not write.
  */
-export const TASK_TABS = ["runs", "comments", "sessions", "artifacts"] as const;
+export const TASK_TABS = [
+  "details",
+  "messages",
+  "runs",
+  "sessions",
+  "artifacts",
+] as const;
 
 /** Which panel of a task page is open. */
 export type TaskTab = (typeof TASK_TABS)[number];
 
-/** Name to panel, so an unknown string reads back as a plain absent value. */
-const BY_NAME: Record<string, TaskTab> = Object.fromEntries(
-  TASK_TABS.map((tab) => [tab, tab])
-);
+/**
+ * Name to panel, so an unknown string reads back as a plain absent value. The
+ * messages panel answers to its old name as well: links to `?tab=comments` are
+ * already in people's history and in whatever they pasted into a chat.
+ */
+const BY_NAME: Record<string, TaskTab> = {
+  ...Object.fromEntries(TASK_TABS.map((tab) => [tab, tab])),
+  comments: "messages",
+};
 
 /** The panel a URL asks for, or undefined when it asks for nothing sensible. */
 export const parseTaskTab = (value: unknown) =>

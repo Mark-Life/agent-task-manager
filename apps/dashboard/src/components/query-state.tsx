@@ -1,16 +1,9 @@
 import { Alert02Icon, RefreshIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Button } from "@workspace/ui/components/button";
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@workspace/ui/components/empty";
 import { Skeleton } from "@workspace/ui/components/skeleton";
 import { cn } from "@workspace/ui/lib/utils";
+import { EmptyState } from "@/components/empty-state";
 import { KEEPS_SESSION } from "@/lib/query-client";
 
 /**
@@ -190,21 +183,17 @@ export const Failed = ({
   onRetry,
   title = "That did not load",
 }: FailedProps) => (
-  <Empty className={cn("py-10", className)}>
-    <EmptyHeader>
-      <EmptyMedia variant="icon">
-        <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} />
-      </EmptyMedia>
-      <EmptyTitle>{title}</EmptyTitle>
-      <EmptyDescription>{failureSentence(error)}</EmptyDescription>
-    </EmptyHeader>
+  <EmptyState
+    className={cn("py-10", className)}
+    description={failureSentence(error)}
+    icon={Alert02Icon}
+    title={title}
+  >
     {onRetry === undefined ? null : (
-      <EmptyContent>
-        <Button onClick={onRetry} size="sm" variant="outline">
-          <HugeiconsIcon icon={RefreshIcon} strokeWidth={2} />
-          Try again
-        </Button>
-      </EmptyContent>
+      <Button onClick={onRetry} size="sm" variant="outline">
+        <HugeiconsIcon icon={RefreshIcon} strokeWidth={2} />
+        Try again
+      </Button>
     )}
-  </Empty>
+  </EmptyState>
 );
