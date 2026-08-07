@@ -22,18 +22,26 @@ import { InlineKeyboard } from "grammy";
 import { actorFor, Board } from "./board";
 import { encodeCallbackData, type PageKey } from "./callback-data";
 import type { BotContext } from "./context";
-import { bold, code, TASK_STATUS_ICONS, taskLine } from "./format";
+import { bold, taskLine } from "./format";
 import { escapeHtml } from "./helpers";
 import { appendNavRow, navKeyboard, pageIndicator, paginate } from "./paging";
 import {
   ensureThread,
   listThreads,
+  THREAD_RELATION_LEGEND,
   telegramChatIdOf,
   threadButtonLabel,
+  threadRelation,
   threadTitle,
 } from "./threads";
 
-/** How many threads or messages a list reaches back over. */
+/**
+ * How many threads or messages a list reaches back over.
+ *
+ * The conversation list is the workspace's rather than one chat's, so this is
+ * the sixty most recently spoken in — eight to a page, and a conversation that
+ * has been quiet longer than sixty others is one nobody is scrolling to.
+ */
 const THREAD_LIST_LIMIT = 60;
 
 /** How much of a message the history list shows before it clips. */
@@ -46,17 +54,23 @@ export interface RenderedPage {
 }
 
 /**
- * The chat's conversations, one page at a time, each row a button that switches
- * to it. The list is a keyboard rather than text with ids beside it because
- * switching by typing a uuid is not a thing anybody does.
+ * The workspace's conversations, one page at a time, each row a button that
+ * switches to it. The list is a keyboard rather than text with ids beside it
+ * because switching by typing a uuid is not a thing anybody does.
+ *
+ * Every conversation on the board is here, including the ones opened in the
+ * dashboard: which surface a thread was started from is shown by its marker
+ * rather than settled by leaving it out. The legend under the heading is
+ * assembled from the markers actually on the page, so a chat that has only ever
+ * talked to itself never sees a key to symbols it has no rows for.
  */
 export const threadsPage = Effect.fnUntraced(function* (options: {
   readonly chatId: number;
   readonly ctx: BotContext;
   readonly page: number;
 }) {
+  const chatId = telegramChatIdOf(options.chatId);
   const threads = yield* listThreads({
-    chatId: telegramChatIdOf(options.chatId),
     limit: THREAD_LIST_LIMIT,
     workspaceId: options.ctx.identity.workspaceId,
   });
@@ -67,7 +81,7 @@ export const threadsPage = Effect.fnUntraced(function* (options: {
   for (const thread of page.items) {
     keyboard.row(
       InlineKeyboard.text(
-        threadButtonLabel({ now, thread }),
+        threadButtonLabel({ chatId, now, thread }),
         encodeCallbackData({
           kind: "thread",
           threadId: thread.id,
@@ -77,11 +91,23 @@ export const threadsPage = Effect.fnUntraced(function* (options: {
     );
   }
 
+  const legend = [
+    ...new Set(
+      page.items
+        .map(
+          (thread) => THREAD_RELATION_LEGEND[threadRelation({ chatId, thread })]
+        )
+        .filter((line) => line !== null)
+    ),
+  ];
+
   return {
     keyboard: appendNavRow({ key: "threads", keyboard, page }),
     text: page.isEmpty
       ? "No conversations yet. Send a message to start one."
-      : `${bold("Conversations")}${pageIndicator(page)}`,
+      : [`${bold("Conversations")}${pageIndicator(page)}`, ...legend].join(
+          "\n"
+        ),
   } satisfies RenderedPage;
 });
 
@@ -146,40 +172,6 @@ export const tasksPage = Effect.fnUntraced(function* (options: {
   } satisfies RenderedPage;
 });
 
-/**
- * The board as one list, each card under the column it sits in. Flattened
- * rather than five messages: a column at a time is five notifications for one
- * question.
- */
-export const boardPage = Effect.fnUntraced(function* (options: {
-  readonly ctx: BotContext;
-  readonly page: number;
-  readonly threadId: ThreadId | null;
-}) {
-  const board = yield* Board;
-  const columns = yield* board.columns({
-    actor: actorFor({ ctx: options.ctx, threadId: options.threadId }),
-  });
-  const cards = columns.flatMap((column) =>
-    column.tasks.map((task) => ({ column: column.status, task }))
-  );
-  const page = paginate({ items: cards, page: options.page });
-
-  return {
-    keyboard: navKeyboard({ key: "board", page }),
-    text: page.isEmpty
-      ? "The board is empty."
-      : [
-          `${bold("Board")}${pageIndicator(page)}`,
-          "",
-          ...page.items.map(
-            (card) =>
-              `${TASK_STATUS_ICONS[card.column]} ${bold(card.task.title)}\n${code(card.task.id)}`
-          ),
-        ].join("\n\n"),
-  } satisfies RenderedPage;
-});
-
 /** What the router and the callbacks both need to draw a page by its key. */
 export interface PageRequest {
   readonly chatId: number;
@@ -199,9 +191,7 @@ export const renderPage = (request: PageRequest) => {
       return threadsPage(request);
     case "history":
       return historyPage(request);
-    case "tasks":
-      return tasksPage(request);
     default:
-      return boardPage(request);
+      return tasksPage(request);
   }
 };

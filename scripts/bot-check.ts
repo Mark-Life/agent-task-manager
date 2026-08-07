@@ -60,8 +60,20 @@
  * a *Switch* button on the first makes it current again — the callback decoded
  * through its schema, not cast out of the update.
  *
+ * **The dashboard's conversation.** A thread opened the way the dashboard opens
+ * one — no chat behind it — belongs to no chat's list and is in `/threads` all
+ * the same, marked as the dashboard's. Tapping it binds it to the chat that
+ * tapped, which is what makes its next answer deliverable there.
+ *
  * **The notice.** A finished run renders into a message a person can read, with
  * the buttons its task's status earns.
+ *
+ * **The restart.** A process start puts one line into the allow-listed chat —
+ * resolved from the allow-list, because there is no task to trace a
+ * conversation from — and a second start inside the quiet window adds nothing,
+ * which is the whole defence against a crash loop. A graceful stop leaves the
+ * row the next start reads back, so the line it sends says how long the system
+ * was down and that it was stopped on purpose rather than lost.
  *
  * **The stuck rule.** A window of repeated tool calls with no file edit is
  * `stuck`; the same window one edit later is not.
@@ -98,6 +110,7 @@ import { BunRuntime, BunServices } from "@effect/platform-bun";
 import {
   AgentSessionRepo,
   ChatMessageRepo,
+  ChatNotificationRepo,
   ChatThreadRepo,
   RunRepo,
   storeLayer,
@@ -110,6 +123,7 @@ import {
   TaskId,
   TelegramChatId,
   type ThreadId,
+  type UserId,
   type WorkspaceId,
 } from "@workspace/domain";
 import { ServerEnv } from "@workspace/env/server";
@@ -121,7 +135,11 @@ import type { Transformer } from "grammy";
 import type { Update } from "grammy/types";
 import { registerHandlers } from "../apps/bot/src/index";
 import { appLayer, type BotWiring } from "../apps/bot/src/layers";
-import { renderNotice } from "../apps/bot/src/notify";
+import {
+  announceShutdown,
+  announceStartup,
+  renderNotice,
+} from "../apps/bot/src/notify";
 import { type RunEventSample, stuckVerdict } from "../apps/bot/src/stuck/rule";
 import { NOT_ALLOWED_REPLY } from "../apps/bot/src/telegram/access";
 import {
@@ -130,6 +148,8 @@ import {
 } from "../apps/bot/src/telegram/answer";
 import { Board } from "../apps/bot/src/telegram/board";
 import { encodeCallbackData } from "../apps/bot/src/telegram/callback-data";
+import { makeKeyboardRefresh } from "../apps/bot/src/telegram/keyboard";
+import { THREAD_RELATION_MARKERS } from "../apps/bot/src/telegram/threads";
 import { TranscribeService } from "../apps/bot/src/transcribe";
 import { CheckFailed, chatRowsFor, check } from "./bot-check-claims";
 import { ensureWorkspace } from "./store/workspace";
@@ -183,6 +203,12 @@ const THREAD_LOOKBACK = 50;
 /** The chat id is minted from the clock, kept inside Telegram's signed 32-bit group range. */
 const CHAT_ID_RANGE = 1_000_000_000;
 
+/** A window wide enough that two announcements a millisecond apart are inside it. */
+const QUIET_WINDOW_MS = 900_000;
+
+/** What this check tells the announcement it is running, so the line carries something. */
+const CHECK_BUILD = "checksha";
+
 /** What `getFile` answers for the voice note this check sends. */
 const VOICE_FILE_PATH = "voice/file_1.oga";
 
@@ -200,6 +226,10 @@ interface ApiCall {
   readonly method: string;
   readonly payload: Record<string, unknown>;
 }
+
+/** Whether a recorded call's keyboard carries one button's callback data or label. */
+const carries = (call: ApiCall, data: string) =>
+  JSON.stringify(call.payload.reply_markup ?? {}).includes(data);
 
 /** What `getMe` would have said, so `bot.init()` succeeds with no network. */
 const botInfo = {
@@ -324,7 +354,6 @@ const stubBoardLayer = (calls: BoardCall[]) => {
       });
   const board = {
     addComment: record("addComment"),
-    columns: record("columns"),
     listTasks: record("listTasks"),
     moveTask: record("moveTask"),
     placeTask: record("placeTask"),
@@ -602,6 +631,180 @@ const pureClaims = Effect.gen(function* () {
   });
 });
 
+/**
+ * The dashboard's conversation, and what Telegram may do with it.
+ *
+ * A thread is opened here the way the gateway opens one for the dashboard —
+ * `open` with no chat — because that is the row whose absence from `/threads`
+ * this claim is about. The list has to hold it while the chat's own list does
+ * not, which is the difference between the two reads stated as a claim rather
+ * than as a comment; and the tap has to bind it, because a conversation with no
+ * chat is one whose next answer `deliverAnswer` drops.
+ */
+const dashboardThreadClaims = (options: {
+  readonly calls: ApiCall[];
+  readonly chatRef: {
+    readonly chatId: TelegramChatId;
+    readonly workspaceId: WorkspaceId;
+  };
+  readonly handle: (update: Update) => Promise<void>;
+  readonly userId: UserId;
+}) =>
+  Effect.gen(function* () {
+    const { calls, chatRef, handle } = options;
+    const { workspaceId } = chatRef;
+    const chatId = Number(chatRef.chatId);
+    const threads = yield* ChatThreadRepo;
+
+    const fromDashboard = yield* threads.open({
+      provider: "claude",
+      title: "started in the dashboard",
+      userId: options.userId,
+      workspaceId,
+    });
+    const chatOwn = yield* threads.listForChat(chatRef);
+    yield* check({
+      detail: `the chat's own list holds ${chatOwn.length} conversations, none of them ${fromDashboard.id}`,
+      ok: !chatOwn.some((thread) => thread.id === fromDashboard.id),
+      step: "a conversation opened outside Telegram belongs to no chat's list",
+    });
+
+    const beforeList = calls.length;
+    yield* Effect.promise(() =>
+      handle(
+        messageUpdate({
+          chatId,
+          fromId: ALLOWED_TELEGRAM_USER,
+          messageId: 5,
+          text: "/threads",
+        })
+      )
+    );
+    const switchData = encodeCallbackData({
+      kind: "thread",
+      threadId: fromDashboard.id,
+      verb: "thsw",
+    });
+    const drawn = yield* eventually({
+      effect: Effect.sync(() => calls.slice(beforeList)),
+      holds: (sent) => sent.some((call) => carries(call, switchData)),
+      step: "/threads lists a conversation opened in the dashboard",
+    });
+    const list = drawn.find((call) => carries(call, switchData));
+    yield* check({
+      detail: `the list said ${JSON.stringify(list?.payload.text)}`,
+      ok: list !== undefined,
+      step: "/threads lists a conversation opened in the dashboard",
+    });
+    yield* check({
+      detail: `the buttons read ${JSON.stringify(list?.payload.reply_markup)}`,
+      ok:
+        list !== undefined && carries(list, THREAD_RELATION_MARKERS.dashboard),
+      step: "the list says which conversations came from the dashboard",
+    });
+
+    yield* Effect.promise(() =>
+      handle(
+        callbackUpdate({
+          chatId,
+          data: switchData,
+          fromId: ALLOWED_TELEGRAM_USER,
+          messageId: 6,
+        })
+      )
+    );
+    const resumed = yield* eventually({
+      effect: threads.byId({ id: fromDashboard.id, workspaceId }),
+      holds: (thread) => thread.chatId !== null,
+      step: "resuming a dashboard conversation binds it to the chat that did",
+    });
+    yield* check({
+      detail: `it is now current in chat ${String(resumed.chatId)}`,
+      ok: resumed.chatId === chatRef.chatId && resumed.isCurrent,
+      step: "a dashboard conversation resumed from Telegram is answered into this chat",
+    });
+  });
+
+/**
+ * What the bot says about itself, driven as the process lifetime drives it.
+ *
+ * The quiet window is zero for the claims about *what* it says, because this
+ * check shares a workspace with every previous run of it and a fifteen-minute
+ * window would make them depend on when it was last run. The suppression gets
+ * its own pair of calls, where that history cannot lend a false pass: whatever
+ * the first one decides, the second must add nothing.
+ */
+const restartClaims = (options: {
+  readonly calls: ApiCall[];
+  readonly workspaceId: WorkspaceId;
+}) =>
+  Effect.gen(function* () {
+    const { calls, workspaceId } = options;
+    const notifications = yield* ChatNotificationRepo;
+    const announce = { build: CHECK_BUILD, quietMs: 0 };
+    const said = (text: string) => (call: ApiCall) =>
+      String(call.payload.text ?? "").includes(text);
+
+    const beforeUp = calls.length;
+    yield* announceStartup(announce);
+    const restartLine = calls.slice(beforeUp).find(said("System restarted"));
+    yield* check({
+      detail: `the bot said ${JSON.stringify(restartLine?.payload.text)}`,
+      ok: restartLine !== undefined,
+      step: "a process start announces itself without being asked",
+    });
+    yield* check({
+      detail: `it went to chat ${String(restartLine?.payload.chat_id)}`,
+      ok: Number(restartLine?.payload.chat_id) === ALLOWED_TELEGRAM_USER,
+      step: "the announcement is addressed from the allow-list, with no task to trace",
+    });
+
+    // The claim is what suppresses the next one, so it has to be on the ledger
+    // — with no task on it, which is the column the migration made nullable.
+    const claimed = yield* notifications.newestOfKind({
+      kind: "system_up",
+      workspaceId,
+    });
+    yield* check({
+      detail: `the ledger holds ${String(claimed?.dedupeKey)} with taskId ${String(claimed?.taskId)}`,
+      ok:
+        claimed !== null && claimed.taskId === null && claimed.sentAt !== null,
+      step: "the announcement is a delivered claim on the ledger, naming no task",
+    });
+
+    const quiet = { build: CHECK_BUILD, quietMs: QUIET_WINDOW_MS };
+    yield* announceStartup(quiet);
+    const afterFirst = calls.length;
+    yield* announceStartup(quiet);
+    yield* check({
+      detail: `${calls.length - afterFirst} message(s) sent by the second start`,
+      ok: calls.length === afterFirst,
+      step: "a second start inside the quiet window says nothing at all",
+    });
+
+    // The stop, and what the start after it can say because of it.
+    const beforeDown = calls.length;
+    yield* announceShutdown(announce);
+    const goingDown = calls.slice(beforeDown).find(said("System going down"));
+    yield* check({
+      detail: `the bot said ${JSON.stringify(goingDown?.payload.text)}`,
+      ok: goingDown !== undefined,
+      step: "a graceful stop says so before it goes",
+    });
+
+    const beforeBack = calls.length;
+    yield* announceStartup(announce);
+    const backUp = calls.slice(beforeBack).find(said("System restarted"));
+    const backUpText = String(backUp?.payload.text ?? "");
+    yield* check({
+      detail: `the bot said ${JSON.stringify(backUpText)}`,
+      ok:
+        backUpText.includes("down for") &&
+        !backUpText.includes("crash or a hard reboot"),
+      step: "the start after a graceful stop reports the downtime rather than a crash",
+    });
+  });
+
 /** The claims that need the whole bot standing up. */
 const wiredClaims = (options: {
   readonly boardCalls: BoardCall[];
@@ -772,8 +975,6 @@ const wiredClaims = (options: {
       kind: "compose",
       verb: "cmcxl",
     });
-    const carries = (call: ApiCall, data: string) =>
-      JSON.stringify(call.payload.reply_markup ?? {}).includes(data);
     const rowsInThread = () =>
       messages.recent({
         limit: THREAD_LOOKBACK,
@@ -1125,7 +1326,11 @@ const wiredClaims = (options: {
     yield* Effect.all(
       [
         closingOut,
-        deliverAnswer({ notices, run: { id: turn.id, workspaceId } }),
+        deliverAnswer({
+          keyboards: makeKeyboardRefresh(),
+          notices,
+          run: { id: turn.id, workspaceId },
+        }),
       ],
       { concurrency: "unbounded" }
     );
@@ -1205,6 +1410,14 @@ const wiredClaims = (options: {
       ok: tapped.some((row) => row.updateKind === "callback"),
       step: "the tap leaves a row of its own, classified as a callback",
     });
+
+    yield* dashboardThreadClaims({
+      calls,
+      chatRef,
+      handle: (update) => telegram.bot.handleUpdate(update),
+      userId: opened.userId,
+    });
+    yield* restartClaims({ calls, workspaceId });
   });
 
 /**

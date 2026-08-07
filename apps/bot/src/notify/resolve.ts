@@ -11,17 +11,23 @@
  * for a tapped button — the button is what makes the next notice land in the
  * chat the person tapped it in.
  *
- * Failing that, the notice goes to the chats the deployment already trusts:
- * the allow-listed accounts for that workspace, current thread where one
- * exists. This is the "somebody started this from the dashboard" case, and a
- * notice in the right workspace's chat is worth more than silence — a person
- * who did not ask for it can ignore one line, while a failed run nobody hears
- * about is the failure mode this whole path exists to prevent.
+ * Failing that — no conversation on the task, or one that has never been spoken
+ * to from Telegram and so has no chat to answer into — the notice goes to the
+ * chats the deployment already trusts: the allow-listed accounts for that
+ * workspace, current thread where one exists. This is the "somebody started
+ * this from the dashboard" case, and a notice in the right workspace's chat is
+ * worth more than silence — a person who did not ask for it can ignore one
+ * line, while a failed run nobody hears about is the failure mode this whole
+ * path exists to prevent.
  *
  * When neither answers there is no chat at all, and the caller says so in the
  * log and sends nothing. There is deliberately no third fallback to "the first
  * chat we know of": routing a workspace's work into another workspace's chat
  * is worse than not delivering it.
+ *
+ * That second rule is also the whole answer for a notice with no task behind it
+ * — the restart announcement — which is why it is a function of its own here
+ * rather than an `else` inside the first.
  */
 
 import { AuditLogRepo, ChatThreadRepo } from "@workspace/db";
@@ -60,6 +66,49 @@ export interface NotifyTarget {
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 
 /**
+ * Every chat this deployment trusts in one workspace, current thread where
+ * there is one.
+ *
+ * The allow-list is the source because it is the only one that survives a
+ * restart with nothing else running: it is read from the environment at boot,
+ * before a database connection exists. That is what makes an announcement about
+ * the system itself deliverable — there is no task to trace back to a
+ * conversation, and the chats are known anyway.
+ */
+export const resolveWorkspaceChats = Effect.fn("Notify.resolveWorkspaceChats")(
+  function* (options: { readonly workspaceId: WorkspaceId }) {
+    const { workspaceId } = options;
+    yield* Effect.annotateCurrentSpan({ workspaceId });
+
+    const threads = yield* ChatThreadRepo;
+    const allowlist = yield* Allowlist;
+
+    const chats = allowlist.telegramUserIds.filter(
+      (telegramUserId) =>
+        allowlist.lookup(telegramUserId)?.workspaceId === workspaceId
+    );
+
+    return yield* Effect.forEach(chats, (telegramUserId) =>
+      Effect.gen(function* () {
+        // A private chat's id is the account's id, which is what the allow-list
+        // holds. A group would need a thread to have been opened in it first,
+        // and that thread is found by the audit branch in
+        // {@link resolveNotifyTargets}.
+        const chatId = TelegramChatId.make(telegramUserId);
+        const thread = yield* threads.current({ chatId, workspaceId });
+        return {
+          chatId,
+          source: thread === null ? "chat" : "current_thread",
+          threadId: thread?.id ?? null,
+          userId:
+            thread?.userId ?? allowlist.lookup(telegramUserId)?.userId ?? null,
+        } satisfies NotifyTarget;
+      })
+    );
+  }
+);
+
+/**
  * The newest entry that names a conversation, as a thread id.
  *
  * Decoded rather than cast: the column is plain text with no foreign key, so a
@@ -93,7 +142,6 @@ export const resolveNotifyTargets = Effect.fn("Notify.resolveTargets")(
 
     const audit = yield* AuditLogRepo;
     const threads = yield* ChatThreadRepo;
-    const allowlist = yield* Allowlist;
 
     const entries = yield* audit.forTask({
       limit: AUDIT_SCAN_LIMIT,
@@ -106,38 +154,21 @@ export const resolveNotifyTargets = Effect.fn("Notify.resolveTargets")(
       const thread = yield* threads
         .byId({ id: threadId, workspaceId })
         .pipe(Effect.catchTag("Db.NotFound", () => Effect.succeed(null)));
-      if (thread !== null) {
-        return [
-          {
-            chatId: thread.chatId,
-            source: "audit_thread",
-            threadId: thread.id,
-            userId: thread.userId,
-          },
-        ] as readonly NotifyTarget[];
+      // A conversation opened in the dashboard and never resumed from Telegram
+      // has no chat to answer into, and a notice addressed to a null chat is
+      // one nobody gets. That is exactly the case the allow-list below is for,
+      // so it falls through rather than being sent nowhere.
+      if (thread !== null && thread.chatId !== null) {
+        const target: NotifyTarget = {
+          chatId: thread.chatId,
+          source: "audit_thread",
+          threadId: thread.id,
+          userId: thread.userId,
+        };
+        return [target];
       }
     }
 
-    const chats = allowlist.telegramUserIds.filter(
-      (telegramUserId) =>
-        allowlist.lookup(telegramUserId)?.workspaceId === workspaceId
-    );
-
-    return yield* Effect.forEach(chats, (telegramUserId) =>
-      Effect.gen(function* () {
-        // A private chat's id is the account's id, which is what the allow-list
-        // holds. A group would need a thread to have been opened in it first,
-        // and that thread is found by the branch above.
-        const chatId = TelegramChatId.make(telegramUserId);
-        const thread = yield* threads.current({ chatId, workspaceId });
-        return {
-          chatId,
-          source: thread === null ? "chat" : "current_thread",
-          threadId: thread?.id ?? null,
-          userId:
-            thread?.userId ?? allowlist.lookup(telegramUserId)?.userId ?? null,
-        } satisfies NotifyTarget;
-      })
-    );
+    return yield* resolveWorkspaceChats({ workspaceId });
   }
 );

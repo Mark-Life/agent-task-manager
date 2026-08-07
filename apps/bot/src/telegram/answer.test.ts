@@ -19,6 +19,7 @@ import {
 } from "./answer";
 import { BotService } from "./bot-service";
 import { decodeCallbackData } from "./callback-data";
+import { mainKeyboard, makeKeyboardRefresh } from "./keyboard";
 
 const THREAD_ID = ThreadId.make("0195f2a0-1c3d-7a11-8f2e-0b1c2d3e4f60");
 const OTHER_THREAD_ID = ThreadId.make("0195f2a0-1c3d-7a11-8f2e-0b1c2d3e4f61");
@@ -220,6 +221,7 @@ describe("deliverAnswer", () => {
 
     await Effect.runPromise(
       deliverAnswer({
+        keyboards: makeKeyboardRefresh(),
         notices,
         run: { id: RUN_ID, workspaceId: WORKSPACE_ID },
       }).pipe(
@@ -247,6 +249,7 @@ describe("deliverAnswer", () => {
 
     await Effect.runPromise(
       deliverAnswer({
+        keyboards: makeKeyboardRefresh(),
         notices: makeQueueNotices(),
         run: { id: RUN_ID, workspaceId: WORKSPACE_ID },
       }).pipe(
@@ -264,5 +267,40 @@ describe("deliverAnswer", () => {
     const said = lastTextOf({ calls: telegram.calls, method: "sendMessage" });
     expect(said).toContain("without an answer");
     expect(said).toContain("done");
+  });
+
+  /**
+   * The layout only reaches a phone on a message that carries it, so the first
+   * answer after a restart is the one that hands it over. Every answer after
+   * that leaves the keyboard alone.
+   */
+  test("the first answer a process sends carries the menu, the next does not", async () => {
+    const keyboards = makeKeyboardRefresh();
+    const deliver = () => {
+      const telegram = recordingApi();
+      return Effect.runPromise(
+        deliverAnswer({
+          keyboards,
+          notices: makeQueueNotices(),
+          run: { id: RUN_ID, workspaceId: WORKSPACE_ID },
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              closingStore({ closesAfterMs: 0, spoken: "answered" }),
+              Layer.succeed(BotService, {
+                api: telegram.api,
+              } as unknown as BotService["Service"])
+            )
+          )
+        )
+      ).then(() =>
+        telegram.calls
+          .filter((call) => call.method === "sendMessage")
+          .map((call) => call.payload.reply_markup)
+      );
+    };
+
+    expect(await deliver()).toEqual([mainKeyboard]);
+    expect(await deliver()).toEqual([undefined]);
   });
 });

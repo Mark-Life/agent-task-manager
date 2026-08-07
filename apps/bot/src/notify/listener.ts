@@ -39,6 +39,7 @@ import {
 import { Effect, Predicate, Schedule, Schema, Stream } from "effect";
 import { Allowlist } from "../telegram/allowlist";
 import { deliverAnswer, type QueueNotices } from "../telegram/answer";
+import type { KeyboardRefresh } from "../telegram/keyboard";
 import { Notifier } from "./send";
 import { TERMINAL_EVENT_KINDS } from "./summary";
 
@@ -132,6 +133,8 @@ const isTerminal = (notice: RunEventNotice) =>
  * hearing about the rest of them.
  */
 export const runNotifyListener = Effect.fnUntraced(function* (options: {
+  /** Which chats still hold a menu from before this process started. */
+  readonly keyboards: KeyboardRefresh;
   /** Where the "still working" line for each thread is remembered. */
   readonly notices: QueueNotices;
   readonly repairIntervalMs?: number;
@@ -156,6 +159,7 @@ export const runNotifyListener = Effect.fnUntraced(function* (options: {
       const { taskId } = notice;
       if (taskId === null) {
         yield* deliverAnswer({
+          keyboards: options.keyboards,
           notices: options.notices,
           run: { id: notice.runId, workspaceId: notice.workspaceId },
         });

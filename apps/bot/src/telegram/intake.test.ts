@@ -69,6 +69,94 @@ describe("classifyMessage", () => {
     });
   });
 
+  test("a forwarded rich message from a bot is a forward, not an attachment", () => {
+    // The reported bug, as Telegram delivers it: a bot answered with
+    // `sendRichMessage`, so the message carries no `text` and no `caption` and
+    // every word is in `rich_message`. Read only `text` and this is refused
+    // with "I can only work with text and voice messages."
+    const result = classifyMessage(
+      messageOf({
+        forward_origin: {
+          date: 0,
+          sender_user: { first_name: "Codex", id: 777, is_bot: true },
+          type: "user",
+        } as NonNullable<TelegramMessage["forward_origin"]>,
+        rich_message: {
+          blocks: [
+            { size: 2, text: "Fresh batch", type: "heading" },
+            {
+              text: [
+                "grouped by the ",
+                { text: "viral mechanic", type: "bold" },
+              ],
+              type: "paragraph",
+            },
+          ],
+        } as NonNullable<TelegramMessage["rich_message"]>,
+      })
+    );
+    expect(result).toEqual({
+      body: "## Fresh batch\n\ngrouped by the viral mechanic",
+      chars: 45,
+      forwardFrom: "Codex",
+      kind: "forward",
+      telegramChatId: CHAT_ID,
+      telegramMessageId: MESSAGE_ID,
+    });
+  });
+
+  test("a rich message sent straight into the chat is ordinary text", () => {
+    const result = classifyMessage(
+      messageOf({
+        rich_message: {
+          blocks: [{ text: "file a task", type: "paragraph" }],
+        } as NonNullable<TelegramMessage["rich_message"]>,
+      })
+    );
+    expect(result).toMatchObject({ body: "file a task", kind: "text" });
+  });
+
+  test("a rich message with nothing to read is empty, not unsupported", () => {
+    expect(
+      classifyMessage(
+        messageOf({
+          // A rich message of one uncaptioned photo: blocks, but no words.
+          rich_message: {
+            blocks: [
+              {
+                photo: [
+                  { file_id: "p", file_unique_id: "u", height: 1, width: 1 },
+                ],
+                type: "photo",
+              },
+            ],
+          } as NonNullable<TelegramMessage["rich_message"]>,
+        })
+      )
+    ).toMatchObject({ reason: "empty" });
+  });
+
+  test("a refusal records what the message was made of, never its content", () => {
+    const result = classifyMessage(
+      messageOf({
+        forward_origin: userOrigin,
+        sticker: {
+          file_id: "s",
+          file_unique_id: "u",
+          height: 512,
+          is_animated: false,
+          is_video: false,
+          type: "regular",
+          width: 512,
+        } as NonNullable<TelegramMessage["sticker"]>,
+      })
+    );
+    expect(result).toMatchObject({
+      reason: "unsupported_media",
+      shape: "forward_origin,sticker",
+    });
+  });
+
   test("a caption is a body — a forwarded caption is not dropped", () => {
     const result = classifyMessage(
       messageOf({ caption: "from the channel", forward_origin: userOrigin })

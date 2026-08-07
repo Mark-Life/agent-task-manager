@@ -48,6 +48,7 @@ import { BotService } from "./bot-service";
 import { encodeCallbackData } from "./callback-data";
 import { formatFooter, italic } from "./format";
 import { escapeHtml } from "./helpers";
+import type { KeyboardRefresh } from "./keyboard";
 import { deleteMessage, editText, sendText } from "./send";
 
 /** How Telegram is told to parse everything this module composes. */
@@ -247,6 +248,7 @@ const answerIn = (input: {
  * second window and is reported as what it was.
  */
 export const deliverAnswer = Effect.fn("bot.answer.deliver")(function* (input: {
+  readonly keyboards: KeyboardRefresh;
   readonly notices: QueueNotices;
   readonly run: { readonly id: RunId; readonly workspaceId: WorkspaceId };
 }) {
@@ -294,10 +296,17 @@ export const deliverAnswer = Effect.fn("bot.answer.deliver")(function* (input: {
     windowMs: ANSWER_WINDOW_MS,
   });
 
+  // An answer carries no buttons of its own, which makes it the message that
+  // hands over a menu this chat has not been shown since the process started.
+  const menu = input.keyboards.markupFor(chatId);
   const sent = yield* sendText({
     api: telegram.api,
     chatId,
-    send: { ...HTML, link_preview_options: { is_disabled: true } },
+    send: {
+      ...HTML,
+      link_preview_options: { is_disabled: true },
+      ...(menu === undefined ? {} : { reply_markup: menu }),
+    },
     text: answerText({ answer, run }),
   }).pipe(Effect.orElseSucceed(() => []));
 

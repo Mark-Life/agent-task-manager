@@ -10,13 +10,16 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { ConfigProvider, Effect } from "effect";
 import {
+  CLAUDE_SETTINGS_ENV_VAR,
   DEFAULT_CLAUDE_EFFORT,
   DEFAULT_CLAUDE_SETTINGS,
   DENIED_TOOLS,
   effortOf,
   mergeClaudeSettings,
   parseClaudeSettings,
+  readClaudeSettings,
 } from "./claude-settings";
 
 describe("DEFAULT_CLAUDE_SETTINGS", () => {
@@ -32,8 +35,14 @@ describe("DEFAULT_CLAUDE_SETTINGS", () => {
     expect(deny).toEqual([...DENIED_TOOLS]);
   });
 
-  test("leaves the skills a coding worker runs on switched on", () => {
-    expect(DEFAULT_CLAUDE_SETTINGS.disableBundledSkills).toBeUndefined();
+  test("denies plan mode, which ends a headless turn with a proposal", () => {
+    const deny = DEFAULT_CLAUDE_SETTINGS.permissions?.deny ?? [];
+    expect(deny).toContain("EnterPlanMode");
+    expect(deny).toContain("ExitPlanMode");
+  });
+
+  test("drops the shipped skills, and leaves workflows alone", () => {
+    expect(DEFAULT_CLAUDE_SETTINGS.disableBundledSkills).toBe(true);
     expect(DEFAULT_CLAUDE_SETTINGS.disableWorkflows).toBeUndefined();
   });
 });
@@ -78,6 +87,49 @@ describe("mergeClaudeSettings", () => {
       model: "opus",
     });
     expect(merged.permissions?.deny).toEqual([...DENIED_TOOLS]);
+  });
+});
+
+const settingsFrom = (env: Record<string, string>) =>
+  Effect.runPromise(
+    readClaudeSettings.pipe(
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(env))),
+      Effect.exit
+    )
+  );
+
+describe("readClaudeSettings", () => {
+  test("an unset overlay is the hardened defaults", async () => {
+    const exit = await settingsFrom({});
+    expect(exit._tag).toBe("Success");
+    if (exit._tag === "Success") {
+      expect(exit.value).toEqual(DEFAULT_CLAUDE_SETTINGS);
+    }
+  });
+
+  test("a blank overlay is unset, which is how every env file ships it", async () => {
+    const exit = await settingsFrom({ [CLAUDE_SETTINGS_ENV_VAR]: "   " });
+    expect(exit._tag).toBe("Success");
+    if (exit._tag === "Success") {
+      expect(exit.value).toEqual(DEFAULT_CLAUDE_SETTINGS);
+    }
+  });
+
+  test("an overlay lands on top of the defaults, not instead of them", async () => {
+    const exit = await settingsFrom({
+      [CLAUDE_SETTINGS_ENV_VAR]: '{"permissions":{"deny":["NotebookEdit"]}}',
+    });
+    expect(exit._tag).toBe("Success");
+    if (exit._tag === "Success") {
+      expect(exit.value.permissions?.deny).toEqual(["NotebookEdit"]);
+      expect(exit.value.disableBundledSkills).toBe(true);
+      expect(exit.value.disableClaudeAiConnectors).toBe(true);
+    }
+  });
+
+  test("an overlay that is not a JSON object fails rather than falls back", async () => {
+    const exit = await settingsFrom({ [CLAUDE_SETTINGS_ENV_VAR]: "{not json" });
+    expect(exit._tag).toBe("Failure");
   });
 });
 

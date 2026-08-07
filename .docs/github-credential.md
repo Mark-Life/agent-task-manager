@@ -28,6 +28,13 @@ repository settings today — reading a repository's visibility and the token's 
 it works. What was missing was scope on the token, and any statement about what an agent can do is
 a statement about that token and nothing else.
 
+**A manager turn holds it too, and may hold a different one.** `turnEnvironment` returns one
+environment per role; `ATM_MANAGER_GITHUB_TOKEN`, when set, is what a manager container gets under
+both names instead. Unset, both roles hold `ATM_GITHUB_TOKEN`. A manager has no checkout and no
+credential helper — this is `gh` alone, so that a card it files names a repository that exists, on
+the branch it really defaults to. What it is *for* and what stops it being used to push are in
+`.docs/agent-access.md`, including the part where nothing but the prompt does the stopping.
+
 **On this install it was a `gho_` token — the OAuth token `gh auth login` leaves behind**, carrying
 `admin:public_key, gist, read:org, repo`. That set is the GitHub CLI's default consent, and
 `workflow` is not in it. The kind matters because it decides the remedy: an OAuth token's scopes

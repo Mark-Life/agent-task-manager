@@ -2,7 +2,6 @@ import { Schema } from "effect";
 import {
   ChatIntakeKind,
   ChatMessageRole,
-  NotifyKind,
   SessionProvider,
   ThreadStatus,
 } from "./enums";
@@ -14,6 +13,7 @@ import {
   ThreadId,
   UserId,
 } from "./ids";
+import { NotifyKind } from "./notify";
 import { appendOnlyFields, recordFields, Timestamp } from "./primitives";
 
 /**
@@ -109,14 +109,20 @@ export interface ChatMessage extends Schema.Schema.Type<typeof ChatMessage> {}
  */
 export const ChatNotification = Schema.Struct({
   ...recordFields,
-  /** `${kind}:${taskId}:${runId ?? "-"}`, or whatever the emitter can repeat exactly. */
+  /**
+   * Whatever the emitter can repeat exactly for the same event:
+   * `${kind}:${taskId}:${runId ?? "-"}` for a notice about a task, and
+   * `${kind}:${window}` for one about the system, where the window is what a
+   * crash loop collides on.
+   */
   dedupeKey: Schema.String,
   id: ChatNotificationId,
   kind: NotifyKind,
   runId: Schema.NullOr(RunId),
   /** Null while the notice is claimed but not delivered. */
   sentAt: Schema.NullOr(Timestamp),
-  taskId: TaskId,
+  /** Null exactly on a `system_*` notice, which is about the process rather than a card. */
+  taskId: Schema.NullOr(TaskId),
   telegramChatId: TelegramChatId,
   telegramMessageId: Schema.NullOr(TelegramMessageId),
   /** Null when no conversation could be resolved, so the miss stays visible. */

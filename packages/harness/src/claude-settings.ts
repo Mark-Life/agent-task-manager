@@ -20,6 +20,8 @@ import type {
   SettingSource,
   Settings,
 } from "@anthropic-ai/claude-agent-sdk";
+import { Config, Effect, Option, Schema } from "effect";
+import { trimmedOrNull } from "./env";
 import { stopHookCommand } from "./stop-hook";
 
 /**
@@ -63,18 +65,30 @@ export const CLAUDE_SETTING_SOURCES = [
 /**
  * Tools denied on every run.
  *
- * Two groups, for two different reasons. The first wants a human in the loop
- * and there is none — a headless worker that asks a question stalls until its
- * cap, and the turn dies having done nothing. The second reaches out of the
- * container: notifications, remote triggers and cron all outlive the run that
- * created them, so a container that is about to be deleted must not be able to
- * schedule anything.
+ * Three groups, for three different reasons. The first wants a human in the
+ * loop and there is none — a headless worker that asks a question stalls until
+ * its cap, and the turn dies having done nothing. Plan mode is the same failure
+ * wearing a different hat: it puts the session read-only until someone approves
+ * a plan, so a worker that enters it spends its turn writing a proposal nobody
+ * is there to accept and leaves no diff.
+ *
+ * The second reaches out of the container: notifications, remote triggers and
+ * cron all outlive the run that created them, so a container that is about to be
+ * deleted must not be able to schedule anything.
+ *
+ * The third is `NotebookEdit`, which is neither dangerous nor useful here — it
+ * serves Jupyter notebooks, and its tool definition is context every run pays
+ * for and almost none spends. A repository that genuinely works in notebooks is
+ * the case for {@link CLAUDE_SETTINGS_ENV_VAR}.
  */
 export const DENIED_TOOLS: readonly string[] = [
   "AskUserQuestion",
   "CronCreate",
   "CronDelete",
   "CronList",
+  "EnterPlanMode",
+  "ExitPlanMode",
+  "NotebookEdit",
   "PushNotification",
   "RemoteTrigger",
   "ScheduleWakeup",
@@ -84,15 +98,21 @@ export const DENIED_TOOLS: readonly string[] = [
 /**
  * The base settings for a worker run.
  *
- * Bundled skills stay on: a coding agent's skills are most of why the harness
- * is worth running, and the context they cost is the context they earn. What
- * goes off is everything that leaves the container. The claude.ai connectors
- * are the sharpest of them — they are fetched from the logged-in account, so
- * without this a task about one repository arrives holding the operator's mail
- * and documents.
+ * What goes off is everything that leaves the container. The claude.ai
+ * connectors are the sharpest of them — they are fetched from the logged-in
+ * account, so without this a task about one repository arrives holding the
+ * operator's mail and documents.
+ *
+ * The bundled skills go off for a different reason: cost, not reach. They are
+ * the ones shipped with the CLI, and the flag leaves plugins, `.claude/skills/`
+ * and `.claude/commands/` alone — so a worker keeps the skills this system
+ * actually gives it, the operator's shared directory and the repository's own,
+ * and stops paying context for a document-authoring set a repository task never
+ * calls.
  */
 export const DEFAULT_CLAUDE_SETTINGS: Settings = {
   disableArtifact: true,
+  disableBundledSkills: true,
   disableClaudeAiConnectors: true,
   disableRemoteControl: true,
   permissions: { deny: [...DENIED_TOOLS] },
@@ -169,3 +189,51 @@ export const parseClaudeSettings = (json: string): Settings | null => {
     return null;
   }
 };
+
+/**
+ * The variable an operator writes a settings overlay into, as one JSON object.
+ * The escape hatch for the defaults above: `{"permissions":{"deny":[]}}` clears
+ * the deny list, `{"disableBundledSkills":false}` puts the shipped skills back.
+ */
+export const CLAUDE_SETTINGS_ENV_VAR = "CLAUDE_SETTINGS_JSON";
+
+/**
+ * The overlay was set to something that is not a JSON object. The text itself is
+ * not carried: it is whatever an operator pasted, and this error is printed
+ * where an unsanitized value has no business being.
+ */
+export class ClaudeSettingsInvalid extends Schema.TaggedErrorClass<ClaudeSettingsInvalid>()(
+  "Harness.ClaudeSettingsInvalid",
+  { variable: Schema.String }
+) {}
+
+/**
+ * The settings a Claude run starts from, as the environment configured them:
+ * the hardened defaults with an operator's overlay merged on top.
+ *
+ * Unreadable JSON fails rather than falls back, which is the decision the
+ * caller was left in {@link parseClaudeSettings}. An overlay exists to change
+ * what a run is allowed to do, so running the defaults over a typo would put an
+ * agent under a permission set nobody chose and say nothing about it — and the
+ * failure lands at layer build, before a turn has been claimed.
+ *
+ * A variable that is present but empty is a shell's way of saying unset. Every
+ * env file this ships with lists the name with no value, so blank has to mean
+ * the defaults or no install that starts from those files would boot.
+ */
+export const readClaudeSettings = Effect.gen(function* () {
+  const configured = yield* Config.option(
+    Config.string(CLAUDE_SETTINGS_ENV_VAR)
+  );
+  const json = trimmedOrNull(Option.getOrNull(configured));
+  if (json === null) {
+    return DEFAULT_CLAUDE_SETTINGS;
+  }
+  const override = parseClaudeSettings(json);
+  if (override === null) {
+    return yield* new ClaudeSettingsInvalid({
+      variable: CLAUDE_SETTINGS_ENV_VAR,
+    });
+  }
+  return mergeClaudeSettings(DEFAULT_CLAUDE_SETTINGS, override);
+});

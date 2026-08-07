@@ -28,7 +28,7 @@ import type {
   WorkspaceId,
 } from "@workspace/domain";
 import { newChatNotificationId } from "@workspace/domain";
-import { and, asc, eq, isNull, lt } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lt } from "drizzle-orm";
 import { Context, DateTime, Effect, Layer } from "effect";
 import { Database } from "../client";
 import {
@@ -48,6 +48,9 @@ import {
 /** How many stale claims one repair pass reads. Bounded, because a pass has to end. */
 const DEFAULT_LIMIT = 50;
 
+/** Reads that want the newest row and nothing else say so to the planner. */
+const ONE = 1;
+
 const ENTITY = "chat_notification";
 
 /** A claim is never addressed by id alone: every query names its workspace. */
@@ -66,7 +69,8 @@ export interface ChatNotificationClaim {
   readonly dedupeKey: string;
   readonly kind: NotifyKind;
   readonly runId?: RunId | null;
-  readonly taskId: TaskId;
+  /** Null on a notice about the system itself; the table's CHECK enforces the pairing. */
+  readonly taskId: TaskId | null;
   readonly telegramChatId: TelegramChatId;
   readonly threadId?: ThreadId | null;
   readonly workspaceId: WorkspaceId;
@@ -106,7 +110,7 @@ const make = Effect.gen(function* () {
         // A claim is unsent by definition: both stamps land only once the
         // message is really in the chat.
         sentAt: null,
-        taskId: input.taskId,
+        taskId: input.taskId ?? null,
         telegramChatId: input.telegramChatId,
         telegramMessageId: null,
         threadId: input.threadId ?? null,
@@ -213,7 +217,52 @@ const make = Effect.gen(function* () {
     }
   );
 
-  return { claim, markSent, unsentBefore } as const;
+  /**
+   * The newest notice of one kind in a workspace, claimed or delivered, or null
+   * when there has never been one.
+   *
+   * Claimed counts, deliberately: this is what the restart announcement asks
+   * before it says anything, and "somebody already took this a minute ago" is
+   * the answer that keeps a crash loop out of the chat whether or not the
+   * message it took made it to Telegram.
+   */
+  const newestOfKind = Effect.fn("ChatNotificationRepo.newestOfKind")(
+    function* (options: {
+      readonly kind: NotifyKind;
+      readonly workspaceId: WorkspaceId;
+    }) {
+      yield* Effect.annotateCurrentSpan({ workspaceId: options.workspaceId });
+
+      const rows = yield* execute(
+        "ChatNotificationRepo.newestOfKind",
+        db
+          .select()
+          .from(chatNotification)
+          .where(
+            and(
+              eq(chatNotification.workspaceId, options.workspaceId),
+              eq(chatNotification.kind, options.kind)
+            )
+          )
+          .orderBy(desc(chatNotification.createdAt), desc(chatNotification.id))
+          .limit(ONE)
+      );
+
+      const [row] = rows;
+      if (row === undefined) {
+        return null;
+      }
+
+      return yield* decodeWritten({
+        decode: decodeChatNotification,
+        entity: ENTITY,
+        operation: "ChatNotificationRepo.newestOfKind",
+        rows,
+      });
+    }
+  );
+
+  return { claim, markSent, newestOfKind, unsentBefore } as const;
 });
 
 /** What the bot has volunteered, and what it is about to. Not audited. */

@@ -36,7 +36,7 @@ import type {
   TaskId,
   WorkspaceId,
 } from "@workspace/domain";
-import { TelegramMessageId } from "@workspace/domain";
+import { isSystemNotifyKind, TelegramMessageId } from "@workspace/domain";
 import type { Telemetry } from "@workspace/telemetry";
 import { Context, DateTime, Duration, Effect, Layer, Ref } from "effect";
 import type { InlineKeyboard } from "grammy";
@@ -55,7 +55,11 @@ import type { Allowlist } from "../telegram/allowlist";
 import { BotService } from "../telegram/bot-service";
 import { sendText } from "../telegram/send";
 import { renderNotice } from "./render";
-import { type NotifyTarget, resolveNotifyTargets } from "./resolve";
+import {
+  type NotifyTarget,
+  resolveNotifyTargets,
+  resolveWorkspaceChats,
+} from "./resolve";
 import { describeNotice, type NoticeRequest } from "./summary";
 
 /**
@@ -86,7 +90,8 @@ export interface NotifyDelivery {
   readonly keyboard: InlineKeyboard | null;
   readonly kind: NotifyKind;
   readonly runId: RunId | null;
-  readonly taskId: TaskId;
+  /** Null on a notice about the system itself, which no task asked for. */
+  readonly taskId: TaskId | null;
   readonly text: string;
   readonly workspaceId: WorkspaceId;
 }
@@ -223,10 +228,16 @@ const make = (options: NotifierOptions) =>
         workspaceId: delivery.workspaceId,
       });
 
-      const targets = yield* resolveNotifyTargets({
-        taskId: delivery.taskId,
-        workspaceId: delivery.workspaceId,
-      });
+      // A notice with no task has no conversation to trace back to, so it goes
+      // to the chats this deployment trusts in that workspace — which is the
+      // same fallback a task's notice takes when nothing asked for it.
+      const targets =
+        delivery.taskId === null
+          ? yield* resolveWorkspaceChats({ workspaceId: delivery.workspaceId })
+          : yield* resolveNotifyTargets({
+              taskId: delivery.taskId,
+              workspaceId: delivery.workspaceId,
+            });
       const [primary] = targets;
       if (primary === undefined) {
         yield* Effect.logWarning("no chat to notify", {
@@ -295,6 +306,10 @@ const make = (options: NotifierOptions) =>
      * window that has passed, the scan will claim a new key if the run is
      * still going nowhere, and re-sending a stale one is telling somebody about
      * a fire that is either out or already burning somewhere new.
+     *
+     * A notice about the system itself is retired for the same reason and one
+     * more: "back up at 09:14" sent an hour late is worse than nothing, and the
+     * next start will claim a key of its own anyway.
      */
     const repairIn = Effect.fn("Notify.repair")(function* (input: {
       readonly limit?: number;
@@ -323,7 +338,14 @@ const make = (options: NotifierOptions) =>
 
       yield* Effect.forEach(stale, (claim) =>
         Effect.gen(function* () {
-          if (claim.kind === "stuck") {
+          if (claim.kind === "stuck" || isSystemNotifyKind(claim.kind)) {
+            yield* retire(claim);
+            return;
+          }
+          // The CHECK on the table says a notice of this kind names a task, so
+          // this is unreachable; retiring rather than raising keeps one bad row
+          // from stopping the whole pass.
+          if (claim.taskId === null) {
             yield* retire(claim);
             return;
           }

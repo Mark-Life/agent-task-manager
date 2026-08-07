@@ -128,6 +128,7 @@ Read from `.env` at the repo root. These matter before anything runs:
 | `DASHBOARD_ORIGIN` | required by the dashboard | its exact origin, `http://localhost:5173` locally |
 | `OWNER_PASSWORD` | read by `db:seed` | the owner's first password; unset, nobody can sign in |
 | `ATM_GITHUB_TOKEN` | required to clone a private repo or let an agent push | needs `repo` **and** `workflow`; `bun run github:check` says what yours has, `.docs/github-credential.md` says why |
+| `ATM_MANAGER_GITHUB_TOKEN` | optional | the manager reads GitHub and does not write it; set a read-only token here and that stops being a prompt rule. Unset, it holds the one above — `.docs/agent-access.md` argues that |
 
 Worth knowing about: `SANDBOX_MODE=local` runs turns as host processes with no isolation at all,
 which is the debugging escape hatch. `ORCHESTRATOR_GATEWAY_URL` is the gateway *as a container

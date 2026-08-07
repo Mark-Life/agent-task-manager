@@ -14,6 +14,10 @@
  * `/new` means** — the previous thread keeps its history and its `active`
  * status and merely stops being current, so `/switch` brings it back whole, and
  * the fresh one has no session, so its first turn is prompted from nothing.
+ * **The list is the workspace's, not the chat's**: one board has one set of
+ * conversations, and which surface a conversation was opened from is a fact
+ * about it — {@link threadRelation} — rather than a reason to hide it from the
+ * other one.
  *
  * Nothing here touches grammy. A handler decides what to say; this module
  * decides what is true.
@@ -30,6 +34,7 @@ import {
   type SessionProvider,
   TelegramChatId,
   type UserId,
+  type WorkspaceId,
 } from "@workspace/domain";
 import { DateTime, Effect } from "effect";
 import { formatRelativeTime } from "./helpers";
@@ -85,20 +90,38 @@ export const startThread = Effect.fn("bot.threads.start")(function* (
   return yield* repo.open({ ...context, provider: CHAT_PROVIDER });
 });
 
-/** Make one existing thread the chat's current one — what a *Switch* button does. */
+/**
+ * Make one existing thread the chat's current one — what a *Switch* button
+ * does.
+ *
+ * The chat is named because the thread may not have one: a conversation opened
+ * in the dashboard is bound to this chat by being resumed from it, which is
+ * what puts its next answer in front of the person who asked for it. One
+ * already belonging to another chat is refused by the store rather than moved.
+ */
 export const switchThread = Effect.fn("bot.threads.switch")(function* (
-  ref: ChatThreadRef
+  ref: ChatThreadRef & { readonly chatId: TelegramChatId }
 ) {
   const repo = yield* ChatThreadRepo;
   return yield* repo.setCurrent(ref);
 });
 
-/** A chat's conversations, most recently spoken in first. */
-export const listThreads = Effect.fn("bot.threads.list")(function* (
-  chat: ChatRef & { readonly limit?: number; readonly offset?: number }
-) {
+/**
+ * The workspace's conversations, most recently spoken in first — the same read
+ * the dashboard's sidebar makes, and for the same reason: there is one set of
+ * manager threads, and a person who can see one on the web can see it here.
+ *
+ * Retired ones are absent, as they are in the dashboard: an archived thread is
+ * kept for the audit rows that point at it, not for a list somebody is choosing
+ * from.
+ */
+export const listThreads = Effect.fn("bot.threads.list")(function* (options: {
+  readonly limit?: number;
+  readonly offset?: number;
+  readonly workspaceId: WorkspaceId;
+}) {
   const repo = yield* ChatThreadRepo;
-  return yield* repo.listForChat(chat);
+  return yield* repo.listForWorkspace({ ...options, status: "active" });
 });
 
 /**
@@ -111,7 +134,55 @@ export const threadTitle = (thread: Pick<ChatThread, "title">) =>
     : thread.title.slice(0, THREAD_TITLE_MAX_CHARS);
 
 /**
- * The label on a *Switch* button: a marker for the current one, the title, and
+ * Where one conversation stands from the chat that is looking at it.
+ *
+ * Four states rather than a pair of booleans, because only three of them can be
+ * spoken in from here and the fourth has to say so before it is tapped. A
+ * `dashboard` thread has no chat at all and resuming it claims it; an
+ * `elsewhere` thread is another chat's current or past conversation, listed
+ * because the dashboard lists it and read-only because taking it would put that
+ * chat's answers in this one.
+ */
+export type ThreadRelation = "current" | "here" | "dashboard" | "elsewhere";
+
+/**
+ * The one character each state gets on a button. `here` gets none: a
+ * conversation of this chat's that simply is not the current one is the
+ * ordinary case, and marking every ordinary row marks nothing.
+ */
+export const THREAD_RELATION_MARKERS: Record<ThreadRelation, string> = {
+  current: "●",
+  dashboard: "🖥",
+  elsewhere: "🔒",
+  here: "",
+};
+
+/** What the legend under the heading says about each marker worth explaining. */
+export const THREAD_RELATION_LEGEND: Record<ThreadRelation, string | null> = {
+  current: null,
+  dashboard: "🖥 opened in the dashboard — tap to continue it here",
+  elsewhere: "🔒 another chat's — not yours to speak in",
+  here: null,
+};
+
+/** Which of the four a thread is, for the chat asking. */
+export const threadRelation = (options: {
+  readonly chatId: TelegramChatId;
+  readonly thread: Pick<ChatThread, "chatId" | "isCurrent">;
+}): ThreadRelation => {
+  const { chatId, thread } = options;
+  if (thread.chatId === null) {
+    return "dashboard";
+  }
+  if (thread.chatId !== chatId) {
+    return "elsewhere";
+  }
+  // `is_current` is per chat, so it only means "current" on this chat's own.
+  return thread.isCurrent ? "current" : "here";
+};
+
+/**
+ * The label on a *Switch* button: where the conversation stands, the title, and
  * how long ago it was last spoken to.
  *
  * The age is on the button rather than in the message body because the button
@@ -119,11 +190,16 @@ export const threadTitle = (thread: Pick<ChatThread, "title">) =>
  * list nobody can choose from.
  */
 export const threadButtonLabel = (options: {
+  readonly chatId: TelegramChatId;
   readonly now: DateTime.Utc;
-  readonly thread: Pick<ChatThread, "isCurrent" | "lastMessageAt" | "title">;
+  readonly thread: Pick<
+    ChatThread,
+    "chatId" | "isCurrent" | "lastMessageAt" | "title"
+  >;
 }) => {
-  const { now, thread } = options;
-  const marker = thread.isCurrent ? "● " : "";
+  const { chatId, now, thread } = options;
+  const symbol = THREAD_RELATION_MARKERS[threadRelation({ chatId, thread })];
+  const marker = symbol === "" ? "" : `${symbol} `;
   const age = formatRelativeTime({ at: thread.lastMessageAt, now });
   return `${marker}${threadTitle(thread).slice(0, BUTTON_TITLE_MAX_CHARS)} · ${age}`;
 };

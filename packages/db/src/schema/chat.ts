@@ -157,6 +157,12 @@ export const chatMessage = pgTable(
  * the repair pass retries. At-least-once on purpose.
  *
  * No foreign key to `task` or `run`: the ledger outlives what it announced.
+ *
+ * `task_id` is nullable because two of the kinds are about this system rather
+ * than about somebody's card — "back up", "going down". The CHECK is what keeps
+ * that from becoming a hole: a notice about a task must name one, and a notice
+ * about the system must not, so the column is never quietly empty on a kind
+ * that was supposed to carry it.
  */
 export const chatNotification = pgTable(
   "chat_notification",
@@ -167,7 +173,7 @@ export const chatNotification = pgTable(
     runId: uuid("run_id").$type<RunId>(),
     // Null while claimed but not delivered.
     sentAt: tstz("sent_at"),
-    taskId: uuid("task_id").$type<TaskId>().notNull(),
+    taskId: uuid("task_id").$type<TaskId>(),
     telegramChatId: bigint("telegram_chat_id", { mode: "number" })
       .$type<TelegramChatId>()
       .notNull(),
@@ -185,5 +191,17 @@ export const chatNotification = pgTable(
     index("chat_notification_unsent_idx")
       .on(t.workspaceId, t.createdAt)
       .where(sql`${t.sentAt} is null`),
+    // The startup announcement reads the newest notice of one kind in a
+    // workspace, and reads it before it says anything at all.
+    index("chat_notification_workspace_id_kind_created_at_idx").on(
+      t.workspaceId,
+      t.kind,
+      t.createdAt.desc()
+    ),
+    // A notice about a task names one; a notice about the system does not.
+    check(
+      "chat_notification_task_ck",
+      sql`(${t.taskId} is null) = (${t.kind} in ('system_up', 'system_down'))`
+    ),
   ]
 );

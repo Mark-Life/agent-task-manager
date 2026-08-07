@@ -17,10 +17,12 @@ import { join } from "node:path";
 import { BunFileSystem } from "@effect/platform-bun";
 import { Telemetry } from "@workspace/telemetry";
 import { ConfigProvider, Deferred, Effect, Fiber, Layer, Stream } from "effect";
+import { CLAUDE_SETTINGS_ENV_VAR } from "./claude-settings";
 import type { AgentEvent } from "./events";
 import { costUsdOf } from "./events";
 import type { AgentProvider, RunOptions } from "./provider";
-import { instrumented } from "./registry";
+import { ProviderRegistry } from "./provider";
+import { instrumented, providerRegistryLayer } from "./registry";
 import { TURN_EVENT_MARKER } from "./turn-event";
 
 const SERVICE = "harness-registry-test";
@@ -127,6 +129,36 @@ const onlyRow = () => {
   }
   return row;
 };
+
+/** The registry as the layer builds it, under one environment. */
+const registryFrom = (env: Record<string, string>) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* ProviderRegistry;
+      return registry.get("claude").id;
+    }).pipe(
+      Effect.provide(providerRegistryLayer),
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(env))),
+      Effect.exit
+    )
+  );
+
+describe("the registry layer", () => {
+  test("builds on an overlay the settings layer accepts", async () => {
+    const exit = await registryFrom({
+      [CLAUDE_SETTINGS_ENV_VAR]: '{"permissions":{"deny":[]}}',
+    });
+    expect(exit._tag).toBe("Success");
+    if (exit._tag === "Success") {
+      expect(exit.value).toBe("claude");
+    }
+  });
+
+  test("refuses to build on an overlay that does not parse", async () => {
+    const exit = await registryFrom({ [CLAUDE_SETTINGS_ENV_VAR]: "{not json" });
+    expect(exit._tag).toBe("Failure");
+  });
+});
 
 describe("a turn through the registry", () => {
   test("passes every event through and leaves one row", async () => {

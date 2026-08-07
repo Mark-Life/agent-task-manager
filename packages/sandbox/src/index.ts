@@ -135,7 +135,9 @@ export {
   GH_TOKEN_ENV_VAR,
   GITHUB_TOKEN_ENV_VAR,
   githubTokenEnv,
+  MANAGER_TOKEN_ENV_VAR,
   readGithubToken,
+  readManagerGithubToken,
 } from "./github";
 export {
   DEFAULT_CPUS,
@@ -197,6 +199,15 @@ export {
   NO_MOUNT_EXTRAS,
   packageCacheEnv,
 } from "./mounts";
+// The pull request a run's branch has. Exported because the orchestrator's
+// terminal path writes it onto the task, and because asking GitHub is how that
+// field stays a fact rather than a thing an agent remembered to report.
+export {
+  choosePullRequest,
+  GITHUB_API_ORIGIN,
+  type PullRequestLookup,
+  pullRequestForBranch,
+} from "./pull-request";
 export { type LabelledContainer, orphansOf } from "./reap";
 export {
   BRANCH_PREFIX,

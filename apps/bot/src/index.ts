@@ -24,6 +24,13 @@
  * program's scope owns, so a `SIGTERM` interrupts them rather than leaving them
  * behind.
  *
+ * **The bot says one thing before it is asked anything.** A restart is silence
+ * from the chat side, and an update sent into that silence is dropped rather
+ * than queued, so the process says so itself — once the handlers are up and
+ * just before the poller is — and registers the line it will send on the way
+ * out, which is what makes the next start able to tell a deploy from a crash.
+ * See `notify/system`.
+ *
  * **Two long-lived fibers run beside the poller.** The notification listener
  * hears `atm_run_event` on the store's own connection — that is where a
  * finished worker run becomes a notice and a finished conversation turn becomes
@@ -33,7 +40,7 @@
  */
 
 import type { Telemetry } from "@workspace/telemetry";
-import { Effect, FiberSet, type Ref } from "effect";
+import { Effect, FiberSet, Option, type Ref } from "effect";
 import type { ChatProgress, ChatUpdateKind } from "./chat-event";
 import {
   CurrentChatProgress,
@@ -42,7 +49,12 @@ import {
   withChatEvent,
 } from "./chat-event";
 import type { BotWiring } from "./layers";
-import { runNotifyListener } from "./notify";
+import {
+  announceShutdown,
+  announceStartup,
+  buildLabel,
+  runNotifyListener,
+} from "./notify";
 import { StuckScan } from "./stuck/scan";
 import { registerAccess } from "./telegram/access";
 import { Allowlist, type AllowlistOps } from "./telegram/allowlist";
@@ -54,6 +66,7 @@ import { makeComposeBuffers } from "./telegram/compose";
 import type { BotContext } from "./telegram/context";
 import { makeDispatcher, makePendingComments } from "./telegram/dispatch";
 import { registerIntake } from "./telegram/intake";
+import { makeKeyboardRefresh } from "./telegram/keyboard";
 
 /**
  * What the raw update looks like before a handler classifies it.
@@ -158,6 +171,7 @@ export const registerHandlers = Effect.fnUntraced(function* (
   });
 
   const compose = makeComposeBuffers();
+  const keyboards = makeKeyboardRefresh();
   const notices = makeQueueNotices();
   const pending = makePendingComments();
   const dispatcher = yield* makeDispatcher({
@@ -168,7 +182,7 @@ export const registerHandlers = Effect.fnUntraced(function* (
     pending,
   });
 
-  yield* registerCommands({ bot, compose, pending });
+  yield* registerCommands({ bot, compose, keyboards, pending });
   yield* registerCallbacks({
     bot,
     compose,
@@ -181,11 +195,48 @@ export const registerHandlers = Effect.fnUntraced(function* (
   return {
     compose,
     dispatcher,
+    keyboards,
     notices,
     pending,
     runUpdate,
     telegram,
   } as const;
+});
+
+/**
+ * Arms the two things the bot says about itself, in the order they happen.
+ *
+ * The shutdown line is registered as a finalizer on the caller's scope, which
+ * is what makes it a *graceful*-stop message and nothing else: the scope closes
+ * after the poller has been asked to stop and before the layers finalize, so
+ * the store and the Telegram client are both still up, and a process that was
+ * killed rather than signalled never reaches it. That absence is exactly what
+ * the next start reads to tell a deploy from a crash.
+ *
+ * The startup line goes out inline rather than forked, after the handlers are
+ * registered and immediately before the poller starts. It is bounded — see
+ * `ANNOUNCE_TIMEOUT_MS` — so the worst it can cost is a few seconds of boot,
+ * and it costs them in the one situation where a bot could not have answered
+ * anything anyway: Telegram not responding. Forked, it would be a fibre racing
+ * the poller for the same client, and a "back up" that arrived after the next
+ * restart's would be worse than a late one.
+ */
+const announceRestart = Effect.fnUntraced(function* (wiring: BotWiring) {
+  if (!wiring.env.botAnnounceRestart) {
+    yield* Effect.logInfo(
+      "bot: restart announcements are off (BOT_ANNOUNCE_RESTART)"
+    );
+    return;
+  }
+  const announce = {
+    build: buildLabel({
+      gitSha: Option.getOrNull(wiring.env.gitSha),
+      serviceVersion: Option.getOrNull(wiring.env.serviceVersion),
+    }),
+    quietMs: wiring.env.botAnnounceQuietMs,
+  };
+  yield* Effect.addFinalizer(() => announceShutdown(announce));
+  yield* announceStartup(announce);
 });
 
 /**
@@ -198,10 +249,12 @@ export const registerHandlers = Effect.fnUntraced(function* (
 export const runBot = Effect.fnUntraced(function* (wiring: BotWiring) {
   const allowlist = yield* Allowlist;
   const scan = yield* StuckScan;
-  const { notices, runUpdate, telegram } = yield* registerHandlers(wiring);
+  const { keyboards, notices, runUpdate, telegram } =
+    yield* registerHandlers(wiring);
 
   yield* Effect.forkScoped(
     runNotifyListener({
+      keyboards,
       notices,
       repairIntervalMs: wiring.env.notifyRepairIntervalMs,
     })
@@ -209,6 +262,8 @@ export const runBot = Effect.fnUntraced(function* (wiring: BotWiring) {
   yield* Effect.forkScoped(
     scan.watch({ workspaceIds: allowlist.workspaceIds })
   );
+
+  yield* announceRestart(wiring);
 
   yield* Effect.logInfo(
     "bot: handlers registered, listener and stuck watch running"
