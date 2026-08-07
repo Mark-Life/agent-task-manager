@@ -52,6 +52,8 @@ export interface BannerInput {
  */
 export const bannerFields = (input: BannerInput) => ({
   accounts: input.allowedAccounts,
+  announceQuietMs: input.env.botAnnounceQuietMs,
+  announceRestart: input.env.botAnnounceRestart ? "on" : "off",
   chatProvider: CHAT_PROVIDER,
   dataRoot: input.env.dataRoot,
   gatewayUrl: input.env.botGatewayUrl,

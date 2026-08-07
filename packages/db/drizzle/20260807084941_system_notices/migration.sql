@@ -1,0 +1,3 @@
+ALTER TABLE "chat_notification" ALTER COLUMN "task_id" DROP NOT NULL;--> statement-breakpoint
+CREATE INDEX "chat_notification_workspace_id_kind_created_at_idx" ON "chat_notification" ("workspace_id","kind","created_at" DESC NULLS LAST);--> statement-breakpoint
+ALTER TABLE "chat_notification" ADD CONSTRAINT "chat_notification_task_ck" CHECK (("task_id" is null) = ("kind" in ('system_up', 'system_down')));

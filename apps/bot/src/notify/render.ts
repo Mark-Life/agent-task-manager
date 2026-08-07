@@ -23,7 +23,7 @@
  */
 
 import type {
-  NotifyKind,
+  RunNotifyKind,
   RunOutcome,
   TaskId,
   TaskStatus,
@@ -41,8 +41,15 @@ import { taskKeyboard } from "../telegram/keyboard";
 /** How much of a run's own last words a notice carries before it is clipped. */
 export const NOTICE_QUOTE_MAX_CHARS = 500;
 
-/** The opening line, which is the only part read on a locked screen. */
-const HEADLINES: Record<NotifyKind, string> = {
+/**
+ * The opening line, which is the only part read on a locked screen.
+ *
+ * Keyed by `RunNotifyKind` rather than by every kind the ledger holds: what the
+ * bot says about itself is rendered in `./system`, out of no task at all, and a
+ * table that admitted those kinds would carry two entries this renderer could
+ * never be given.
+ */
+const HEADLINES: Record<RunNotifyKind, string> = {
   needs_review: "👀 Ready for review",
   run_failed: "❌ Run failed",
   run_finished: "✅ Run finished",
@@ -62,7 +69,7 @@ export interface RunNotice {
   readonly errorMessage: string | null;
   /** Whether a container is still working, which decides *Stop* against *Rerun*. */
   readonly hasLiveRun: boolean;
-  readonly kind: NotifyKind;
+  readonly kind: RunNotifyKind;
   /** The run's own last words, sanitized and clipped. Null when there are none. */
   readonly lastMessage: string | null;
   readonly outcome: RunOutcome | null;

@@ -60,6 +60,17 @@ answer goes into its thread. `chat_notification` is a claim ledger keyed on
 it, and a duplicate is the failure it chooses. Beside it, a scan looks at live runs every
 minute for a run repeating the same tool calls with no file edit — surfaced, never acted on.
 
+**What it says about itself.** A process start puts one line into every allow-listed chat for
+the workspaces it serves — the same resolution a notice takes when no conversation asked for it,
+and the reason no chat id has to be stored anywhere. A graceful stop puts one out on the way,
+from a finaliser that a killed process never reaches, which is how the next start tells a deploy
+(`system_down` newer than `system_up`, and the gap between them is the downtime) from a crash
+(no such row, so no duration is claimed). Both are `chat_notification` rows with a null
+`task_id`, keyed `${kind}:${bucket}` where the bucket is `BOT_ANNOUNCE_QUIET_MS` wide, so a
+crash loop or a rolling deploy is one line per window and not one per process. A reconnect never
+reaches any of this: grammy re-establishes a dropped long-poll inside `bot.start`, so a new
+process is the only event there is. `BOT_ANNOUNCE_RESTART=false` turns both off.
+
 There is no `/clear`. A conversation's session is a row on the thread, so the honest way to
 start from nothing is `/new`, whose first turn is prompted from the whole thread with no
 session behind it. `BOT_GATEWAY_URL` is the gateway as the bot process reaches it; the loop's
@@ -76,6 +87,9 @@ with a *Force send* line a second one edits rather than repeats, that the tap as
 stop *that thread* by name, that the finished turn's own row is what the conversation is
 answered with, that a text, a forward and a voice note sent into `/compose` leave no row at all
 and then become exactly one carrying all three in order, that *Cancel* leaves none, that `/new`
-and a *Switch* button move the current thread, that a run-finished notice renders, and that the
-stuck rule fires on a repeating window and holds off on one that edited a file.
+and a *Switch* button move the current thread, that a run-finished notice renders, that a start
+announces itself into the allow-listed chat and leaves a claim naming no task while a second
+start inside the window says nothing, that a graceful stop says so and the start after it
+reports the downtime rather than a crash, and that the stuck rule fires on a repeating window
+and holds off on one that edited a file.
 

@@ -209,17 +209,8 @@ export const CHAT_INTAKE_KINDS = [
 export const ChatIntakeKind = Schema.Literals(CHAT_INTAKE_KINDS);
 export type ChatIntakeKind = typeof ChatIntakeKind.Type;
 
-/** What the bot volunteers without being asked. Every one of them is about a run. */
-export const NOTIFY_KINDS = [
-  "run_finished",
-  "run_failed",
-  "needs_review",
-  "stuck",
-] as const;
-
-/** Why a notification was sent. */
-export const NotifyKind = Schema.Literals(NOTIFY_KINDS);
-export type NotifyKind = typeof NotifyKind.Type;
+// What the bot volunteers without being asked is in `./notify`: the kinds come
+// in two families now, and the rule that tells them apart belongs beside them.
 
 /** Two of the three are read-only mounts, which is what makes promotion an audit trail. */
 export const ARTIFACT_SCOPES = ["task", "project", "global"] as const;
