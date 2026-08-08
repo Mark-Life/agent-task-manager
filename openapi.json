@@ -4121,6 +4121,1214 @@
         }
       }
     },
+    "/files/{scope}": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "operationId": "files.list",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "The directory being browsed: workspace, manager, project:<projectId> or task:<taskId>."
+            },
+            "required": true
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "A path relative to the scope's own root. No leading slash, no `..`, and no `.git` segment."
+            },
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "userApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FileEntry"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequestsJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List a directory in a scope"
+      },
+      "delete": {
+        "tags": [
+          "files"
+        ],
+        "operationId": "files.delete",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "The directory being browsed: workspace, manager, project:<projectId> or task:<taskId>."
+            },
+            "required": true
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "A path relative to the scope's own root. No leading slash, no `..`, and no `.git` segment."
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "userApiKey": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "<No Content>"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequestsJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Delete a path in a scope"
+      }
+    },
+    "/files/{scope}/content": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "operationId": "files.read",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "The directory being browsed: workspace, manager, project:<projectId> or task:<taskId>."
+            },
+            "required": true
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "A path relative to the scope's own root. No leading slash, no `..`, and no `.git` segment."
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "userApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "FileContent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileContent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "PayloadTooLarge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadTooLargeJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequestsJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read a file's bytes"
+      },
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "operationId": "files.write",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "The directory being browsed: workspace, manager, project:<projectId> or task:<taskId>."
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "userApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "FileEntry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileEntry"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "PayloadTooLarge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadTooLargeJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequestsJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Write a file into a scope",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileWrite"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/files/{scope}/directory": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "operationId": "files.createDirectory",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "The directory being browsed: workspace, manager, project:<projectId> or task:<taskId>."
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "userApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "FileEntry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileEntry"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequestsJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Create a directory in a scope",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileDirectoryCreate"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/files/{scope}/move": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "operationId": "files.move",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "The directory being browsed: workspace, manager, project:<projectId> or task:<taskId>."
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "userApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "FileEntry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileEntry"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequestsJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Move a file or directory within a scope",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileMove"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/skills/{scope}": {
+      "get": {
+        "tags": [
+          "skills"
+        ],
+        "operationId": "skills.list",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "The directory being browsed: workspace, manager, project:<projectId> or task:<taskId>."
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "userApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InstalledSkill"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequestsJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List the skills installed in a scope"
+      },
+      "post": {
+        "tags": [
+          "skills"
+        ],
+        "operationId": "skills.install",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "The directory being browsed: workspace, manager, project:<projectId> or task:<taskId>."
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "userApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "InstalledSkill",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstalledSkill"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequestsJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Install a skill from GitHub into a scope",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillInstall"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/skills/{scope}/{name}/update": {
+      "get": {
+        "tags": [
+          "skills"
+        ],
+        "operationId": "skills.checkUpdate",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "The directory being browsed: workspace, manager, project:<projectId> or task:<taskId>."
+            },
+            "required": true
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "A skill's name: one directory segment of letters, digits, dots, dashes and underscores."
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "userApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SkillUpdate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillUpdate"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequestsJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Compare an installed skill with its source"
+      },
+      "post": {
+        "tags": [
+          "skills"
+        ],
+        "operationId": "skills.applyUpdate",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "The directory being browsed: workspace, manager, project:<projectId> or task:<taskId>."
+            },
+            "required": true
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "A skill's name: one directory segment of letters, digits, dots, dashes and underscores."
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "userApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "InstalledSkill",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstalledSkill"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequestsJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Apply a reviewed skill update",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillUpdateApply"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/skills/{scope}/{name}": {
+      "delete": {
+        "tags": [
+          "skills"
+        ],
+        "operationId": "skills.uninstall",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "The directory being browsed: workspace, manager, project:<projectId> or task:<taskId>."
+            },
+            "required": true
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "A skill's name: one directory segment of letters, digits, dots, dashes and underscores."
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "userApiKey": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "<No Content>"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequestsJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Uninstall a skill from a scope"
+      }
+    },
     "/threads": {
       "get": {
         "tags": [
@@ -6699,10 +7907,7 @@
       "SessionCost": {
         "type": "object",
         "properties": {
-          "priceTableEffective": {
-            "type": "string"
-          },
-          "priceTableVersion": {
+          "pricedRequests": {
             "type": "integer",
             "allOf": [
               {
@@ -6710,7 +7915,10 @@
               }
             ]
           },
-          "pricedRequests": {
+          "priceTableEffective": {
+            "type": "string"
+          },
+          "priceTableVersion": {
             "type": "integer",
             "allOf": [
               {
@@ -6742,9 +7950,9 @@
           }
         },
         "required": [
+          "pricedRequests",
           "priceTableEffective",
           "priceTableVersion",
-          "pricedRequests",
           "totalUsd",
           "unpricedModels",
           "unpricedRequests"
@@ -8772,6 +9980,333 @@
         ],
         "additionalProperties": false
       },
+      "FileEntry": {
+        "type": "object",
+        "properties": {
+          "bytes": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ext": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "file",
+              "directory",
+              "symlink"
+            ]
+          },
+          "modifiedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "targetOutsideScope": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bytes",
+          "ext",
+          "kind",
+          "modifiedAt",
+          "name",
+          "path",
+          "target",
+          "targetOutsideScope"
+        ],
+        "additionalProperties": false
+      },
+      "FileContent": {
+        "type": "object",
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "content": {
+            "type": "string"
+          },
+          "encoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bytes",
+          "content",
+          "encoding",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "FileWrite": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "encoding": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "base64"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "description": "A path relative to the scope's own root. No leading slash, no `..`, and no `.git` segment."
+          }
+        },
+        "required": [
+          "content",
+          "encoding",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "FileDirectoryCreate": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "A path relative to the scope's own root. No leading slash, no `..`, and no `.git` segment."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "FileMove": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "description": "A path relative to the scope's own root. No leading slash, no `..`, and no `.git` segment."
+          },
+          "to": {
+            "type": "string",
+            "description": "A path relative to the scope's own root. No leading slash, no `..`, and no `.git` segment."
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "additionalProperties": false
+      },
+      "InstalledSkill": {
+        "type": "object",
+        "properties": {
+          "computedHash": {
+            "type": "string"
+          },
+          "skillPath": {
+            "type": "string",
+            "description": "Path to a SKILL.md inside the repository, relative to its root. No leading slash and no `..`."
+          },
+          "source": {
+            "type": "string"
+          },
+          "sourceType": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "github"
+                ]
+              }
+            ]
+          },
+          "directory": {
+            "type": "string"
+          },
+          "link": {
+            "type": "string"
+          },
+          "linked": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string",
+            "description": "A skill's name: one directory segment of letters, digits, dots, dashes and underscores."
+          },
+          "present": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "computedHash",
+          "skillPath",
+          "source",
+          "sourceType",
+          "directory",
+          "link",
+          "linked",
+          "name",
+          "present"
+        ],
+        "additionalProperties": false
+      },
+      "SkillInstall": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "A skill's name: one directory segment of letters, digits, dots, dashes and underscores."
+          },
+          "path": {
+            "type": "string",
+            "description": "Path to a SKILL.md inside the repository, relative to its root. No leading slash and no `..`."
+          },
+          "repoUrl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "repoUrl"
+        ],
+        "additionalProperties": false
+      },
+      "SkillFileChange": {
+        "type": "object",
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "added",
+              "changed",
+              "removed",
+              "unchanged"
+            ]
+          }
+        },
+        "required": [
+          "bytes",
+          "content",
+          "path",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "SkillUpdate": {
+        "type": "object",
+        "properties": {
+          "changed": {
+            "type": "boolean"
+          },
+          "currentHash": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillFileChange"
+            }
+          },
+          "latestHash": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "A skill's name: one directory segment of letters, digits, dots, dashes and underscores."
+          }
+        },
+        "required": [
+          "changed",
+          "currentHash",
+          "files",
+          "latestHash",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "SkillUpdateApply": {
+        "type": "object",
+        "properties": {
+          "expectedHash": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "expectedHash"
+        ],
+        "additionalProperties": false
+      },
       "Thread": {
         "type": "object",
         "properties": {
@@ -9381,6 +10916,14 @@
     {
       "name": "proposals",
       "description": "Proposals: changes a run asked a person to make to a directory it could not write."
+    },
+    {
+      "name": "files",
+      "description": "The agent filesystem: the directories a run walks for its instructions, browsable and editable by a person."
+    },
+    {
+      "name": "skills",
+      "description": "Skills installed into a directory of the agent filesystem. Codex reads them from every level of a run's tree; Claude reads the operator's personal skills instead."
     },
     {
       "name": "threads",

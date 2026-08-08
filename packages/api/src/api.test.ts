@@ -11,6 +11,12 @@
  * security requirement, because that requirement is how the scope reaches both
  * the handler's types and an external consumer's tool description. An endpoint
  * declared without one compiles, serves, and is open.
+ *
+ * **No run reaches the directories it is given.** Every operation on a scope of
+ * the agent filesystem asks for the destructive scope, which an agent's token
+ * cannot be minted at — so "a run cannot install a skill or rewrite the rules it
+ * is handed" is a property of the contract, checked here, rather than a habit
+ * eleven endpoints have to keep.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -18,6 +24,13 @@ import { makeOpenApiSpec } from "./api";
 
 /** The one operation with no credential: a probe that needed one would be useless to a supervisor. */
 const UNGUARDED = new Set(["health.check"]);
+
+/**
+ * The two prefixes under which a request names a directory a run is given: its
+ * files and the skills installed beside them. Both are addressed by the same
+ * scope segment, and both are a person's to change.
+ */
+const SCOPE_ROOTS = ["/files/", "/skills/"] as const;
 
 /** HTTP methods a path object can hold, so the walk below ignores its other keys. */
 const METHODS = ["get", "post", "put", "patch", "delete"] as const;
@@ -57,6 +70,20 @@ describe("the contract", () => {
     expect([...new Set(named)].filter((name) => !defined.has(name))).toEqual(
       []
     );
+  });
+
+  test("lets only a person's credential into a scope's own directory", () => {
+    const scoped = operations().filter(({ path }) =>
+      SCOPE_ROOTS.some((root) => path.startsWith(root))
+    );
+    // Named, so the check cannot pass by matching nothing the day a prefix moves.
+    expect(scoped.length).toBeGreaterThan(0);
+
+    const weaker = scoped.filter(
+      ({ operation }) =>
+        !(operation.security ?? []).some((scheme) => "adminToken" in scheme)
+    );
+    expect(weaker.map(({ method, path }) => `${method} ${path}`)).toEqual([]);
   });
 
   test("nests everything a task owns under its id", () => {

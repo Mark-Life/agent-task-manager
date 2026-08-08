@@ -1,4 +1,11 @@
-import { ProjectId, RunId, TaskId, ThreadId } from "@workspace/domain";
+import {
+  FileScopeAddress,
+  ProjectId,
+  RunId,
+  ScopePath,
+  TaskId,
+  ThreadId,
+} from "@workspace/domain";
 import { Option, Schema } from "effect";
 
 /**
@@ -33,6 +40,33 @@ export const parseRunId = optional(Schema.decodeUnknownOption(RunId));
 /** The conversation the overlay is open on. */
 export const parseThreadId = optional(Schema.decodeUnknownOption(ThreadId));
 
+const decodeFileScope = Schema.decodeUnknownOption(FileScopeAddress);
+
+/**
+ * The directory of the agent filesystem a browser is open on, decoded into the
+ * union every file route takes.
+ *
+ * Null rather than a throw, for the same reason every other parser here degrades
+ * quietly: `?scope=project:nonsense` is a link somebody truncated, and the
+ * screen answers it by opening the workspace rather than by an error page.
+ */
+export const fileScopeOf = (value: unknown) =>
+  Option.getOrNull(decodeFileScope(value));
+
+/**
+ * The same scope, kept as the one segment the URL carries.
+ *
+ * The address stays a string in the search parameters rather than becoming the
+ * union it decodes to: what goes back into the address bar is whatever the
+ * typed search holds, and an object there would put JSON in the URL where
+ * `project:<id>` belongs.
+ */
+export const parseFileScopeAddress = (value: unknown) =>
+  typeof value === "string" && fileScopeOf(value) !== null ? value : undefined;
+
+/** The file inside that scope the browser has open, if the URL names one it could address. */
+export const parseScopePath = optional(Schema.decodeUnknownOption(ScopePath));
+
 /**
  * The panels of a task page, in the order they are drawn.
  *
@@ -47,6 +81,7 @@ export const TASK_TABS = [
   "runs",
   "sessions",
   "artifacts",
+  "proposals",
 ] as const;
 
 /** Which panel of a task page is open. */

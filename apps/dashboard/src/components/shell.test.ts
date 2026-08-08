@@ -11,6 +11,7 @@ import { destinationFor } from "@/components/shell";
 const BOUND = [
   { key: "b", to: "/" },
   { key: "p", to: "/projects" },
+  { key: "a", to: "/files" },
   { key: "k", to: "/api-keys" },
 ] as const;
 
@@ -50,6 +51,7 @@ describe("destinationFor", () => {
     // sentence is not a request to leave the page.
     expect(destinationFor("B")).toBeNull();
     expect(destinationFor("P")).toBeNull();
+    expect(destinationFor("A")).toBeNull();
     expect(destinationFor("K")).toBeNull();
   });
 });

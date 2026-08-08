@@ -48,10 +48,16 @@
 
 import { createHash } from "node:crypto";
 import { dirname, extname, join, sep } from "node:path";
-import type { ArtifactStat, ProjectId, TaskId } from "@workspace/domain";
+import {
+  type ArtifactStat,
+  FileScope,
+  type ProjectId,
+  type TaskId,
+} from "@workspace/domain";
 import { ATM_ROOT_MARKER } from "@workspace/harness";
 import { DateTime, Effect, Option, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
+import { MANAGER_SEGMENT } from "./mounts";
 
 /** The single root the three folders hang off, and the manager's search mount. */
 export const ARTIFACTS_SEGMENT = "artifacts";
@@ -192,6 +198,45 @@ export const artifactDirOf = (input: ArtifactDirInput) => {
   }
 };
 
+/** A scope of a run's tree, resolved against one install's data root. */
+export interface FileScopeDirInput {
+  readonly dataRoot: string;
+  readonly scope: FileScope;
+}
+
+/**
+ * The host directory behind one addressable scope of the tree — the only place
+ * an address a person typed becomes a path anything opens.
+ *
+ * Total over the four scopes by `match`, so a scope added to the address
+ * vocabulary is a compile error here rather than a route silently answering
+ * with the workspace directory. Three of them are artifact folders and go
+ * through {@link artifactDirOf}, which is what keeps this from being a second
+ * opinion about where a run's directories live.
+ *
+ * The manager's is the odd one and is a subdirectory rather than a folder of
+ * its own, exactly as the mount set has it: it arrives in a container through
+ * the workspace bind, so a manager rule written here is a file inside the
+ * workspace scope's git repository and is snapshotted with it. Giving it a
+ * folder of its own would be a fifth host directory nothing mounts.
+ *
+ * The workspace scope answers to `global` on the host, because that is the name
+ * the artifact index and the promotion verb have always called it. The rename
+ * happens here and nowhere else.
+ */
+export const fileScopeDirOf = (input: FileScopeDirInput): string => {
+  const { dataRoot } = input;
+  const dirOf = (location: ArtifactLocation) =>
+    artifactDirOf({ dataRoot, location });
+  return FileScope.match(input.scope, {
+    manager: () => join(dirOf({ scope: "global" }), MANAGER_SEGMENT),
+    project: (self) =>
+      dirOf({ projectId: self.projectId, scope: "project" as const }),
+    task: (self) => dirOf({ scope: "task" as const, taskId: self.taskId }),
+    workspace: () => dirOf({ scope: "global" }),
+  });
+};
+
 /** Creates one directory, or leaves an existing one alone. */
 const ensureDir = Effect.fnUntraced(function* (path: string) {
   const fs = yield* FileSystem;
@@ -256,6 +301,40 @@ export const ensureArtifactDir = Effect.fn("Artifacts.ensureDir")(function* (
   }
   return dir;
 });
+
+/**
+ * Creates one addressable scope's directory, on demand, and answers with its
+ * path.
+ *
+ * The counterpart of {@link fileScopeDirOf} for anything that is about to write
+ * into a scope. Three of the four go through {@link ensureArtifactDir}, so the
+ * workspace scope still leaves with its root marker and the on-demand rule that
+ * keeps the tree free of empty folders is unchanged. The manager's directory is
+ * made under the workspace one, because that is where the mount set puts it.
+ *
+ * Separate from the resolver so that reading a scope never creates it: a listing
+ * of a project nobody has written to should answer "nothing here" without
+ * leaving a directory behind that says a run wrote something.
+ */
+export const ensureFileScopeDir = Effect.fn("Artifacts.ensureScopeDir")(
+  function* (input: FileScopeDirInput) {
+    if (input.scope.scope === "manager") {
+      yield* ensureArtifactDir({
+        dataRoot: input.dataRoot,
+        location: { scope: "global" },
+      });
+      return yield* ensureDir(fileScopeDirOf(input));
+    }
+    const location: ArtifactLocation = FileScope.match(input.scope, {
+      manager: () => ({ scope: "global" }) as const,
+      project: (self) =>
+        ({ projectId: self.projectId, scope: "project" }) as const,
+      task: (self) => ({ scope: "task", taskId: self.taskId }) as const,
+      workspace: () => ({ scope: "global" }) as const,
+    });
+    return yield* ensureArtifactDir({ dataRoot: input.dataRoot, location });
+  }
+);
 
 /**
  * The extension a dashboard picks a renderer from: lowercase, no dot, and null

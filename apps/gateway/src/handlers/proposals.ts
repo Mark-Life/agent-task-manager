@@ -29,7 +29,7 @@
  * entry in the same transaction.
  */
 
-import { dirname, relative, resolve, sep } from "node:path";
+import { relative, resolve } from "node:path";
 import {
   Api,
   Forbidden,
@@ -50,7 +50,6 @@ import {
 } from "@workspace/db";
 import type { Proposal, ProposalId, TaskId, UserId } from "@workspace/domain";
 import {
-  ARTIFACT_DIR_MODE,
   type ArtifactIoFailed,
   ensureArtifactDir,
   globalArtifactsDirOf,
@@ -60,6 +59,7 @@ import { Config, Effect } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { atBuild } from "./at-build";
+import { makeParent, refuseLink, resolveInScope } from "./scope-paths";
 
 /** Where the artifacts tree lives when the environment says nothing. Mirrors `@workspace/env`. */
 const DEFAULT_DATA_ROOT = ".data";
@@ -200,56 +200,31 @@ const scopeDirOf = (input: {
  * Writes one proposal's body into its scope, refusing anything that does not
  * land inside it.
  *
- * Contained twice: `resolve` collapses whatever the path holds and the prefix
- * test refuses what is left outside, and then the parent directory is resolved
- * through its symlinks and tested again. The first check is about the string,
- * which the domain has already refused the obvious forms of; the second is about
- * the disk, where a link inside a shared scope points wherever it was pointed.
+ * The containment is `./scope-paths`, which is the same answer the file routes
+ * write through, and it is shared rather than repeated for the reason this
+ * function exists at all: a second copy of a rule this delicate is a copy that
+ * will be hardened once and left weak once. Three refusals, and the run that
+ * proposed the path is the run that could have planted what each of them
+ * catches — a link in the middle of the path, a link that *is* the file, and a
+ * path that resolves into the scope's own history.
  */
 const writeIntoScope = Effect.fnUntraced(function* (input: {
   readonly dir: string;
   readonly proposal: Proposal;
 }) {
   const fs = yield* FileSystem;
-  const root = resolve(input.dir);
-  const target = resolve(root, input.proposal.path);
-  const refuse = () =>
-    Effect.fail(
-      new Forbidden({
-        reason: "the proposal names a path outside its own scope",
-        required: "admin",
-      })
-    );
-  if (!target.startsWith(`${root}${sep}`)) {
-    yield* Effect.logWarning("proposal path leaves its scope", {
-      path: input.proposal.path,
-      proposalId: input.proposal.id,
-    });
-    return yield* refuse();
-  }
-
-  const parent = dirname(target);
-  yield* fs
-    .makeDirectory(parent, { mode: ARTIFACT_DIR_MODE, recursive: true })
-    .pipe(Effect.orDie);
-  // After the directory exists, so the answer is about the path that will
-  // actually be written rather than about one that does not exist yet.
-  const realParent = yield* fs.realPath(parent).pipe(Effect.orDie);
   // A data root reached through a link — `/tmp` on a mac, a mounted volume in
   // production — would otherwise make every path inside it look like an escape.
-  const realRoot = yield* fs
-    .realPath(root)
-    .pipe(Effect.orElseSucceed(() => root));
-  if (realParent !== realRoot && !realParent.startsWith(`${realRoot}${sep}`)) {
-    yield* Effect.logWarning("proposal path resolves outside its scope", {
-      path: input.proposal.path,
-      proposalId: input.proposal.id,
-    });
-    return yield* refuse();
-  }
-
-  yield* fs.writeFileString(target, input.proposal.body).pipe(Effect.orDie);
-  return relative(realRoot, target);
+  const root = yield* fs
+    .realPath(input.dir)
+    .pipe(Effect.orElseSucceed(() => resolve(input.dir)));
+  const target = yield* resolveInScope({ path: input.proposal.path, root });
+  yield* refuseLink(target);
+  yield* makeParent({ absolute: target.absolute, root });
+  yield* fs
+    .writeFileString(target.absolute, input.proposal.body)
+    .pipe(Effect.orDie);
+  return relative(root, target.absolute);
 });
 
 /** A task's proposals, newest first — decided ones included, because the answer is the record. */

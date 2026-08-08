@@ -24,7 +24,11 @@
 
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { RunId, SessionProvider } from "@workspace/domain";
+import {
+  AGENTS_INSTRUCTIONS_FILE,
+  type RunId,
+  type SessionProvider,
+} from "@workspace/domain";
 
 /** Directory under the data root holding one subdirectory per run. */
 export const RUNS_SEGMENT = "runs";
@@ -56,26 +60,6 @@ export const CONTAINER_RUN_DIR = "/run";
  * that cannot see each other agree on a path.
  */
 export const ATM_ROOT_MARKER = ".atm-root";
-
-/**
- * What Codex calls an instruction file at any level of the tree.
- *
- * This is the name that carries the text. Codex reads it and Claude does not,
- * which is the whole reason there are two names for one document — see
- * {@link CLAUDE_INSTRUCTIONS_FILE}.
- */
-export const AGENTS_INSTRUCTIONS_FILE = "AGENTS.md";
-
-/**
- * What Claude calls an instruction file, and the second name of the same
- * document.
- *
- * Claude does not read `AGENTS.md` at all, so a directory holding only that file
- * is a directory whose rules reach one provider. The file written under this
- * name is one import line rather than a copy of the text, because two copies of
- * a rule are two rules the day somebody edits one.
- */
-export const CLAUDE_INSTRUCTIONS_FILE = "CLAUDE.md";
 
 /**
  * The whole body of a `CLAUDE.md` that defers to the `AGENTS.md` beside it.

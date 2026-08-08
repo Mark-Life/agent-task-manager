@@ -36,6 +36,7 @@
 import { BunHttpServer, BunServices } from "@effect/platform-bun";
 import { Api } from "@workspace/api";
 import { CurrentActor, storeLayer } from "@workspace/db";
+import { ScopeHistory } from "@workspace/sandbox";
 import { EventLog, telemetryLayer } from "@workspace/telemetry";
 import { Config, Layer } from "effect";
 import { HttpRouter } from "effect/unstable/http";
@@ -87,7 +88,12 @@ const store = storeLayer({ applicationName: SERVICE_NAME });
  */
 const requestServicesLayer = Layer.mergeAll(
   accessLayer,
-  RunEventNotices.layer
+  RunEventNotices.layer,
+  // The file routes commit a person's edit into the scope they changed, and
+  // every such commit names the person in the call. The edits-only layer, so
+  // this process does not spend a GitHub request at boot on the run identity it
+  // has no runs to author with.
+  ScopeHistory.editsLayer
 ).pipe(
   Layer.provideMerge(Layer.merge(CurrentActor.layer(gatewayActor), store))
 );

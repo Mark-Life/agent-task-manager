@@ -24,6 +24,14 @@
  * The author is the human the token belongs to, exactly as on a run's own
  * branch: it says who asked, not who typed.
  *
+ * **A person's edit is a commit too.** The dashboard writes into these same
+ * directories, and a hand edit that left no commit would be the one change in
+ * the folder that `git log` could not attribute — worse, it would be folded
+ * into the next run's `before` snapshot and read as something that run was
+ * handed rather than as something somebody chose. So an edit commits at the
+ * moment it is made, authored by the person who made it rather than by the
+ * identity `./committer` resolved for the process.
+ *
  * **Nothing here may fail a run.** A repository that cannot be initialised, a
  * commit that is refused, a git that is not installed: every one of them is
  * logged and stepped over, on the same reasoning as every other teardown in this
@@ -44,7 +52,7 @@
 
 import { join } from "node:path";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
-import type { ProjectId, RunId } from "@workspace/domain";
+import { FileScope, type ProjectId, type RunId } from "@workspace/domain";
 import { Context, Effect, Layer, Semaphore } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import {
@@ -54,7 +62,7 @@ import {
 } from "./artifacts";
 import { resolveCommitter } from "./committer";
 import { Git } from "./git";
-import type { Committer } from "./repo";
+import { type Committer, DEFAULT_COMMITTER } from "./repo";
 
 /**
  * When a snapshot was taken, relative to the run it names. Two, because two is
@@ -151,19 +159,36 @@ interface ScopeDirectory {
   readonly scope: SharedScope;
 }
 
-/** What one scope's snapshot produced: whether it committed, and where it left the branch. */
-interface SnapshotResult {
-  readonly committed: boolean;
-  readonly head: string | null;
-}
-
 /**
  * What a scope reports when its snapshot did not happen at all — the folder is
  * absent, git timed out, git failed. No commit, and no commit to point at
  * either: a head read off a snapshot that was abandoned would name a tree
  * nobody can vouch this run was handed.
  */
-const NO_SNAPSHOT: SnapshotResult = { committed: false, head: null };
+const NO_SNAPSHOT: ScopeEditReport = { committed: false, head: null };
+
+/** Which host directory one shared scope is, or null where the pair is incoherent. */
+const scopeDirectoryOf = (input: {
+  readonly dataRoot: string;
+  readonly projectId: ProjectId | null;
+  readonly scope: SharedScope;
+}): ScopeDirectory | null => {
+  if (input.scope === "workspace") {
+    return {
+      directory: globalArtifactsDirOf(input.dataRoot),
+      scope: "workspace",
+    };
+  }
+  return input.projectId === null
+    ? null
+    : {
+        directory: projectArtifactsDirOf({
+          dataRoot: input.dataRoot,
+          projectId: input.projectId,
+        }),
+        scope: "project",
+      };
+};
 
 /**
  * The directories one run shares with others. The workspace scope is in every
@@ -173,20 +198,15 @@ const NO_SNAPSHOT: SnapshotResult = { committed: false, head: null };
  * is nobody to overwrite and nothing a snapshot would preserve that the folder
  * itself does not already hold.
  */
-const scopesOf = (input: ScopeHistoryInput): readonly ScopeDirectory[] => [
-  { directory: globalArtifactsDirOf(input.dataRoot), scope: "workspace" },
-  ...(input.projectId === null
-    ? []
-    : [
-        {
-          directory: projectArtifactsDirOf({
-            dataRoot: input.dataRoot,
-            projectId: input.projectId,
-          }),
-          scope: "project" as const,
-        },
-      ]),
-];
+const scopesOf = (input: ScopeHistoryInput): readonly ScopeDirectory[] =>
+  SHARED_SCOPES.flatMap((scope) => {
+    const directory = scopeDirectoryOf({
+      dataRoot: input.dataRoot,
+      projectId: input.projectId,
+      scope,
+    });
+    return directory === null ? [] : [directory];
+  });
 
 /** The subject line one snapshot carries. The run id is what a reader greps for. */
 export const historyMessageOf = (input: {
@@ -194,8 +214,94 @@ export const historyMessageOf = (input: {
   readonly runId: RunId;
 }) => `snapshot ${input.phase} run ${input.runId}`;
 
-/** Records what a shared scope held around one run. */
+/**
+ * One shared scope, and the person whose edit is about to be recorded in it.
+ *
+ * The scope is named the way {@link ScopeHistoryInput} names it — by what it
+ * is, plus the project id the second one needs — rather than by a directory,
+ * so a caller cannot hand this a path and have a commit land somewhere the
+ * mount set never puts one.
+ */
+export interface ScopeEditInput {
+  /**
+   * Who the commit is authored by. The person who made the edit, never the
+   * identity `./committer` resolved for the process: a run's snapshot says the
+   * account answerable for the board, and an edit somebody made in a browser
+   * should say that somebody. A caller with nobody to name should not be
+   * calling this.
+   */
+  readonly committer: Committer;
+  readonly dataRoot: string;
+  /** The subject line. {@link editMessageOf} is what the gateway builds it with. */
+  readonly message: string;
+  /** Required for the project scope, and null for the workspace one. */
+  readonly projectId: ProjectId | null;
+  readonly scope: SharedScope;
+}
+
+/**
+ * Which repository an edit to one addressable scope belongs in, or null for a
+ * scope that keeps no history.
+ *
+ * Two of the four map onto one repository. The manager's directory lives inside
+ * the workspace scope's folder rather than in a bind of its own, so a manager
+ * rule is a file in the workspace repository and a commit there is the commit
+ * for it — a second repository nested inside the first would put its own object
+ * store in the workspace's history.
+ *
+ * A task scope keeps none, and that is the same reasoning {@link scopesOf}
+ * gives for leaving it out of a run's snapshots: it belongs to one task, so
+ * there is nobody to overwrite and no earlier version anyone lost.
+ */
+export const historyScopeOf = (
+  scope: FileScope
+): Pick<ScopeEditInput, "projectId" | "scope"> | null =>
+  FileScope.match(scope, {
+    manager: () => ({ projectId: null, scope: "workspace" as const }),
+    project: (self) => ({
+      projectId: self.projectId,
+      scope: "project" as const,
+    }),
+    task: () => null,
+    workspace: () => ({ projectId: null, scope: "workspace" as const }),
+  });
+
+/** Where a scope stands after one edit was recorded, or was not. */
+export interface ScopeEditReport {
+  /** False when nothing changed on disk, and false when git refused. */
+  readonly committed: boolean;
+  /** The commit the scope stands at now, or null where it has no history. */
+  readonly head: string | null;
+}
+
+/**
+ * The subject line a person's edit carries. The verb and the path, because what
+ * a reader of `git log` wants from a hand edit is which file and what happened
+ * to it — the who is the author field, and the when is the commit date.
+ */
+export const editMessageOf = (input: {
+  readonly operation: string;
+  readonly path: string;
+}) => `${input.operation} ${input.path}`;
+
+/** Records what a shared scope held around one run, and what a person changed in it. */
 export interface ScopeHistoryInterface {
+  /**
+   * Commits one person's edit to one shared scope, as that person.
+   *
+   * Separate from {@link record} because the two answer different questions and
+   * are attributed differently — a snapshot brackets a run and names it, an
+   * edit names a file and a person — and because an edit touches the one scope
+   * it was made in rather than every scope a run was handed.
+   *
+   * Total, on the same reasoning as the snapshots, and for a sharper reason
+   * besides: the bytes are already on disk by the time this is called, so a git
+   * that refused must not turn a completed edit into a failed request. The
+   * report says no commit and the warning says why.
+   */
+  readonly commitEdit: (
+    input: ScopeEditInput
+  ) => Effect.Effect<ScopeEditReport>;
   /**
    * Snapshots every shared scope this run touches, and answers with the ones
    * that had anything to record. Total: a failure is logged and the report says
@@ -238,11 +344,11 @@ export const makeScopeHistory = Effect.fnUntraced(function* (
    * `.git/config` inside a directory a container has mounted — a file the loop
    * would then have to keep in step with an identity that is resolved at boot.
    */
-  const identityArgs = [
+  const identityArgs = (author: Committer) => [
     "-c",
-    `user.name=${committer.name}`,
+    `user.name=${author.name}`,
     "-c",
-    `user.email=${committer.email}`,
+    `user.email=${author.email}`,
     // Off, whatever the host's own git is configured to do. These commits run
     // as the loop process on a machine whose operator may sign everything they
     // write by hand, and a signing prompt or a missing key would cost a folder
@@ -281,8 +387,13 @@ export const makeScopeHistory = Effect.fnUntraced(function* (
    * diff --cached --quiet` exits zero when they match, and in a repository with
    * no commits yet it compares against the empty tree, which is the same
    * question asked of a folder that was seeded and never touched.
+   *
+   * The author travels with the call rather than with the service, because the
+   * two callers are different people: a run's snapshot is authored by the
+   * account the process resolved at boot, and a person's edit by that person.
    */
   const snapshot = Effect.fnUntraced(function* (input: {
+    readonly author: Committer;
     readonly message: string;
     readonly scope: ScopeDirectory;
   }) {
@@ -319,7 +430,7 @@ export const makeScopeHistory = Effect.fnUntraced(function* (
     yield* git.mustRun({
       ...inScope,
       args: [
-        ...identityArgs,
+        ...identityArgs(input.author),
         "commit",
         "--quiet",
         // The hooks in a repository nobody configured are none, and a run's
@@ -331,6 +442,44 @@ export const makeScopeHistory = Effect.fnUntraced(function* (
     });
     return { committed: true, head: yield* headOf(input.scope) };
   });
+
+  /**
+   * One snapshot, serialised against every other and never allowed to fail.
+   *
+   * Both callers go through here, because both need exactly the same three
+   * guards for the same reasons: git takes a lock file and reports the loser as
+   * a fatal error rather than waiting, a git that hangs would hold the slot
+   * forever, and neither a run nor a completed edit may be failed by the record
+   * of it.
+   */
+  const guarded = (input: {
+    readonly author: Committer;
+    readonly message: string;
+    readonly scope: ScopeDirectory;
+  }) =>
+    Semaphore.withPermit(lock)(snapshot(input)).pipe(
+      // Outside the permit, so the cap covers the wait as well as the work: a
+      // run queued behind a git that hung gives up at the same two minutes
+      // rather than at two minutes after it finally gets in.
+      Effect.timeoutOrElse({
+        duration: SNAPSHOT_TIMEOUT,
+        orElse: () =>
+          Effect.logWarning("scope history timed out", {
+            path: input.scope.directory,
+            scope: input.scope.scope,
+          }).pipe(Effect.as(NO_SNAPSHOT)),
+      }),
+      // Per scope rather than around a loop: a workspace folder somebody made
+      // read-only must not cost the project folder its history, and each
+      // failure names the scope it happened in.
+      Effect.catchCause((cause) =>
+        Effect.logWarning("scope history not recorded", {
+          cause,
+          path: input.scope.directory,
+          scope: input.scope.scope,
+        }).pipe(Effect.as(NO_SNAPSHOT))
+      )
+    );
 
   const record = Effect.fn("ScopeHistory.record")(function* (
     input: ScopeHistoryInput
@@ -345,31 +494,7 @@ export const makeScopeHistory = Effect.fnUntraced(function* (
       workspace: null,
     };
     for (const scope of scopesOf(input)) {
-      const done = yield* Semaphore.withPermit(lock)(
-        snapshot({ message, scope })
-      ).pipe(
-        // Outside the permit, so the cap covers the wait as well as the work: a
-        // run queued behind a git that hung gives up at the same two minutes
-        // rather than at two minutes after it finally gets in.
-        Effect.timeoutOrElse({
-          duration: SNAPSHOT_TIMEOUT,
-          orElse: () =>
-            Effect.logWarning("scope history timed out", {
-              path: scope.directory,
-              scope: scope.scope,
-            }).pipe(Effect.as(NO_SNAPSHOT)),
-        }),
-        // Per scope rather than around the loop: a workspace folder somebody
-        // made read-only must not cost the project folder its history, and each
-        // failure names the scope it happened in.
-        Effect.catchCause((cause) =>
-          Effect.logWarning("scope history not recorded", {
-            cause,
-            path: scope.directory,
-            scope: scope.scope,
-          }).pipe(Effect.as(NO_SNAPSHOT))
-        )
-      );
+      const done = yield* guarded({ author: committer, message, scope });
       if (done.committed) {
         committed.push(scope.scope);
       }
@@ -382,7 +507,39 @@ export const makeScopeHistory = Effect.fnUntraced(function* (
     return { committed, heads } satisfies ScopeHistoryReport;
   });
 
-  return ScopeHistory.of({ record } satisfies ScopeHistoryInterface);
+  const commitEdit = Effect.fn("ScopeHistory.commitEdit")(function* (
+    input: ScopeEditInput
+  ) {
+    const scope = scopeDirectoryOf({
+      dataRoot: input.dataRoot,
+      projectId: input.projectId,
+      scope: input.scope,
+    });
+    if (scope === null) {
+      // A project scope with no project named. Nothing to commit into, and the
+      // edit itself has already happened — so this is a warning about a caller,
+      // not a failure of the request that reached it.
+      yield* Effect.logWarning("scope edit names a project scope without one", {
+        scope: input.scope,
+      });
+      return NO_SNAPSHOT;
+    }
+    const done = yield* guarded({
+      author: input.committer,
+      message: input.message,
+      scope,
+    });
+    yield* Effect.annotateCurrentSpan({
+      committed: done.committed,
+      scope: scope.scope,
+    });
+    return done;
+  });
+
+  return ScopeHistory.of({
+    commitEdit,
+    record,
+  } satisfies ScopeHistoryInterface);
 });
 
 /**
@@ -413,5 +570,24 @@ export class ScopeHistory extends Context.Service<
     Effect.flatMap(resolveCommitter(), (committer) =>
       makeScopeHistory({ committer })
     )
+  ).pipe(Layer.provide(Layer.mergeAll(BunFileSystem.layer, Git.layer)));
+
+  /**
+   * The same service for a process that only ever commits somebody's own edit.
+   *
+   * `commitEdit` carries its author in the call, so the identity the other layer
+   * spends a GitHub request resolving at boot is never read here — and a process
+   * that had resolved it would log, once, that runs commit as a person whose
+   * name will never appear in a commit it makes. A boot line that is untrue
+   * about the process printing it is worse than a missing one, and it costs a
+   * request to a third party to print.
+   *
+   * {@link ScopeHistoryInterface.record} is still on the service and still
+   * works; it writes as the fallback identity, which is the honest answer for a
+   * process holding no run to attribute a snapshot to.
+   */
+  static readonly editsLayer = Layer.effect(
+    ScopeHistory,
+    makeScopeHistory({ committer: DEFAULT_COMMITTER })
   ).pipe(Layer.provide(Layer.mergeAll(BunFileSystem.layer, Git.layer)));
 }

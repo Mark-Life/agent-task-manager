@@ -25,35 +25,12 @@
 
 import { join } from "node:path";
 import {
-  AGENTS_INSTRUCTIONS_FILE,
-  CLAUDE_INSTRUCTIONS_FILE,
-} from "@workspace/harness";
+  INSTRUCTION_BUDGET_WARN_BYTES,
+  INSTRUCTION_FILES,
+} from "@workspace/domain";
 import { Effect, Option } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { CONTAINER_WORKSPACE_DIR, isUnder, type Mount } from "./mounts";
-
-/**
- * The combined size at which a run's instruction files are worth a warning.
- *
- * This is Codex's own default `project_doc_max_bytes`, and it is the number to
- * warn at even though `./harness` writes a larger one into every run's
- * `config.toml`: raising the setting moves the cliff, it does not remove it, and
- * the person most likely to hit it is somebody running the CLI themselves under
- * the default. A tree that has outgrown 32 KiB is a tree worth knowing about
- * whatever this install has configured.
- */
-export const INSTRUCTION_BUDGET_WARN_BYTES = 32_768;
-
-/**
- * The two names an instruction file goes by, at every level of the tree. Both
- * are counted although only the first is what Codex's budget is spent on: the
- * pair is one document written twice, and a reader asked to shrink their rules
- * is looking at both files.
- */
-export const INSTRUCTION_FILES = [
-  AGENTS_INSTRUCTIONS_FILE,
-  CLAUDE_INSTRUCTIONS_FILE,
-] as const;
 
 /** One instruction file that exists, and what it costs. */
 export interface InstructionFile {

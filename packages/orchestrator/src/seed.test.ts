@@ -20,9 +20,9 @@ import { join } from "node:path";
 import { BunFileSystem } from "@effect/platform-bun";
 import {
   AGENTS_INSTRUCTIONS_FILE,
-  ATM_ROOT_MARKER,
   CLAUDE_INSTRUCTIONS_FILE,
-} from "@workspace/harness";
+} from "@workspace/domain";
+import { ATM_ROOT_MARKER } from "@workspace/harness";
 import {
   MANAGER_INSTRUCTIONS,
   WORKSPACE_INSTRUCTIONS,

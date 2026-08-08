@@ -1,6 +1,7 @@
 import {
   BubbleChatIcon,
   File01Icon,
+  FileEditIcon,
   Note01Icon,
   PlayCircleIcon,
   Robot01Icon,
@@ -18,6 +19,7 @@ import {
 } from "@workspace/ui/components/tabs";
 import { artifactsQuery } from "@/api/artifacts";
 import { taskMessagesQuery } from "@/api/messages";
+import { proposalsQuery } from "@/api/proposals";
 import { runsQuery } from "@/api/runs";
 import { sessionsQuery } from "@/api/sessions";
 import { taskQuery } from "@/api/tasks";
@@ -27,6 +29,7 @@ import { TaskArtifacts } from "@/features/task/artifacts";
 import { TaskDetails } from "@/features/task/details";
 import { TaskHeader } from "@/features/task/header";
 import { TaskMessages } from "@/features/task/messages";
+import { TaskProposals } from "@/features/task/proposals";
 import { TaskRuns, useCurrentRun } from "@/features/task/runs";
 import { TaskSessions } from "@/features/task/sessions";
 import { RunTimeline } from "@/features/task/timeline";
@@ -40,6 +43,7 @@ const TAB_FACES: Record<TaskTab, { icon: IconSvgElement; label: string }> = {
   artifacts: { icon: File01Icon, label: "Files" },
   details: { icon: Note01Icon, label: "Details" },
   messages: { icon: BubbleChatIcon, label: "Messages" },
+  proposals: { icon: FileEditIcon, label: "Proposals" },
   runs: { icon: PlayCircleIcon, label: "Runs" },
   sessions: { icon: Robot01Icon, label: "Sessions" },
 };
@@ -68,12 +72,19 @@ const isUnsettled = (detail: TaskDetail) =>
 const useTabCounts = (taskId: TaskId): Partial<Record<TaskTab, number>> => {
   const artifacts = useQuery(artifactsQuery(taskId));
   const messages = useQuery(taskMessagesQuery(taskId));
+  const proposals = useQuery(proposalsQuery(taskId));
   const runs = useQuery(runsQuery(taskId));
   const sessions = useQuery(sessionsQuery(taskId));
 
   return {
     artifacts: artifacts.data?.length,
     messages: messages.data?.length,
+    // The waiting ones alone. Every other count says how much is behind a tab;
+    // this one says how much is waiting on the reader, and a decided proposal
+    // is a record rather than a thing to do.
+    proposals: proposals.data?.filter(
+      (proposal) => proposal.state === "pending"
+    ).length,
     runs: runs.data?.length,
     sessions: sessions.data?.length,
   };
@@ -260,6 +271,12 @@ export const TaskDetailView = ({
           value="artifacts"
         >
           <TaskArtifacts taskId={taskId} />
+        </TabsContent>
+        <TabsContent
+          className="min-h-0 min-w-0 flex-1 overflow-y-auto py-4 pr-1"
+          value="proposals"
+        >
+          <TaskProposals taskId={taskId} />
         </TabsContent>
       </Tabs>
     </div>

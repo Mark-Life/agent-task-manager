@@ -35,8 +35,8 @@ import { join } from "node:path";
 import {
   AGENTS_INSTRUCTIONS_FILE,
   CLAUDE_INSTRUCTIONS_FILE,
-  CLAUDE_INSTRUCTIONS_IMPORT,
-} from "@workspace/harness";
+} from "@workspace/domain";
+import { CLAUDE_INSTRUCTIONS_IMPORT } from "@workspace/harness";
 import {
   MANAGER_INSTRUCTIONS,
   WORKSPACE_INSTRUCTIONS,

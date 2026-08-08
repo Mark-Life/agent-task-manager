@@ -15,9 +15,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunFileSystem } from "@effect/platform-bun";
+import { INSTRUCTION_BUDGET_WARN_BYTES } from "@workspace/domain";
 import { Effect } from "effect";
 import {
-  INSTRUCTION_BUDGET_WARN_BYTES,
   instructionDirsOf,
   measureInstructionBudget,
 } from "./instruction-budget";

@@ -342,14 +342,72 @@ test("a symlink in the scope does not carry a confirm outside it", async () => {
   rmSync(outside, { force: true, recursive: true });
 });
 
+/**
+ * The same attack one segment shorter, which a check of the parent alone lets
+ * through: the link is the file being written, so its parent is the scope root
+ * and every question about the parent answers "inside". The run that proposed
+ * the path is the run that could have planted the link.
+ */
+test("a link that is itself the file does not carry a confirm outside it", async () => {
+  const outside = mkdtempSync(join(tmpdir(), "gateway-proposals-direct-"));
+  const dir = globalArtifactsDirOf(dataRoot);
+  mkdirSync(dir, { recursive: true });
+  symlinkSync(join(outside, "pointed.md"), join(dir, "pointed.md"));
+
+  const refusal = await runtime.runPromise(
+    Effect.flip(
+      confirming(
+        await proposalWith({
+          body: "planted",
+          path: "pointed.md",
+          scope: "workspace",
+          sourcePath: ".atm/proposals/pointed.md",
+        })
+      )
+    )
+  );
+
+  expect(refusal._tag).toBe("Forbidden");
+  expect(existsSync(join(outside, "pointed.md"))).toBe(false);
+  rmSync(outside, { force: true, recursive: true });
+});
+
+/**
+ * The scope's history is the record of what every run and every person changed
+ * to the rules the next run reads. A `.git` segment is refused in the path a
+ * proposal carries, and a link is the way around that refusal — so where the
+ * write really lands is asked as well as what it was called.
+ */
+test("a link to the object store does not carry a confirm into it", async () => {
+  const dir = globalArtifactsDirOf(dataRoot);
+  mkdirSync(join(dir, ".git"), { recursive: true });
+  symlinkSync(".git", join(dir, "record"));
+
+  const refusal = await runtime.runPromise(
+    Effect.flip(
+      confirming(
+        await proposalWith({
+          body: "planted",
+          path: "record/description",
+          scope: "workspace",
+          sourcePath: ".atm/proposals/record.md",
+        })
+      )
+    )
+  );
+
+  expect(refusal._tag).toBe("Forbidden");
+  expect(existsSync(join(dir, ".git/description"))).toBe(false);
+});
+
 test("a task's proposals list newest first, decided ones included", async () => {
   const rows = await runtime.runPromise(
     listTaskProposals({ dataRoot, principal, taskId: task.id })
   );
 
-  // The refused one is still pending: a write that could not land is not a
-  // decision anybody made.
-  expect(rows.filter((row) => row.state === "pending")).toHaveLength(1);
+  // Three confirms above were refused their path, and a write that could not
+  // land is not a decision anybody made: each is still waiting for one.
+  expect(rows.filter((row) => row.state === "pending")).toHaveLength(3);
   expect(rows.some((row) => row.state === "accepted")).toBe(true);
   expect(rows.some((row) => row.state === "rejected")).toBe(true);
 });

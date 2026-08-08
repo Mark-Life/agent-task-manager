@@ -33,6 +33,7 @@ export {
   Unauthorized,
 } from "./errors";
 export { ArtifactsGroup } from "./groups/artifacts";
+export { FilesGroup } from "./groups/files";
 export { HealthGroup } from "./groups/health";
 export { MessagesGroup } from "./groups/messages";
 export { ProjectsGroup } from "./groups/projects";
@@ -40,6 +41,7 @@ export { ProposalsGroup } from "./groups/proposals";
 export { RunCommandsGroup } from "./groups/run-commands";
 export { RunsGroup } from "./groups/runs";
 export { SessionsGroup } from "./groups/sessions";
+export { SkillsGroup } from "./groups/skills";
 export { TasksGroup } from "./groups/tasks";
 export { ThreadsGroup } from "./groups/threads";
 export { UsageGroup } from "./groups/usage";
@@ -50,6 +52,18 @@ export {
   PROMOTION_SCOPES,
   PromotionScope,
 } from "./schemas/artifact";
+export {
+  FILE_ENCODINGS,
+  FILE_ENTRY_KINDS,
+  FileContent,
+  FileDirectoryCreate,
+  FileEncoding,
+  FileEntry,
+  FileEntryKind,
+  FileMove,
+  FileWrite,
+  MAX_FILE_BYTES,
+} from "./schemas/file";
 export { HealthStatus } from "./schemas/health";
 export { Project, ProjectCreate, ProjectPatch } from "./schemas/project";
 export {
@@ -79,6 +93,13 @@ export {
   TranscriptRole,
   TranscriptUsage,
 } from "./schemas/session";
+export {
+  InstalledSkill,
+  SkillFileChange,
+  SkillInstall,
+  SkillUpdate,
+  SkillUpdateApply,
+} from "./schemas/skill";
 export {
   BoardColumn,
   NextSession,
