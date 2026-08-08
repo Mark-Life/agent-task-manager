@@ -187,4 +187,7 @@ How each part actually behaves: [agent homes](.docs/agent-homes.md),
 [project env files](.docs/project-env.md), [orchestrator](.docs/orchestrator.md),
 [gateway](.docs/gateway.md), [bot](.docs/bot.md), [event ledger](.docs/telemetry.md).
 
+Every prompt and rule an agent is given, with a link to each and who reads it when:
+[`.docs/agent-prompts.md`](.docs/agent-prompts.md).
+
 Monorepo conventions, editor setup and shadcn components: [`.docs/monorepo.md`](.docs/monorepo.md).
