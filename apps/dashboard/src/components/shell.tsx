@@ -7,7 +7,12 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link, Outlet, useRouterState } from "@tanstack/react-router";
+import {
+  Link,
+  Outlet,
+  useNavigate,
+  useRouterState,
+} from "@tanstack/react-router";
 import { Avatar, AvatarFallback } from "@workspace/ui/components/avatar";
 import {
   DropdownMenu,
@@ -16,6 +21,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu";
+import { Kbd } from "@workspace/ui/components/kbd";
 import {
   Sidebar,
   SidebarContent,
@@ -33,8 +39,10 @@ import {
 import { type ReactNode, useCallback, useEffect } from "react";
 import { signOut, useSession } from "@/auth/client";
 import { WorkspacePicker } from "@/auth/workspace";
+import { ShortcutLabel } from "@/components/shortcut";
 import { ModeToggle } from "@/components/theme";
 import { UsageMeters } from "@/features/usage/meters";
+import { useHotkeys } from "@/lib/hotkey";
 
 /** Where signing out lands, and the one page the shell never wraps. */
 const SIGN_IN_PATH = "/login";
@@ -45,12 +53,32 @@ const SIGN_IN_PATH = "/login";
  * Conversations are not here — they open over whatever is underneath rather
  * than replacing it, so they are a list further down and never a page of their
  * own.
+ *
+ * Each one carries the letter that reaches it, so the taken letters are read
+ * off one list rather than hunted for: `d` flips the theme, `f` opens the
+ * board's search, `n` starts a conversation and the digits open one, and a
+ * fourth destination would have to find a letter none of those has spoken for.
+ * `k` rather than `a` for the keys, because it is the word the page is called
+ * by.
  */
 const DESTINATIONS = [
-  { icon: KanbanIcon, label: "Board", to: "/" },
-  { icon: FolderLibraryIcon, label: "Projects", to: "/projects" },
-  { icon: Key01Icon, label: "API keys", to: "/api-keys" },
+  { hotkey: "b", icon: KanbanIcon, label: "Board", to: "/" },
+  { hotkey: "p", icon: FolderLibraryIcon, label: "Projects", to: "/projects" },
+  { hotkey: "k", icon: Key01Icon, label: "API keys", to: "/api-keys" },
 ] as const;
+
+/** The bound letters, in the order they are listed above. */
+const DESTINATION_KEYS = DESTINATIONS.map((destination) => destination.hotkey);
+
+/**
+ * Where a letter leads, or null when it leads nowhere.
+ *
+ * Separate from the component so the mapping can be read and tested as the
+ * plain lookup it is: a letter that is not one of these is not this shell's to
+ * answer, and saying so with null keeps the caller's decision explicit.
+ */
+export const destinationFor = (key: string) =>
+  DESTINATIONS.find((destination) => destination.hotkey === key) ?? null;
 
 /**
  * Whether a destination is the one being looked at. The board owns the root
@@ -212,6 +240,23 @@ export const Shell = ({ children, conversations }: ShellProps) => {
     select: (state) => state.location.pathname,
   });
 
+  // Unbound rather than this route's own hook: the shell renders under a
+  // pathless layout, so a bound `navigate` would resolve these paths against
+  // the root. The navigation is the plain one a click on the row performs —
+  // same target, same search handling — so the row highlights and the history
+  // entry read the same whichever way the operator got there.
+  const navigate = useNavigate();
+  const goToDestination = useCallback(
+    (key: string) => {
+      const destination = destinationFor(key);
+      if (destination !== null) {
+        navigate({ to: destination.to });
+      }
+    },
+    [navigate]
+  );
+  useHotkeys(DESTINATION_KEYS, goToDestination);
+
   return (
     /*
       The frame is exactly one viewport tall and never scrolls itself. The
@@ -264,13 +309,38 @@ export const Shell = ({ children, conversations }: ShellProps) => {
             <SidebarMenu>
               {DESTINATIONS.map((destination) => (
                 <SidebarMenuItem key={destination.to}>
+                  {/*
+                    The letter sits in the row while there is a row to sit in,
+                    and moves into the tooltip the button already draws for the
+                    collapsed rail — one hint, in whichever place is left.
+                  */}
                   <SidebarMenuButton
                     isActive={isCurrent(pathname, destination.to)}
                     render={<Link to={destination.to} />}
-                    tooltip={destination.label}
+                    tooltip={{
+                      children: (
+                        <ShortcutLabel
+                          hotkey={destination.hotkey}
+                          label={destination.label}
+                        />
+                      ),
+                    }}
                   >
                     <HugeiconsIcon icon={destination.icon} strokeWidth={2} />
-                    <span>{destination.label}</span>
+                    <span className="min-w-0 flex-1 truncate">
+                      {destination.label}
+                    </span>
+                    {/*
+                      A fill off the text colour rather than the key's own
+                      `bg-muted`: in this palette `--sidebar-accent` and
+                      `--muted` are the same value, so the default cap would
+                      disappear on exactly the row that is current. A tint of
+                      whatever is above it stays one step off both the plain row
+                      and the highlighted one, in either theme.
+                    */}
+                    <Kbd className="shrink-0 bg-foreground/10 group-data-[collapsible=icon]:hidden">
+                      {destination.hotkey.toUpperCase()}
+                    </Kbd>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}

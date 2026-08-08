@@ -3,6 +3,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { Button } from "@workspace/ui/components/button";
 import { ThemeProvider as NextThemesProvider, useTheme } from "next-themes";
 import { type ReactNode, useCallback } from "react";
+import { ShortcutHint } from "@/components/shortcut";
 import { useHotkey } from "@/lib/hotkey";
 
 /**
@@ -119,24 +120,34 @@ const ThemeHotkey = () => {
  * itself a frame later. The pre-paint script has already put `.dark` on the
  * document by then, so the right one is showing before this component knows
  * which it is.
+ *
+ * The button has no visible label — two icons and nothing else — so the
+ * `aria-label` stays where it was and the tooltip only describes. The letter is
+ * announced in the tooltip rather than in a `title`, which the browser draws in
+ * its own box after a pause and never draws at all on a touch screen.
  */
 export const ModeToggle = () => {
   const toggle = useToggleTheme();
 
   return (
-    <Button
-      aria-label="Toggle theme"
-      onClick={toggle}
-      size="icon"
-      title="Toggle theme (D)"
-      variant="ghost"
-    >
-      <HugeiconsIcon className="dark:hidden" icon={Sun03Icon} strokeWidth={2} />
-      <HugeiconsIcon
-        className="hidden dark:block"
-        icon={Moon02Icon}
-        strokeWidth={2}
-      />
-    </Button>
+    <ShortcutHint hotkey={TOGGLE_KEY} label="Toggle theme">
+      <Button
+        aria-label="Toggle theme"
+        onClick={toggle}
+        size="icon"
+        variant="ghost"
+      >
+        <HugeiconsIcon
+          className="dark:hidden"
+          icon={Sun03Icon}
+          strokeWidth={2}
+        />
+        <HugeiconsIcon
+          className="hidden dark:block"
+          icon={Moon02Icon}
+          strokeWidth={2}
+        />
+      </Button>
+    </ShortcutHint>
   );
 };
