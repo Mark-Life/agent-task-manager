@@ -1,6 +1,10 @@
 {
   "extends": "@workspace/typescript-config/react-library.json",
   "compilerOptions": {
+    // Named rather than left to automatic @types discovery, which does not
+    // reach `bun:test` here: the tests beside these components run under
+    // `bun test`, the same way every other workspace's do.
+    "types": ["bun", "node", "react", "react-dom"],
     "paths": {
       "@workspace/ui/*": ["./src/*"]
     }

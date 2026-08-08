@@ -8,7 +8,7 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@workspace/ui/components/empty";
-import { Markdown } from "@workspace/ui/components/markdown";
+import { Markdown, PlainText } from "@workspace/ui/components/markdown";
 import { Marker, MarkerContent } from "@workspace/ui/components/marker";
 import {
   Message,
@@ -160,7 +160,8 @@ export const Transcript = ({ isTurnRunning, threadId }: TranscriptProps) => {
  * markdown — a board answer is a list, a plan is headings — so its turns are
  * rendered as the document they are. The operator's are not: somebody typing an
  * asterisk into a chat box meant an asterisk, and their newlines are kept as
- * they were.
+ * they were. Both sides link the addresses in them, because a task URL pasted
+ * into the box is a link whichever side of the thread it lands on.
  */
 const MessageRow = ({ message }: { readonly message: ThreadMessage }) => {
   const isOperator = message.role === "user";
@@ -177,7 +178,7 @@ const MessageRow = ({ message }: { readonly message: ThreadMessage }) => {
         <Bubble variant={isOperator ? "default" : "muted"}>
           <BubbleContent className="px-3 py-2 text-[0.8125rem]/relaxed">
             {isOperator ? (
-              <p className="whitespace-pre-wrap">{message.body}</p>
+              <PlainText>{message.body}</PlainText>
             ) : (
               <Markdown>{message.body}</Markdown>
             )}

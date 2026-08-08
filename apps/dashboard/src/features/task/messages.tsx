@@ -17,7 +17,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@workspace/ui/components/collapsible";
-import { Markdown } from "@workspace/ui/components/markdown";
+import { Markdown, PlainText } from "@workspace/ui/components/markdown";
 import { Marker, MarkerContent } from "@workspace/ui/components/marker";
 import {
   Message,
@@ -244,7 +244,8 @@ const SystemRow = ({
  *
  * `plain` is for text a person typed: markdown would eat the asterisks and
  * underscores they meant literally, and nobody writing a two-line instruction
- * into a task expects a heading.
+ * into a task expects a heading. It still links the addresses in it — pasting a
+ * pull request URL into a message is the most common thing anyone does here.
  */
 const Body = ({
   body,
@@ -252,12 +253,7 @@ const Body = ({
 }: {
   readonly body: string;
   readonly plain: boolean;
-}) =>
-  plain ? (
-    <p className="whitespace-pre-wrap">{body}</p>
-  ) : (
-    <Markdown>{body}</Markdown>
-  );
+}) => (plain ? <PlainText>{body}</PlainText> : <Markdown>{body}</Markdown>);
 
 /** The closing message, out of the way until somebody wants it. */
 const FoldedBody = ({ body }: { readonly body: string }) => (

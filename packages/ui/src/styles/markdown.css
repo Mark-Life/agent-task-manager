@@ -4,7 +4,9 @@
  * Kept as one stylesheet rather than a map of tag to component: a document can
  * emit twenty tags, all of them want the same rhythm, and a component per tag
  * would be twenty files agreeing with each other. Scoped to `.markdown`, which
- * is the only thing the renderer's wrapper adds.
+ * is the only thing the renderer's wrapper adds — and, for links alone, to
+ * `.plain-text`, which is what the unparsed renderer beside it marks a person's
+ * own words with.
  *
  * Every size below is relative. A document sits in a chat bubble on one screen
  * and in a task panel on another, and the surface it lands on already knows how
@@ -74,6 +76,19 @@
 
 .markdown a {
   color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/*
+ * A link in a person's own message, which is not a document but still contains
+ * addresses. It keeps the colour it inherits instead of taking the accent: these
+ * words are drawn in the accent bubble itself, where an accent-coloured link is
+ * the bubble's own colour and disappears. The underline is what marks it, and
+ * that reads on any surface.
+ */
+.plain-text a {
+  color: inherit;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
