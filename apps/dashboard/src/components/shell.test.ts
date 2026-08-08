@@ -20,7 +20,7 @@ const BOUND = [
  * and the shell's answer would be the silent one — a navigation away from the
  * screen the other shortcut was meant to act on.
  */
-const NOT_OURS = ["d", "f", "n", "1", "9", "z"];
+const NOT_OURS = ["d", "f", "t", "n", "1", "9", "z"];
 
 describe("destinationFor", () => {
   for (const { key, to } of BOUND) {

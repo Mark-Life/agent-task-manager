@@ -75,9 +75,13 @@ const BOUND_SEPARATOR = "\n";
  * A held key repeats at the OS rate. Only the first of those counts: a shortcut
  * that flips something would otherwise strobe until the key came back up.
  *
- * The event's default is left alone. These bindings are bare letters, which no
- * browser reserves outside a text field, and swallowing the event would take
- * the keystroke away from anything that comes to depend on it later.
+ * A claimed keystroke is cancelled. The default action of a `keydown` on a
+ * letter is text insertion, and it resolves after this handler has returned,
+ * against whatever holds the caret by then — not against whatever held it when
+ * the key went down. So a shortcut that focuses a field is handed the letter it
+ * was pressed for: `f` opened the board's search with `f` already typed into it.
+ * Cancelling costs nothing, because it is reached only past every decline above
+ * — a letter typed into a field, or pressed under a dialog, never gets here.
  */
 export const useHotkeys = (
   keys: readonly string[],
@@ -104,6 +108,7 @@ export const useHotkeys = (
       ) {
         return;
       }
+      event.preventDefault();
       onPress(event.key);
     };
 

@@ -56,10 +56,10 @@ const SIGN_IN_PATH = "/login";
  *
  * Each one carries the letter that reaches it, so the taken letters are read
  * off one list rather than hunted for: `d` flips the theme, `f` opens the
- * board's search, `n` starts a conversation and the digits open one, and a
- * fourth destination would have to find a letter none of those has spoken for.
- * `k` rather than `a` for the keys, because it is the word the page is called
- * by.
+ * board's search, `t` its new-task panel, `n` starts a conversation and the
+ * digits open one, and a fourth destination would have to find a letter none of
+ * those has spoken for. `k` rather than `a` for the keys, because it is the word
+ * the page is called by.
  */
 const DESTINATIONS = [
   { hotkey: "b", icon: KanbanIcon, label: "Board", to: "/" },
