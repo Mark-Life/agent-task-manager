@@ -95,6 +95,15 @@ export interface ManagerPromptInput {
    */
   readonly historyLimit?: number;
   /**
+   * Whether this turn's directories carry the house style as `CLAUDE.md` and
+   * `AGENTS.md` files it reads on its own. When they do, {@link WRITING_RULES}
+   * is left out and the files are the single copy; when they do not — a local
+   * turn is a host process with no tree above its working directory — the
+   * prompt states it. Defaults to false, so a caller that says nothing gets the
+   * rules.
+   */
+  readonly instructionsOnDisk?: boolean;
+  /**
    * Every message after the session's watermark, oldest first. The one being
    * answered is the last of them; the rest are what arrived while the previous
    * turn was still running.
@@ -110,11 +119,12 @@ const ANSWER_INSTRUCTION =
 
 /** The full situating prompt a conversation's first turn gets. */
 const freshPrompt = (input: ManagerPromptInput) => {
+  const { instructionsOnDisk = false } = input;
   const limit = input.historyLimit ?? FRESH_HISTORY_MESSAGES;
   const kept = limit <= 0 ? [] : input.messages.slice(-limit);
   return joinSections([
     MANAGER_RULES,
-    WRITING_RULES,
+    instructionsOnDisk ? null : WRITING_RULES,
     SHARED_RULES,
     section(
       "Where you are working",

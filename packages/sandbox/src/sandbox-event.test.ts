@@ -116,6 +116,7 @@ const MOUNTS = mountsFor({
   agentHomeDir: "/home/op/.claude-task-management",
   cacheDir: "/data/caches",
   globalArtifactsDir: "/data/artifacts/global",
+  labels: { project: "Atlas", repo: "mark-life/atlas", task: "Ship it" },
   projectArtifactsDir: "/data/artifacts/project-1",
   runDir: "/data/runs/run-1",
   taskArtifactsDir: "/data/tasks/task-1/artifacts",

@@ -73,7 +73,8 @@ delivered to nobody.
 **Artifacts are metadata in Postgres and bytes on disk.** `list` is a query, `read` is a stream
 straight off local disk, and every path is resolved against the task's own folder and refused —
 twice, once before `realPath` and once after — unless it stays inside. Promotion copies into the
-project's or the global folder, which are read-only mounts everywhere else.
+project's folder or the global one — the global folder is a read-only mount to every worker, so
+nothing else reaches it.
 
 **`atm.request`, one row per request, on every exit path.** Route *pattern* rather than path,
 method, status, `durationMs`, workspace, actor kind and id, token scope, bytes out, whether it

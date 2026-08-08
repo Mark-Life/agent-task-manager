@@ -3,8 +3,10 @@
 /**
  * Proves the seven things the orchestrator is allowed to assume about a
  * container: that what a run writes to the artifacts mount is on the host after
- * the container is gone, that the shared artifact folders reject its writes,
- * that the container cannot read the operator's home directory, that it *can*
+ * the container is gone, that the project scope one level above it takes a write
+ * and the workspace scope above that refuses one — which is a worker's whole
+ * write boundary — that the container cannot read the operator's home
+ * directory, that it *can*
  * read the login out of the agent home and that a token it refreshes there is
  * on the host afterwards, that the shared package store is writable from inside
  * and keeps what a run put in it, that a wide-event row written *inside* the
@@ -79,9 +81,7 @@ import {
 } from "@workspace/harness";
 import {
   CONTAINER_AGENT_HOME_DIR,
-  CONTAINER_ARTIFACT_DIR,
   CONTAINER_CACHE_DIR,
-  CONTAINER_WORKSPACE_DIR,
   DEFAULT_SANDBOX_IMAGE,
   defaultHardening,
   dockerSandboxLayer,
@@ -89,6 +89,8 @@ import {
   hostUser,
   mountsFor,
   type RunIdentity,
+  type RunLabels,
+  runTreeOf,
   SANDBOX_EVENT_MARKER,
   Sandbox,
   type SandboxSpec,
@@ -156,20 +158,50 @@ const REFRESHED_FILE = "refreshed-inside.json";
 const CHECK_PROVIDER = "claude" as const;
 
 /**
- * What the container tries, and must fail, to write into each shared artifacts
- * folder. Named so a file by this name appearing on the host is unambiguous
- * evidence rather than something an operator has to reason about.
+ * What the container tries, and must fail, to write into the workspace scope.
+ * Named so a file by this name appearing on the host is unambiguous evidence
+ * rather than something an operator has to reason about.
  */
 const RO_PROBE_FILE = "must-not-be-writable.txt";
 
 /**
- * The project whose promoted folder this check mounts read-only. Fixed rather
- * than minted, for the same reason the workspace id is: a fresh id every run
- * would leave one empty folder per invocation in the artifacts tree, and the
- * check never writes there — that is the claim. A literal, so it is trusted
- * construction and not a decode.
+ * What the container writes into the project's folder, which a worker may write.
+ * Removed by this script afterwards, like the package store probe: the folder is
+ * keyed by a fixed project id and every invocation of this check mounts it.
+ */
+const PROJECT_PROBE_FILE = "written-by-the-check.txt";
+
+/**
+ * The project whose promoted folder this check mounts. Fixed rather than
+ * minted, for the same reason the workspace id is: a fresh id every run would
+ * leave one empty folder per invocation in the artifacts tree. A literal, so it
+ * is trusted construction and not a decode.
  */
 const CHECK_PROJECT_ID = ProjectId.make("019fbfd0-0000-7000-8000-000000000001");
+
+/**
+ * The names the container's paths are spelled with. A check rather than a real
+ * dispatch, so they are literals — but they go through the same
+ * {@link runTreeOf} every run's tree is computed by, because a path this script
+ * composed itself would prove the composition rather than the mount.
+ */
+const CHECK_LABELS: RunLabels = {
+  project: "sandbox check",
+  repo: null,
+  task: "sandbox check",
+};
+
+/** Where the four scopes land inside the container this check starts. */
+const CHECK_TREE = runTreeOf(CHECK_LABELS);
+
+/**
+ * The project scope as a path rather than as "a path or nothing". {@link
+ * runTreeOf} is nullable there because a task can have no project; this check
+ * names one, so the fallback is unreachable. It points at the task scope so that
+ * if it ever did run, the probe lands somewhere the host-side claim then fails
+ * to find it — an unreachable branch must not be able to pass quietly.
+ */
+const CHECK_PROJECT_SCOPE = CHECK_TREE.projectScope ?? CHECK_TREE.taskScope;
 
 /** The tools the real image promises. Checked only in `--agent` mode. */
 const AGENT_IMAGE_TOOLS = [
@@ -267,14 +299,17 @@ const makeSentinel = (): Sentinel => {
 const containerScript = (sentinel: Sentinel) =>
   [
     "set -u",
-    // Claim 1: a write to the task's artifacts mount.
-    `printf 'written inside %s\\n' "$${TURN_ENV_VARS.runId}" > ${CONTAINER_ARTIFACT_DIR.task}/${ARTIFACT_FILE}`,
-    // Claim 2: the promoted folders reject the same write. The redirect runs in
-    // a subshell with its stderr closed, because a failed redirection is
-    // reported by the shell rather than by the command, and the point here is
-    // the exit status, not the message.
-    `printf 'projectwrite:[%s]\\n' "$( (printf x > ${CONTAINER_ARTIFACT_DIR.project}/${RO_PROBE_FILE}) 2>/dev/null && echo yes || echo no )"`,
-    `printf 'globalwrite:[%s]\\n' "$( (printf x > ${CONTAINER_ARTIFACT_DIR.global}/${RO_PROBE_FILE}) 2>/dev/null && echo yes || echo no )"`,
+    // Claim 1: a write to the task's artifacts mount, one level out of the
+    // working directory.
+    `printf 'written inside %s\\n' "$${TURN_ENV_VARS.runId}" > ${CHECK_TREE.taskScope}/${ARTIFACT_FILE}`,
+    // Claim 2: the boundary between the two shared scopes. The project's folder
+    // takes the write — a research run leaves a document the next task reads —
+    // and the workspace scope above it refuses one, which is a worker's whole
+    // write boundary. The redirect runs in a subshell with its stderr closed,
+    // because a failed redirection is reported by the shell rather than by the
+    // command, and the point here is the exit status, not the message.
+    `printf 'projectwrite:[%s]\\n' "$( (printf '%s' "$${TURN_ENV_VARS.runId}" > ${CHECK_PROJECT_SCOPE}/${PROJECT_PROBE_FILE}) 2>/dev/null && echo yes || echo no )"`,
+    `printf 'globalwrite:[%s]\\n' "$( (printf x > ${CHECK_TREE.workspaceScope}/${RO_PROBE_FILE}) 2>/dev/null && echo yes || echo no )"`,
     // Claim 3: the operator's home is not reachable. Both halves are printed —
     // the host path, and whatever the container thinks HOME is.
     `printf 'sentinel:[%s]\\n' "$(cat '${sentinel.path}' 2>/dev/null || true)"`,
@@ -363,7 +398,9 @@ const specFor = (input: {
   image: input.image,
   mounts: input.mounts,
   timeoutMs: TIMEOUT_MS,
-  workingDir: CONTAINER_WORKSPACE_DIR,
+  // The deepest level of the tree, as a dispatched run gets: the scope above it
+  // is read-only, so a container started there could not write its own probe.
+  workingDir: CHECK_TREE.cwd,
 });
 
 const sandboxCheck = Effect.gen(function* () {
@@ -437,8 +474,9 @@ const sandboxCheck = Effect.gen(function* () {
         // read them from.
         envFiles: [],
         identity,
-        // A project, so the conditional fifth mount is present and the
-        // read-only claim has both promoted folders to be made against.
+        labels: CHECK_LABELS,
+        // A project, so the conditional project mount is present and the two
+        // shared scopes can be probed against each other.
         projectId: CHECK_PROJECT_ID,
         provider: CHECK_PROVIDER,
         repo: null,
@@ -498,25 +536,49 @@ const sandboxCheck = Effect.gen(function* () {
     step: "a file the container wrote to the artifacts mount is on the host after teardown",
   });
 
-  // Claim 2 — the promoted folders are read-only. Asked twice, because the two
-  // answers fail differently: the container reporting a refused write is the
-  // kernel's verdict, and the absent file on the host is the one that would
-  // still catch a write that landed somewhere other than the mount.
-  for (const probe of [
-    { dir: projectArtifactsDir, key: "projectwrite", scope: "project" },
-    { dir: globalArtifactsDir, key: "globalwrite", scope: "global" },
-  ] as const) {
-    yield* check({
-      detail: `the container reported [${readField(output, probe.key)}] writing ${RO_PROBE_FILE}`,
-      ok: readField(output, probe.key) === "no",
-      step: `the ${probe.scope} artifacts mount refuses a write from inside`,
-    });
-    yield* check({
-      detail: `a file the container was refused exists at ${probe.dir === null ? "an unmounted folder" : join(probe.dir, RO_PROBE_FILE)}`,
-      ok: probe.dir !== null && !existsSync(join(probe.dir, RO_PROBE_FILE)),
-      step: `nothing reached the ${probe.scope} artifacts folder on the host`,
-    });
+  // Claim 2a — the project's folder takes the write, and it lands on the host.
+  // Removed again: the folder is keyed by a fixed id, so every invocation of
+  // this check mounts the same one.
+  const projectProbePath =
+    projectArtifactsDir === null
+      ? null
+      : join(projectArtifactsDir, PROJECT_PROBE_FILE);
+  const promoted = ((): string | null => {
+    if (projectProbePath === null) {
+      return null;
+    }
+    try {
+      return readFileSync(projectProbePath, "utf-8");
+    } catch {
+      return null;
+    }
+  })();
+  if (projectProbePath !== null) {
+    rmSync(projectProbePath, { force: true });
   }
+  yield* check({
+    detail: `the container reported [${readField(output, "projectwrite")}] writing ${PROJECT_PROBE_FILE}, and the host has ${promoted === null ? "nothing" : promoted} at ${projectProbePath ?? "an unmounted folder"}`,
+    ok:
+      readField(output, "projectwrite") === "yes" &&
+      promoted === identity.runId,
+    step: "the project scope is writable from inside and lands on the host",
+  });
+
+  // Claim 2b — the workspace scope above it refuses the same write, which is a
+  // worker's entire write boundary. Asked twice, because the two answers fail
+  // differently: the container reporting a refused write is the kernel's
+  // verdict, and the absent file on the host is the one that would still catch a
+  // write that landed somewhere other than the mount.
+  yield* check({
+    detail: `the container reported [${readField(output, "globalwrite")}] writing ${RO_PROBE_FILE}`,
+    ok: readField(output, "globalwrite") === "no",
+    step: "the workspace scope refuses a write from inside",
+  });
+  yield* check({
+    detail: `a file the container was refused exists at ${join(globalArtifactsDir, RO_PROBE_FILE)}`,
+    ok: !existsSync(join(globalArtifactsDir, RO_PROBE_FILE)),
+    step: "nothing reached the global artifacts folder on the host",
+  });
 
   // Claim 6 — the shared package store round-trips, and the file is removed
   // again: every other run on this host mounts the same directory.

@@ -212,7 +212,7 @@ export type ChatIntakeKind = typeof ChatIntakeKind.Type;
 // What the bot volunteers without being asked is in `./notify`: the kinds come
 // in two families now, and the rule that tells them apart belongs beside them.
 
-/** Two of the three are read-only mounts, which is what makes promotion an audit trail. */
+/** Nested inside a run, deepest first: the global folder is the one a worker may not write. */
 export const ARTIFACT_SCOPES = ["task", "project", "global"] as const;
 
 /** Which folder an artifact lives in, and therefore who may write it. */

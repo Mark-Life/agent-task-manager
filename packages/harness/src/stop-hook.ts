@@ -242,9 +242,11 @@ export type StopDecision = StopAllowed | StopRefused;
  * message anyway. Naming the file gives the refusal something to be complied
  * with. The name is `HANDOFF_FILENAME`, which `@workspace/orchestrator` reads
  * back off the task's artifacts directory: one convention, three packages, no
- * second spelling.
+ * second spelling. The directory is named as the *task's* for the same reason
+ * `WORKER_RULES` names it that way — a run has three artifacts directories now,
+ * and a handoff left in either of the other two is a message nobody collects.
  */
-export const NO_MESSAGE_REFUSAL = `This run has not posted a message on its task. Post one now, then end your turn: the outcome in a sentence, a link to where the detail lives, and anything a reader would be wrong not to know before they open it. Do not restate what you linked, and do not repeat work you have already finished. If the tool that posts messages is not answering, write the same text to \`${HANDOFF_FILENAME}\` in your artifacts directory instead and end your turn; it is read off the disk and posted for you.`;
+export const NO_MESSAGE_REFUSAL = `This run has not posted a message on its task. Post one now, then end your turn: the outcome in a sentence, a link to where the detail lives, and anything a reader would be wrong not to know before they open it. Do not restate what you linked, and do not repeat work you have already finished. If the tool that posts messages is not answering, write the same text to \`${HANDOFF_FILENAME}\` in your task's artifacts directory instead and end your turn; it is read off the disk and posted for you.`;
 
 /** The allowing response. One object, because it carries no per-decision detail. */
 export const ALLOW_TURN_END: StopHookResponse = { continue: true };

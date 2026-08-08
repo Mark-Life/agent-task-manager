@@ -52,8 +52,8 @@ export type PromotionScope = typeof PromotionScope.Type;
  * The deliberate verb. Copying the bytes is the server's job — reuse is always
  * a copy and never a reference, so that one task's record of what it worked
  * from cannot be made retroactively false by someone refining the original —
- * and the audit row beside it is the trail that read-only shared mounts exist
- * to protect.
+ * and the audit row beside it is what records that somebody chose to keep this
+ * file, which no write by a run itself can say.
  */
 export const ArtifactPromotion = Schema.Struct({
   scope: PromotionScope,

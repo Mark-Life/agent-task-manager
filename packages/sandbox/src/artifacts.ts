@@ -11,9 +11,14 @@
  *
  * All three folders hang off one root. `<dataRoot>/artifacts/{global,
  * projects/<id>, tasks/<id>}` rather than an `artifacts` folder tucked under
- * each task and project, because the manager agent's search is `ripgrep` over a
- * read-only mount of the whole tree — one root is one bind, and the alternative
- * is a mount per task, which is not a thing that can be mounted.
+ * each task and project: one root is one place to look, to back up and to scan,
+ * and the alternative is a folder per task scattered through the data root.
+ *
+ * The host layout is flat and the container's is nested. A run sees the global
+ * folder at `/workspace`, its project's inside that and its own inside that
+ * again, because both agent CLIs read instruction files by walking up from the
+ * working directory — see `./mounts`. Nothing here moves for it: a mount maps a
+ * host path to a container path, and these paths are the host's.
  *
  * **Postgres holds an index, never bytes.** {@link scanArtifacts} reads path,
  * size, modified time and extension off the disk; the orchestrator writes those
@@ -43,6 +48,7 @@
 import { createHash } from "node:crypto";
 import { dirname, extname, join, sep } from "node:path";
 import type { ArtifactStat, ProjectId, TaskId } from "@workspace/domain";
+import { ATM_ROOT_MARKER } from "@workspace/harness";
 import { DateTime, Effect, Option, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 
@@ -61,11 +67,12 @@ export const TASKS_SEGMENT = "tasks";
 /**
  * Mode for every artifact directory, all three scopes alike.
  *
- * Read-only on the shared folders is enforced by the mount flag, not by the
- * unix mode, and that is on purpose: the run's own folder has to be writable by
- * the same uid, so a mode that differed per scope would be a second, weaker
- * copy of a rule the mount already states exactly. One mode keeps the whole
- * difference between "yours" and "everyone's" in one place.
+ * Which scope a run may write is enforced by the mount's read-only flag, not by
+ * the unix mode, and that is on purpose: every folder here has to be writable by
+ * the uid the container runs as — a worker writes its task folder and its
+ * project folder, and a manager writes the global one — so a mode that differed
+ * per scope would be a second, weaker copy of a rule the mount already states
+ * exactly. One mode keeps the whole difference between roles in one place.
  */
 export const ARTIFACT_DIR_MODE = 0o755;
 
@@ -130,7 +137,11 @@ export interface ProjectArtifactsInput {
   readonly projectId: ProjectId;
 }
 
-/** A project's promoted folder: read-only to every run, written only by promotion. */
+/**
+ * A project's promoted folder: the project scope of every run on it, mounted
+ * read-write, so a promotion and a run leaving a document for the next task both
+ * land here.
+ */
 export const projectArtifactsDirOf = (input: ProjectArtifactsInput) =>
   join(artifactsRootOf(input.dataRoot), PROJECTS_SEGMENT, input.projectId);
 
@@ -140,7 +151,7 @@ export interface TaskArtifactsInput {
   readonly taskId: TaskId;
 }
 
-/** A task's own folder: the only artifact folder its run may write. */
+/** A task's own folder: this run's output, and the innermost scope of its tree. */
 export const taskArtifactsDirOf = (input: TaskArtifactsInput) =>
   join(artifactsRootOf(input.dataRoot), TASKS_SEGMENT, input.taskId);
 
@@ -184,14 +195,45 @@ const ensureDir = Effect.fnUntraced(function* (path: string) {
 });
 
 /**
+ * Puts the empty {@link ATM_ROOT_MARKER} in the global folder, which is the top
+ * of every run's instruction tree.
+ *
+ * Here rather than at either materialization site, because both of them go
+ * through this module for that folder and a marker written by only one of them
+ * is a Codex chat turn, or a Codex worker run, silently reading the one
+ * `AGENTS.md` in its working directory — Codex stops its upward walk at the
+ * first `project_root_markers` hit and reads nothing at all above the working
+ * directory when there is none. The harness points that setting at this name on
+ * every Codex turn, so the file not being there is worse than the default it
+ * replaced.
+ *
+ * Written once and never rewritten: the content carries nothing, and a
+ * whole-file write per run into a folder every other container has mounted is a
+ * race for no gain.
+ */
+const ensureRootMarker = Effect.fnUntraced(function* (dir: string) {
+  const fs = yield* FileSystem;
+  const path = join(dir, ATM_ROOT_MARKER);
+  const present = yield* fs.exists(path).pipe(failing("create", path));
+  if (present) {
+    return;
+  }
+  yield* fs.writeFileString(path, "").pipe(failing("create", path));
+});
+
+/**
  * Creates one artifact folder, on demand, and answers with its path.
  *
  * On demand rather than at task creation, because most tasks never write an
  * artifact at all and pre-creating a folder per task fills the tree with empty
  * directories that make "which tasks produced something" unanswerable from
- * disk. The global folder goes through here too: it is shared and read-only, so
- * nothing in a run's life would otherwise create it, and the first run on a
- * fresh host would die on a mount source that does not exist.
+ * disk. The global folder goes through here too: nothing else in a run's life
+ * would create it, and the first run on a fresh host would die on a mount
+ * source that does not exist.
+ *
+ * That folder also leaves with its root marker, because it is not only a folder
+ * — it is the workspace scope every run's tree hangs off. See
+ * {@link ensureRootMarker}.
  *
  * One folder per call rather than all three at once, so the caller that is
  * about to mount them can say which mount each failure was for — `./workspace`
@@ -201,7 +243,11 @@ const ensureDir = Effect.fnUntraced(function* (path: string) {
 export const ensureArtifactDir = Effect.fn("Artifacts.ensureDir")(function* (
   input: ArtifactDirInput
 ) {
-  return yield* ensureDir(artifactDirOf(input));
+  const dir = yield* ensureDir(artifactDirOf(input));
+  if (input.location.scope === "global") {
+    yield* ensureRootMarker(dir);
+  }
+  return dir;
 });
 
 /**
@@ -392,11 +438,13 @@ export interface PromoteArtifactInput {
  * Promotes one of a task's artifacts into the project's folder or the global
  * one.
  *
- * A verb of its own rather than a flag on a row, because the read-only mounts
- * make this the only way anything reaches a shared folder — and that is the
- * audit trail. If a run could write there, promoted material would drift with
- * no record of which run changed what, and the evidence would be the thing that
- * got overwritten.
+ * A verb of its own rather than a flag on a row, and it survives the project
+ * scope becoming writable to a run. It is still the only way into the global
+ * folder, which no worker may write. Into a project's folder it is now one of
+ * two ways, and the difference is who decided: a promotion is a person or a
+ * manager saying this file is worth keeping, where a run's own write is a side
+ * effect of the work. Attribution never rested on the mount flag — the artifact
+ * row carries the run that last touched it, and a copy records its sha256.
  *
  * The audit row and the `promotedAt` stamp belong to whoever called this: the
  * decision is theirs, and the same copy performed by the machinery would not be

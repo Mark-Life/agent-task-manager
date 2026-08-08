@@ -165,8 +165,11 @@ export interface HostPathInput {
  * when no mount covers it.
  *
  * Longest prefix wins, and the prefix has to end on a segment boundary:
- * `/artifacts` must not capture `/artifacts-scratch`, and `/artifacts/task`
- * must beat `/artifacts` for a path under it. That is the whole of the
+ * `/workspace` must not capture `/workspace-scratch`, and the task scope under
+ * it must beat it for a path inside that scope. Both halves are load-bearing
+ * now that the scopes nest — every mount but the run's and the cache's sits
+ * inside another one, so a shortest-match translation would send every write a
+ * local run makes into the global artifacts folder. That is the whole of the
  * translation, and it is why a mount set built by `mountsFor` behaves the same
  * in both modes.
  */

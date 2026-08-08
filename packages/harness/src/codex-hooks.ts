@@ -25,7 +25,8 @@
  *
  * Written next to `config.toml` rather than into it. Codex accepts either
  * representation and warns when a layer carries both, and `config.toml` in the
- * agent home is rewritten wholesale by the entrypoint when Executor is wired.
+ * agent home is rewritten wholesale on every Codex turn — see
+ * `./codex-config`.
  */
 
 import { join } from "node:path";

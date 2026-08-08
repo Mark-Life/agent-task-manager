@@ -9,9 +9,11 @@
  * closed by construction, and is unit-testable without a daemon: a mount added
  * by hand at a call site is a hole nobody reviews.
  *
- * Seven mounts a run always gets, one it gets when the install shares a skills
- * directory, one when it runs our own entrypoint and one when it is given the
- * board tools, and the reasons are each their own.
+ * Six mounts a run always gets — the run directory, the agent home, the package
+ * store, and the three scopes of its tree that always exist — a seventh when its
+ * task belongs to a project, one when the install shares a skills directory, one
+ * when it runs our own entrypoint and one when it is given the board tools. The
+ * reasons are each their own.
  *
  * The run directory carries the run's message marker, its turn spec and its
  * event ledger, and it is mounted whole at {@link CONTAINER_RUN_DIR} rather than
@@ -56,14 +58,44 @@
  * and push rights, so a per-project store would contain nothing it could not
  * already do and would cost the dedupe that is the whole point.
  *
- * The three artifact folders are the scope rule from the domain made physical:
- * the task's own folder is read-write, the project's promoted folder and the
- * global folder are read-only. The read-only flags are load-bearing, not
- * defensive. If any run could write the shared folders, promoted material would
- * drift with no audit and no way to tell which run changed what — and the
- * evidence would be the thing that got overwritten. Promotion is a deliberate
- * act performed by the gateway, on the host, against a database row; that
- * separation *is* the audit trail, and a writable mount erases it.
+ * The artifact folders are not three flat directories beside the checkout. They
+ * are one tree, and the depth of a directory *is* its scope: {@link
+ * CONTAINER_WORKSPACE_DIR} is the global folder, the project's folder hangs
+ * under it, the task's folder under that, and the checkout under that. Both
+ * agent CLIs read instruction files from the working directory upwards and
+ * concatenate them root-down, so a run walking out of its checkout collects
+ * house rules, then project conventions, then its own brief, in that order, with
+ * nothing to configure. See {@link runTreeOf}.
+ *
+ * Nesting the destinations is not merging the binds. Each level is still its own
+ * bind with its own host path and its own read-only flag; one bind of the whole
+ * tree would hand every run every project and every task. The daemon mounts a
+ * parent before anything under it, which is already why `/agent-home/skills`
+ * works.
+ *
+ * A worker gets the workspace scope read-only and everything under it
+ * read-write, and the read-only flag is the one place that rule is enforced
+ * rather than asserted. A worker clones arbitrary repositories; a write above
+ * its own task scope is meant to be a proposal a human confirms, and a mount
+ * flag makes that true where a sentence in a prompt only asks for it.
+ *
+ * Project scope is deliberately writable, and it is the one flag here that was
+ * relaxed on purpose. A research run leaving a document the next task in the
+ * same project reads is worth more than the deliberateness a read-only mount
+ * bought, and attribution never depended on that flag — `artifact.lastRunId` is
+ * an indexed column with a relation back to the run, and `copyArtifact` already
+ * records a sha256. What is genuinely lost is overwrite: two runs writing
+ * different names never collide, and a run replacing an existing path is guarded
+ * on the host, where the old bytes can be kept, rather than by the mount.
+ *
+ * A manager turn gets the workspace scope read-write. It is the role a human is
+ * talking to, its own rules live under it, and it reads no untrusted repository.
+ *
+ * Because a worker's workspace scope is read-only, the daemon cannot create the
+ * nested destinations through it: a bind needs its destination to already exist
+ * inside the parent's host directory. {@link nestedMountPointsOf} names those
+ * directories from the mount set itself, and materialization makes them before
+ * the container starts.
  *
  * The operator's own skills directory is mounted read-only at
  * {@link CONTAINER_SKILLS_DIR} when the install names one, and it is the only
@@ -121,14 +153,28 @@ import {
 import { Schema } from "effect";
 
 /**
- * Where the repo checkout is mounted. Fixed, like the run directory: the run id
- * lives in the host path and nowhere the agent can read it, so a prompt or a
- * transcript cannot leak which run wrote it.
+ * The root of a run's tree, and the shallowest scope in it. Fixed, like the run
+ * directory: no id appears in it, so a prompt or a transcript cannot leak which
+ * run, task or project wrote a file.
+ *
+ * The host directory behind it is the global artifacts folder, which is why the
+ * mount at this path carries the `global_artifacts` purpose. The path is short
+ * because every instruction file a run reads names it.
  */
 export const CONTAINER_WORKSPACE_DIR = "/workspace";
 
-/** The parent of the three artifact folders inside the container. */
-export const CONTAINER_ARTIFACTS_DIR = "/artifacts";
+/** The branch of the tree a dispatched task run works in. */
+export const WORKER_SEGMENT = "worker";
+
+/**
+ * The branch of the tree the manager agent works in, and the reason project
+ * rules never reach a chat turn: the manager's working directory is under here
+ * rather than under any project, so its upward walk never crosses one.
+ */
+export const MANAGER_SEGMENT = "manager";
+
+/** What the working directory is called for a run that has no repository to clone. */
+export const SCRATCH_SEGMENT = "scratch";
 
 /**
  * Where the shared package store is mounted. One bind for every manager: the
@@ -176,16 +222,149 @@ export const packageCacheEnv = (
   YARN_GLOBAL_FOLDER: join(cacheRoot, "yarn"),
 });
 
+/** Everything a worker run is given, below the workspace scope. */
+export const CONTAINER_WORKER_DIR = join(
+  CONTAINER_WORKSPACE_DIR,
+  WORKER_SEGMENT
+);
+
 /**
- * The three artifact folders as the container sees them, one per
- * `ArtifactScope`. Flat and named after the scope, so the one line of prompt
- * that explains artifacts to an agent is the whole interface.
+ * The manager's own directory. Not a mount: it is an ordinary directory inside
+ * the workspace scope's host folder, so the rules a human writes at
+ * `<manager>/CLAUDE.md` arrive through the bind that is already there. A worker
+ * can see it and never walks into it, because its working directory is under
+ * {@link CONTAINER_WORKER_DIR}.
  */
-export const CONTAINER_ARTIFACT_DIR = {
-  global: join(CONTAINER_ARTIFACTS_DIR, "global"),
-  project: join(CONTAINER_ARTIFACTS_DIR, "project"),
-  task: join(CONTAINER_ARTIFACTS_DIR, "task"),
-} as const;
+export const CONTAINER_MANAGER_DIR = join(
+  CONTAINER_WORKSPACE_DIR,
+  MANAGER_SEGMENT
+);
+
+/**
+ * Where a chat turn works. A manager reads the board over HTTP and has no
+ * checkout, but a CLI still puts temporary files somewhere and a container whose
+ * working directory does not exist fails to start — so it gets the run's own
+ * throwaway directory, mounted at a fixed name under the manager's scope.
+ */
+export const CONTAINER_MANAGER_SCRATCH_DIR = join(
+  CONTAINER_MANAGER_DIR,
+  SCRATCH_SEGMENT
+);
+
+/**
+ * How long a path segment made from a human-written name may be. Generous
+ * enough that a real project or task name survives recognisably, short enough
+ * that four levels plus a filename stay well inside any path limit an agent's
+ * tooling has.
+ */
+export const SLUG_MAX_LENGTH = 48;
+
+/** What a name that slugs to nothing becomes, so a path is never empty. */
+export const FALLBACK_SLUG = "untitled";
+
+const NON_SLUG_CHARS = /[^a-z0-9]+/g;
+const EDGE_DASHES = /^-+|-+$/g;
+
+/**
+ * One path segment from a human-written name: lowercase, anything that is not a
+ * letter or a digit collapsed to a dash, trimmed, and capped.
+ *
+ * A slug rather than an id, and that is safe here for a structural reason rather
+ * than a hopeful one: exactly one project directory and one task directory is
+ * ever mounted into a container, so two projects that slug the same can never
+ * meet inside one run. There is nothing to collide with. The host directories
+ * stay keyed by id, so a rename relabels the next run and moves nothing.
+ *
+ * The reason to prefer the slug is the same rule {@link CONTAINER_WORKSPACE_DIR}
+ * already follows: an id in a container path is an id a transcript can leak, and
+ * a path an agent reads aloud should say what the directory is for.
+ *
+ * A name written entirely outside `a-z0-9` — one in a non-Latin script, or an
+ * emoji — slugs to nothing and becomes {@link FALLBACK_SLUG}. That is a dull
+ * path, not a broken one, and it is why the fallback exists at all.
+ */
+export const slugOf = (label: string) => {
+  const collapsed = label
+    .toLowerCase()
+    .replace(NON_SLUG_CHARS, "-")
+    .replace(EDGE_DASHES, "");
+  // Trimmed again after the cap: slicing mid-word can leave the dash that
+  // replaced a space sitting at the end.
+  const capped = collapsed.slice(0, SLUG_MAX_LENGTH).replace(EDGE_DASHES, "");
+  return capped.length === 0 ? FALLBACK_SLUG : capped;
+};
+
+/**
+ * The human-written names a run's tree is spelled with. Names, never ids — see
+ * {@link slugOf} — and each one nullable exactly where the thing it names can be
+ * absent.
+ */
+export interface RunLabels {
+  /** The project's name, or null for a task that belongs to no project. */
+  readonly project: string | null;
+  /**
+   * The repository the run checks out, or null for a run with nothing to clone.
+   * An `owner/name` label is fine: the slug flattens it to one segment, so the
+   * checkout is one directory below the task scope whatever it is called.
+   */
+  readonly repo: string | null;
+  /** The task's title. Always present — every worker run is about a task. */
+  readonly task: string;
+}
+
+/**
+ * Where one run's four scopes sit inside its container. Computed, not
+ * configured: the mount set and every prompt that names a directory read the
+ * same record, so a path an agent is told about and a path it can actually write
+ * cannot drift apart.
+ */
+export interface RunTree {
+  /**
+   * The working directory: the checkout, or the scratch directory for a run with
+   * no repository. Deepest on purpose — both providers walk up from here, so
+   * starting anywhere shallower leaves the most specific rules unread.
+   */
+  readonly cwd: string;
+  /** The project scope, or null for a task with no project. */
+  readonly projectScope: string | null;
+  /** The task scope. This run's own output, and the one shared scope it may write. */
+  readonly taskScope: string;
+  /** The workspace scope. House rules and reference material for every run. */
+  readonly workspaceScope: string;
+}
+
+/**
+ * A run's tree from its labels. Pure, total, and the only place the shape is
+ * decided.
+ *
+ * A task with no project gets a shallower path rather than a placeholder
+ * segment: `worker/<task>` instead of `worker/_/<task>`. The alternative is an
+ * empty directory the agent can open, which is a lie it can read — the same
+ * reason nothing is mounted at the project scope in that case.
+ *
+ * A run with no repository gets {@link SCRATCH_SEGMENT} where the checkout would
+ * be, at the same depth and from the same host directory. The level exists
+ * either way, so the walk an agent's tooling performs is the same walk.
+ */
+export const runTreeOf = (labels: RunLabels): RunTree => {
+  const projectScope =
+    labels.project === null
+      ? null
+      : join(CONTAINER_WORKER_DIR, slugOf(labels.project));
+  const taskScope = join(
+    projectScope ?? CONTAINER_WORKER_DIR,
+    slugOf(labels.task)
+  );
+  return {
+    cwd: join(
+      taskScope,
+      labels.repo === null ? SCRATCH_SEGMENT : slugOf(labels.repo)
+    ),
+    projectScope,
+    taskScope,
+    workspaceScope: CONTAINER_WORKSPACE_DIR,
+  };
+};
 
 /**
  * The directory under a run's own directory where the wide-event ledger is
@@ -255,7 +434,11 @@ export interface Mount {
   /** Absolute path on the host. Must exist before the container starts. */
   readonly hostPath: string;
   readonly purpose: MountPurpose;
-  /** True for the shared artifact folders, false for everything a run owns. */
+  /**
+   * True for a worker's workspace scope and the two mounts an install shares
+   * with every run — the operator's skills and the entrypoint bundle — and
+   * false for everything a run works in.
+   */
   readonly readOnly: boolean;
 }
 
@@ -278,13 +461,23 @@ export interface MountSources {
    * {@link CONTAINER_CACHE_DIR}.
    */
   readonly cacheDir: string;
-  /** The global promoted folder. Read-only. */
+  /**
+   * The global promoted folder, which is the host side of the workspace scope.
+   * Read-only to a worker, read-write to a manager.
+   */
   readonly globalArtifactsDir: string;
+  /**
+   * The names the run's container paths are spelled with. Carried rather than
+   * the {@link RunTree} itself so that there is one place the tree is computed
+   * — a caller that could hand over a tree could hand over a tree that disagrees
+   * with the host directories beside it.
+   */
+  readonly labels: RunLabels;
   /** The project's promoted folder, or null for a task with no project. */
   readonly projectArtifactsDir: string | null;
   /** The run's own directory: agent home, message marker, event ledger. */
   readonly runDir: string;
-  /** The task's own artifacts folder. The only artifact folder a run may write. */
+  /** The task's own artifacts folder: this run's output, and the innermost scope. */
   readonly taskArtifactsDir: string;
   /** The repo checkout, or a scratch directory for a task with no repo. */
   readonly workspaceDir: string;
@@ -381,17 +574,22 @@ const bundleMounts = (extras: MountExtras): readonly Mount[] => {
  * The exact mount set for one run. Pure, total, and the only place the set is
  * decided.
  *
- * Two conditional entries, and neither is a default that hides a decision. A
- * task with no project has nothing to mount at the project folder, and mounting
+ * The four tree mounts are emitted parent first, which is how they read and
+ * also the order the daemon needs them established in.
+ *
+ * Four conditional entries, and none is a default that hides a decision. A task
+ * with no project has nothing to mount and nowhere to mount it, and mounting
  * the global folder twice or an empty placeholder would both be lies the agent
- * could read. A container running a command out of the image needs no
- * entrypoint bundle, and mounting a path that may not exist would refuse to
- * start it.
+ * could read. An install that shares no skills directory shares none. A
+ * container running a command out of the image needs neither the entrypoint
+ * bundle nor the board tools, and mounting a path that may not exist would
+ * refuse to start it.
  */
 export const mountsFor = (
   sources: MountSources,
   extras: MountExtras = NO_MOUNT_EXTRAS
 ): readonly Mount[] => {
+  const tree = runTreeOf(sources.labels);
   const mounts: Mount[] = [
     {
       containerPath: CONTAINER_RUN_DIR,
@@ -409,7 +607,39 @@ export const mountsFor = (
       readOnly: false,
     },
     {
-      containerPath: CONTAINER_WORKSPACE_DIR,
+      containerPath: tree.workspaceScope,
+      hostPath: sources.globalArtifactsDir,
+      // The host directory is the global artifacts folder, so the purpose names
+      // that rather than the container path it now answers to.
+      purpose: "global_artifacts",
+      // The one read-only scope, and the whole of a worker's write boundary: it
+      // clones untrusted repositories, and everything above its task scope is a
+      // proposal rather than an edit.
+      readOnly: true,
+    },
+  ];
+  // Both nulls state the same fact and both are checked, because a caller that
+  // passed one without the other would otherwise get a project folder mounted
+  // where no project scope exists, or a scope with nothing behind it.
+  if (sources.projectArtifactsDir !== null && tree.projectScope !== null) {
+    mounts.push({
+      containerPath: tree.projectScope,
+      hostPath: sources.projectArtifactsDir,
+      // Writable on purpose: a research run leaves a document the next task in
+      // the same project reads, and overwrite is guarded on the host.
+      purpose: "project_artifacts",
+      readOnly: false,
+    });
+  }
+  mounts.push(
+    {
+      containerPath: tree.taskScope,
+      hostPath: sources.taskArtifactsDir,
+      purpose: "task_artifacts",
+      readOnly: false,
+    },
+    {
+      containerPath: tree.cwd,
       hostPath: sources.workspaceDir,
       purpose: "workspace",
       readOnly: false,
@@ -421,28 +651,8 @@ export const mountsFor = (
       // nothing for the next one, which is the entire point of the mount.
       purpose: "cache",
       readOnly: false,
-    },
-    {
-      containerPath: CONTAINER_ARTIFACT_DIR.task,
-      hostPath: sources.taskArtifactsDir,
-      purpose: "task_artifacts",
-      readOnly: false,
-    },
-  ];
-  if (sources.projectArtifactsDir !== null) {
-    mounts.push({
-      containerPath: CONTAINER_ARTIFACT_DIR.project,
-      hostPath: sources.projectArtifactsDir,
-      purpose: "project_artifacts",
-      readOnly: true,
-    });
-  }
-  mounts.push({
-    containerPath: CONTAINER_ARTIFACT_DIR.global,
-    hostPath: sources.globalArtifactsDir,
-    purpose: "global_artifacts",
-    readOnly: true,
-  });
+    }
+  );
   mounts.push(...skillsMounts(extras), ...bundleMounts(extras));
   return mounts;
 };
@@ -460,8 +670,8 @@ export type ManagerMountSources = Pick<
 
 /**
  * The mount set for a turn that belongs to a conversation rather than to a
- * task: its own run directory, the provider's agent home, an empty workspace,
- * and the global promoted folder read-only.
+ * task: its own run directory, the provider's agent home, the workspace scope,
+ * and a scratch directory under it.
  *
  * A function beside {@link mountsFor} rather than a nullable field on it. The
  * two sets differ in what they are allowed to reach, not in a detail — this one
@@ -478,10 +688,17 @@ export type ManagerMountSources = Pick<
  * chat turn answers over HTTP and installs nothing, so the mount would be a
  * shared writable directory handed to a turn with no use for it.
  *
- * The workspace is still mounted, and it is still read-write. The manager works
- * over HTTP and needs no checkout, but a scratch directory is where a CLI puts
- * its temporary files, and a container whose working directory does not exist
- * fails to start.
+ * The workspace scope is read-write here, and that is the one flag that differs
+ * from a worker's. The manager is the role a human is talking to, it reads no
+ * untrusted repository, and the house rules it is asked to edit live in that
+ * folder — so the scope a worker may only propose changes to is one this turn
+ * simply writes. Its own rules sit at {@link CONTAINER_MANAGER_DIR}, inside the
+ * same bind, which is why there is no mount for them.
+ *
+ * The scratch directory is still mounted, and it is still read-write. The
+ * manager works over HTTP and needs no checkout, but a scratch directory is
+ * where a CLI puts its temporary files, and a container whose working directory
+ * does not exist fails to start.
  */
 export const managerMountsFor = (
   sources: ManagerMountSources,
@@ -502,15 +719,15 @@ export const managerMountsFor = (
     },
     {
       containerPath: CONTAINER_WORKSPACE_DIR,
-      hostPath: sources.workspaceDir,
-      purpose: "workspace",
+      hostPath: sources.globalArtifactsDir,
+      purpose: "global_artifacts",
       readOnly: false,
     },
     {
-      containerPath: CONTAINER_ARTIFACT_DIR.global,
-      hostPath: sources.globalArtifactsDir,
-      purpose: "global_artifacts",
-      readOnly: true,
+      containerPath: CONTAINER_MANAGER_SCRATCH_DIR,
+      hostPath: sources.workspaceDir,
+      purpose: "workspace",
+      readOnly: false,
     },
     ...skillsMounts(extras),
   ];
@@ -546,3 +763,60 @@ export const mountArgs = (mounts: readonly Mount[]) => mounts.map(mountArg);
 /** The host paths that must exist before the container starts, with their purpose. */
 export const mountSourcePaths = (mounts: readonly Mount[]) =>
   mounts.map((mount) => ({ path: mount.hostPath, purpose: mount.purpose }));
+
+/**
+ * A directory that has to be made on the host so a nested bind has somewhere to
+ * land. Shaped like an entry of {@link mountSourcePaths}, so the same
+ * "make it, or fail as a missing mount source" step serves both.
+ */
+export interface NestedMountPoint {
+  /** The host path to create: the parent's host directory plus the child's tail. */
+  readonly path: string;
+  /** The mount that fails to start without it, so the failure names the right thing. */
+  readonly purpose: MountPurpose;
+}
+
+/** True when `child` sits below `parent`, counted in segments rather than characters. */
+const isUnder = (child: string, parent: string) =>
+  child.startsWith(`${parent}/`);
+
+/**
+ * Every directory that must exist inside another mount's host directory before
+ * the container starts.
+ *
+ * A bind needs its destination to already be there. Where the destination is
+ * inside another bind, "there" means inside that bind's *host* directory — and
+ * docker will create it for a writable parent, but a worker's workspace scope is
+ * read-only, so the daemon cannot. Pre-creating them from the mount set is what
+ * makes a read-only parent workable at all, and taking the list from the set
+ * rather than from a constant keeps it correct when the tree changes shape.
+ *
+ * The parent is the *deepest* other mount that covers the path, because that is
+ * the bind the destination will actually be looked up in: the task scope's
+ * directory belongs inside the project's host folder, not inside the global one.
+ *
+ * Matching is on segment boundaries: `/workspace-scratch` is not under
+ * `/workspace`, and a raw string prefix would say it was.
+ *
+ * Every entry is a directory. The one bind of a file — the entrypoint bundle —
+ * is at a top-level path under no other mount, so it never appears here.
+ */
+export const nestedMountPointsOf = (
+  mounts: readonly Mount[]
+): readonly NestedMountPoint[] =>
+  mounts.flatMap((mount) => {
+    const [parent] = mounts
+      .filter((other) => isUnder(mount.containerPath, other.containerPath))
+      .sort((a, b) => b.containerPath.length - a.containerPath.length);
+    return parent === undefined
+      ? []
+      : [
+          {
+            path: join(
+              parent.hostPath,
+              mount.containerPath.slice(parent.containerPath.length)
+            ),
+            purpose: mount.purpose,
+          },
+        ];
+  });

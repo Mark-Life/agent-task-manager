@@ -41,11 +41,11 @@ const at = DateTime.makeUnsafe("2026-08-02T10:00:00.000Z");
 const runId = newRunId();
 
 const placement: RunPlacement = {
-  artifactsDir: "/artifacts/task",
+  artifactsDir: "/workspace/worker/atlas/ship-the-thing",
   branch: "atm/task-1",
-  globalArtifactsDir: "/artifacts/global",
-  projectArtifactsDir: "/artifacts/project",
-  workspaceDir: "/workspace",
+  globalArtifactsDir: "/workspace",
+  projectArtifactsDir: "/workspace/worker/atlas",
+  workspaceDir: "/workspace/worker/atlas/ship-the-thing/mark-life-atlas",
 };
 
 describe("the session's read position", () => {
@@ -63,6 +63,17 @@ describe("the session's read position", () => {
   });
 });
 
+/**
+ * What the prompt says about where the run is, against what the mount set
+ * actually binds.
+ *
+ * The paths a container sees are per-run now — they are spelled with the
+ * project's name and the task's title — so a prompt that named a constant would
+ * send the agent to a directory belonging to nobody. Both halves are built from
+ * the same labels, and these are the cases where the two could drift: a run with
+ * no repository, a task with no project, and a project folder the mount set
+ * omitted.
+ */
 describe("placement", () => {
   const runWorkspace: RunWorkspace = {
     agentHomeDir: "/host/.claude-task-management",
@@ -70,6 +81,11 @@ describe("placement", () => {
     cacheDir: "/host/.data/caches",
     envFiles: { excluded: false, paths: [] },
     globalArtifactsDir: "/host/.data/artifacts/global",
+    labels: {
+      project: "Atlas",
+      repo: "mark-life/atlas",
+      task: "Ship the thing",
+    },
     projectArtifactsDir: "/host/.data/artifacts/projects/p1",
     runDir: "/host/.data/runs/r1",
     strategy: "mount",
@@ -77,14 +93,48 @@ describe("placement", () => {
     workspaceDir: "/host/.data/workspaces/r1",
   };
 
-  test("names the mount points a container sees", () => {
+  test("names the scopes of the tree a container works in", () => {
     expect(placementOf({ kind: "docker", workspace: runWorkspace })).toEqual({
-      artifactsDir: "/artifacts/task",
+      artifactsDir: "/workspace/worker/atlas/ship-the-thing",
       branch: "atm/task-1",
-      globalArtifactsDir: "/artifacts/global",
-      projectArtifactsDir: "/artifacts/project",
-      workspaceDir: "/workspace",
+      globalArtifactsDir: "/workspace",
+      projectArtifactsDir: "/workspace/worker/atlas",
+      workspaceDir: "/workspace/worker/atlas/ship-the-thing/mark-life-atlas",
     });
+  });
+
+  test("says a run with no repo works in its scratch directory", () => {
+    expect(
+      placementOf({
+        kind: "docker",
+        workspace: {
+          ...runWorkspace,
+          labels: { ...runWorkspace.labels, repo: null },
+        },
+      }).workspaceDir
+    ).toBe("/workspace/worker/atlas/ship-the-thing/scratch");
+  });
+
+  test("skips the project level for a task that has no project", () => {
+    const placed = placementOf({
+      kind: "docker",
+      workspace: {
+        ...runWorkspace,
+        labels: { ...runWorkspace.labels, project: null },
+        projectArtifactsDir: null,
+      },
+    });
+    expect(placed.artifactsDir).toBe("/workspace/worker/ship-the-thing");
+    expect(placed.projectArtifactsDir).toBeNull();
+  });
+
+  test("mentions no project folder where none is mounted", () => {
+    expect(
+      placementOf({
+        kind: "docker",
+        workspace: { ...runWorkspace, projectArtifactsDir: null },
+      }).projectArtifactsDir
+    ).toBeNull();
   });
 
   test("names the host paths a local run actually has", () => {
@@ -95,15 +145,6 @@ describe("placement", () => {
       projectArtifactsDir: "/host/.data/artifacts/projects/p1",
       workspaceDir: "/host/.data/workspaces/r1",
     });
-  });
-
-  test("mentions no project folder where none is mounted", () => {
-    expect(
-      placementOf({
-        kind: "docker",
-        workspace: { ...runWorkspace, projectArtifactsDir: null },
-      }).projectArtifactsDir
-    ).toBeNull();
   });
 });
 
@@ -206,12 +247,14 @@ const walk = Effect.gen(function* () {
   const firstPrompt = yield* buildRunPrompt({
     context: contextOf(opened, "fresh"),
     placement,
+    sandboxKind: "docker",
   });
   const afterFirst = yield* reread();
 
   const secondPrompt = yield* buildRunPrompt({
     context: contextOf(afterFirst, "resumed"),
     placement,
+    sandboxKind: "docker",
   });
   const afterSecond = yield* reread();
 
@@ -225,6 +268,7 @@ const walk = Effect.gen(function* () {
   const thirdPrompt = yield* buildRunPrompt({
     context: contextOf(afterSecond, "resumed"),
     placement,
+    sandboxKind: "docker",
   });
   const afterThird = yield* reread();
 

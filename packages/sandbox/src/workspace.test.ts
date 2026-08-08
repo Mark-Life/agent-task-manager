@@ -19,9 +19,10 @@ import {
   newProjectId,
   newRunId,
   newTaskId,
+  type ProjectId,
   WorkspaceId,
 } from "@workspace/domain";
-import { runDirOf } from "@workspace/harness";
+import { ATM_ROOT_MARKER, runDirOf } from "@workspace/harness";
 import { Effect, Exit } from "effect";
 import {
   globalArtifactsDirOf,
@@ -29,7 +30,7 @@ import {
   taskArtifactsDirOf,
 } from "./artifacts";
 import { CloneFailed } from "./errors";
-import { eventLogDirOf } from "./mounts";
+import { eventLogDirOf, type RunLabels, runTreeOf, slugOf } from "./mounts";
 import type { MaterializeInput, RepoSource } from "./spec";
 import { Workspace } from "./spec";
 import {
@@ -120,9 +121,16 @@ const refusingClone: CloneIntoWorkspace = (input) =>
     })
   );
 
+/** The names this file's runs spell their container paths with. */
+const labels: RunLabels = {
+  project: "Atlas Rewrite",
+  repo: "mark-life/atlas",
+  task: "Ship the CSV export",
+};
+
 const materializeInput = (
   repo: RepoSource | null,
-  projectId = null,
+  projectId: ProjectId | null = null,
   envFiles: MaterializeInput["envFiles"] = []
 ) =>
   ({
@@ -130,6 +138,7 @@ const materializeInput = (
     dataRoot,
     envFiles,
     identity,
+    labels: { ...labels, project: projectId === null ? null : labels.project },
     projectId,
     provider: "claude",
     repo,
@@ -221,6 +230,25 @@ describe("materialize", () => {
     expect(existsSync(eventLogDirOf(runDir))).toBe(true);
   });
 
+  /**
+   * The marker is what a Codex run's upward walk stops at, and the harness
+   * points `project_root_markers` at that name on every Codex turn. Without the
+   * file the walk finds no root at all and the run reads the one `AGENTS.md` in
+   * its checkout — quieter than the default it replaced, since nothing fails.
+   */
+  test("the top of the tree carries the marker a Codex run stops at", async () => {
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null),
+      use: () => null,
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(
+      existsSync(join(globalArtifactsDirOf(dataRoot), ATM_ROOT_MARKER))
+    ).toBe(true);
+  });
+
   test("a task with no project gets no project folder to mount", async () => {
     const exit = await withWorkspace({
       clone: refusingClone,
@@ -241,7 +269,7 @@ describe("materialize", () => {
     const projectId = newProjectId();
     const exit = await withWorkspace({
       clone: refusingClone,
-      input: { ...materializeInput(null), projectId },
+      input: materializeInput(null, projectId),
       use: () => null,
     });
 
@@ -255,6 +283,85 @@ describe("materialize", () => {
     expect(existsSync(projectArtifactsDirOf({ dataRoot, projectId }))).toBe(
       true
     );
+  });
+});
+
+/**
+ * The scopes are bound at nested container paths, and the workspace scope is
+ * read-only to a worker — so the daemon cannot create a destination through it
+ * and the container refuses to start without one. These are the directories that
+ * make the read-only parent workable, and nothing else on the host makes them.
+ */
+describe("the nested mount points", () => {
+  test("exist inside the parent scope's own host directory", async () => {
+    const projectId = newProjectId();
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null, projectId),
+      use: () => null,
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(
+      existsSync(
+        join(
+          globalArtifactsDirOf(dataRoot),
+          "worker",
+          slugOf(String(labels.project))
+        )
+      )
+    ).toBe(true);
+    expect(
+      existsSync(
+        join(
+          projectArtifactsDirOf({ dataRoot, projectId }),
+          slugOf(labels.task)
+        )
+      )
+    ).toBe(true);
+    expect(
+      existsSync(
+        join(
+          taskArtifactsDirOf({ dataRoot, taskId }),
+          slugOf(String(labels.repo))
+        )
+      )
+    ).toBe(true);
+  });
+
+  test("follow the tree, so a task with no project has one level fewer", async () => {
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null),
+      use: () => null,
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    const workerDir = join(globalArtifactsDirOf(dataRoot), "worker");
+    // The task's own directory hangs straight off `worker/`, which is what
+    // `runTreeOf` says for a task that belongs to no project.
+    expect(readdirSync(workerDir)).toEqual([slugOf(labels.task)]);
+    expect(runTreeOf({ ...labels, project: null }).taskScope).toBe(
+      `/workspace/worker/${slugOf(labels.task)}`
+    );
+  });
+
+  test("hold nothing, so the artifact scan finds nothing to record", async () => {
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null),
+      use: () => null,
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    // A directory, and empty: `scanArtifacts` drops directories, so these are
+    // invisible to every row and URL the rest of the system builds.
+    const cloneMountPoint = join(
+      taskArtifactsDirOf({ dataRoot, taskId }),
+      slugOf(String(labels.repo))
+    );
+    expect(statSync(cloneMountPoint).isDirectory()).toBe(true);
+    expect(readdirSync(cloneMountPoint)).toEqual([]);
   });
 });
 

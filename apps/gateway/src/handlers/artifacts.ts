@@ -281,7 +281,7 @@ const requireOwnArtifact = Effect.fnUntraced(function* (
   return row;
 });
 
-/** The folder this task's files live in, and the only artifact folder anything writes. */
+/** The folder this task's files live in, and the only one these handlers read. */
 const taskDirOf = (input: ArtifactRequest) =>
   taskArtifactsDirOf({ dataRoot: input.dataRoot, taskId: input.taskId });
 
@@ -450,11 +450,11 @@ const promotionTargetOf = (input: {
  * Copies one of a task's files into the project's folder or the global one,
  * indexes the copy, and records the decision.
  *
- * Promotion is a verb, not an update. The shared folders are mounted read-only
- * into every container precisely so nothing else reaches them, which makes this
- * call the only way material becomes something every later run in the project
- * sees — and that is why it carries an audit action of its own rather than a
- * flag on a row.
+ * Promotion is a verb, not an update. The global folder is mounted read-only
+ * into every worker's container, so this call is the only way anything reaches
+ * it; a project's folder a run may also write, and what this call adds there is
+ * the record that somebody chose the file rather than a run leaving it. That is
+ * why it carries an audit action of its own rather than a flag on a row.
  *
  * Bytes first, index second. A copy with no row is a file somebody can promote
  * again over the same path; a row with no copy is a promise of shared material

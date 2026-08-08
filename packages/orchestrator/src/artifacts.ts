@@ -20,11 +20,16 @@
  * A rescan is therefore idempotent by construction — the same directory
  * produces the same rows however many times it is read.
  *
- * Only the task's own folder is scanned. The project and global folders are
- * mounted read-only into every container precisely so a run cannot write them;
- * their rows change when somebody promotes a file, which is a deliberate act
- * with an audit row of its own, and rescanning them here would let a run's
- * teardown quietly rewrite shared state.
+ * Only the task's own folder is scanned, and the folder is the one on the host:
+ * the container sees the task scope with the run's checkout nested inside it,
+ * but on disk the checkout is `workspaces/<runId>`, a sibling of the artifacts
+ * tree rather than anything under it. So a rescan walks what the run left in its
+ * artifacts folder and never the repository it cloned.
+ *
+ * The project and global folders are left alone. Their rows change when somebody
+ * promotes a file, which is a deliberate act with an audit row of its own, and
+ * rescanning them from a run's teardown would let one run's ending rewrite the
+ * index of state it shares with every other.
  */
 
 import { ArtifactRepo } from "@workspace/db";

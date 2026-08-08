@@ -27,13 +27,25 @@ import { ConfigProvider, Effect, Layer, Ref } from "effect";
 import { dockerSandboxLayer } from "./docker";
 import { defaultHardening } from "./hardening";
 import {
-  CONTAINER_ARTIFACT_DIR,
   CONTAINER_EVENT_LOG_DIR,
   eventLogDirOf,
   mountsFor,
+  nestedMountPointsOf,
+  type RunLabels,
+  runTreeOf,
 } from "./mounts";
 import { SANDBOX_EVENT_MARKER } from "./sandbox-event";
 import { Sandbox, type SandboxSpec } from "./spec";
+
+/** The names this smoke test's container paths are spelled with. */
+const LABELS: RunLabels = {
+  project: null,
+  repo: "mark-life/atlas",
+  task: "Smoke",
+};
+
+/** Where the container works, and where its scopes are, container-side. */
+const TREE = runTreeOf(LABELS);
 
 const IMAGE = "alpine:3";
 const SMOKE_TIMEOUT_MS = 120_000;
@@ -71,6 +83,19 @@ interface Fixture {
 
 let fixture: Fixture;
 
+/** The run's mount set, built from the fixture's directories. */
+const mountsForFixture = (input: Fixture) =>
+  mountsFor({
+    agentHomeDir: input.agentHomeDir,
+    cacheDir: input.cacheDir,
+    globalArtifactsDir: input.globalDir,
+    labels: LABELS,
+    projectArtifactsDir: null,
+    runDir: input.runDir,
+    taskArtifactsDir: input.artifactsDir,
+    workspaceDir: input.workspaceDir,
+  });
+
 const makeDirs = async (root: string) => {
   const dirs = {
     agentHomeDir: join(root, "agent-home"),
@@ -92,6 +117,15 @@ const makeDirs = async (root: string) => {
       eventLogDirOf(dirs.runDir),
       dirs.workspaceDir,
     ].map((path) => mkdir(path, { recursive: true }))
+  );
+  // The scopes nest, so each bind's destination has to exist inside its
+  // parent's host directory before the daemon is asked — and the workspace
+  // scope is read-only, so the daemon cannot make them itself. `materialize`
+  // does this on a real run; a fixture with no materializer does it here.
+  await Promise.all(
+    nestedMountPointsOf(mountsForFixture(dirs)).map((point) =>
+      mkdir(point.path, { recursive: true })
+    )
   );
   return dirs;
 };
@@ -129,7 +163,7 @@ const script = [
   'echo "run=$ATM_RUN_ID"',
   'echo "ledger=$EVENT_LOG_DIR"',
   'echo "trace=$TRACEPARENT"',
-  `echo hello > ${CONTAINER_ARTIFACT_DIR.task}/written.txt`,
+  `echo hello > ${TREE.taskScope}/written.txt`,
   "echo to-stderr 1>&2",
   "sleep 8",
   `exit ${CONTAINER_EXIT_CODE}`,
@@ -170,17 +204,9 @@ const specFor = (input: Fixture): SandboxSpec => ({
   hardening: defaultHardening,
   identity,
   image: IMAGE,
-  mounts: mountsFor({
-    agentHomeDir: input.agentHomeDir,
-    cacheDir: input.cacheDir,
-    globalArtifactsDir: input.globalDir,
-    projectArtifactsDir: null,
-    runDir: input.runDir,
-    taskArtifactsDir: input.artifactsDir,
-    workspaceDir: input.workspaceDir,
-  }),
+  mounts: mountsForFixture(input),
   timeoutMs: SMOKE_TIMEOUT_MS,
-  workingDir: "/workspace",
+  workingDir: TREE.cwd,
 });
 
 describe.skipIf(!reachable)("dockerSandbox", () => {

@@ -110,6 +110,7 @@ export {
 export {
   AGENT_HOME_DIR_ENV_VAR,
   AGENT_HOME_ENV_VAR,
+  ATM_ROOT_MARKER,
   agentHomeEnvAt,
   agentHomeLoginHint,
   CONTAINER_RUN_DIR,

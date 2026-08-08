@@ -129,6 +129,10 @@ describe("decideStop", () => {
     expect(NO_MESSAGE_REFUSAL).toContain(
       "read off the disk and posted for you"
     );
+    // A run has three artifacts directories, nested, and the loop reads this
+    // file out of the task's alone. The same words as `WORKER_RULES`, which
+    // this text is the short form of.
+    expect(NO_MESSAGE_REFUSAL).toContain("in your task's artifacts directory");
   });
 
   test("asks for a short message rather than topics to cover at length", () => {

@@ -179,14 +179,17 @@ export {
 } from "./mode";
 export {
   CONTAINER_AGENT_HOME_DIR,
-  CONTAINER_ARTIFACT_DIR,
-  CONTAINER_ARTIFACTS_DIR,
   CONTAINER_CACHE_DIR,
   CONTAINER_EVENT_LOG_DIR,
+  CONTAINER_MANAGER_DIR,
+  CONTAINER_MANAGER_SCRATCH_DIR,
   CONTAINER_SKILLS_DIR,
+  CONTAINER_WORKER_DIR,
   CONTAINER_WORKSPACE_DIR,
   EVENT_LOG_SEGMENT,
   eventLogDirOf,
+  FALLBACK_SLUG,
+  MANAGER_SEGMENT,
   type ManagerMountSources,
   MOUNT_PURPOSES,
   type Mount,
@@ -196,8 +199,17 @@ export {
   managerMountsFor,
   mountSourcePaths,
   mountsFor,
+  type NestedMountPoint,
   NO_MOUNT_EXTRAS,
+  nestedMountPointsOf,
   packageCacheEnv,
+  type RunLabels,
+  type RunTree,
+  runTreeOf,
+  SCRATCH_SEGMENT,
+  SLUG_MAX_LENGTH,
+  slugOf,
+  WORKER_SEGMENT,
 } from "./mounts";
 // The pull request a run's branch has. Exported because the orchestrator's
 // terminal path writes it onto the task, and because asking GitHub is how that

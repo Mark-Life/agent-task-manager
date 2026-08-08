@@ -27,12 +27,12 @@ system prompt, the operator's shared skills directory, and whatever sits in the 
 | # | What | Worker | Manager |
 |---|------|--------|---------|
 | 1 | Provider system prompt (vendor preset) | ✅ | ✅ |
-| 2 | Repo-level instructions loaded by the CLI (`CLAUDE.md` / `AGENTS.md`, skills) | ✅ | only in its scratch dir, so normally none |
+| 2 | Instructions loaded by the CLI from the working directory upwards (`CLAUDE.md` / `AGENTS.md` at every scope of the run's tree, plus the checkout's own) | ✅ | the shared scope and `manager/`, so whatever a person put there |
 | 3 | MCP tool descriptions (`atm`, `executor`) | ✅ | ✅ |
 | 4 | Task title, brief, acceptance / conversation so far | ✅ | ✅ |
 | 5 | `artifactRulesOf` | ✅ | ❌ |
 | 6 | `CREDENTIAL_RULES` | only with a repo | ❌ |
-| 7 | `WRITING_RULES` | ✅ | ✅ |
+| 7 | `WRITING_RULES` | only in local mode | only in local mode |
 | 8 | `SHARED_RULES` | ✅ | ✅ |
 | 9 | `WORKER_RULES` / `MANAGER_RULES` | worker, last | manager, first |
 | 10 | `NO_MESSAGE_REFUSAL`, mid-turn, at most once | ✅ | ❌ (hook not registered) |
@@ -61,11 +61,11 @@ File: [`packages/prompts/`](https://github.com/Mark-Life/agent-task-manager/tree
 | Link | What it does |
 |------|--------------|
 | [`buildRunPrompt`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/orchestrator/src/prompt.ts#L148-L251) | **The dispatch-time entry point.** Fetches the rows the session has not read, picks worker or manager by `attached.role`, renders, then advances the session's watermark in the same operation. Called once per run from [`run.ts#L353-L360`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/orchestrator/src/run.ts#L353-L360), after the directories exist, because the prompt names them. |
-| [`placementOf`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/orchestrator/src/prompt.ts#L76-L102) | Decides which spelling of the paths goes in the prompt: the container's fixed mount points, or the host paths a `local` run actually sees. |
+| [`placementOf`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/orchestrator/src/prompt.ts#L76-L102) | Decides which spelling of the paths goes in the prompt: the run's own tree under `/workspace`, computed from the same labels the mount set is, or the host paths a `local` run actually sees. |
 | [`unreadOf`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/unread.ts#L59-L65) / [`nextWatermarkOf`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/unread.ts#L81-L86) | What "has not been read yet" means, over task messages and chat messages alike. A null watermark yields the conversation from the beginning, which is how a fresh session gets it with no special case. |
-| [`freshPrompt` (worker)](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/worker.ts#L149-L171) | **The concatenation for a first worker turn, through `joinSections`.** Title, brief, acceptance, project, placement, `CREDENTIAL_RULES` (only when there is a repo), `artifactRulesOf`, `WRITING_RULES`, `SHARED_RULES`, the message thread, then `WORKER_RULES` under a `## Before you finish` heading. |
+| [`freshPrompt` (worker)](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/worker.ts#L149-L171) | **The concatenation for a first worker turn, through `joinSections`.** Title, brief, acceptance, project, placement, `CREDENTIAL_RULES` (only when there is a repo), `artifactRulesOf`, `WRITING_RULES` (only when the instructions are not on disk), `SHARED_RULES`, the message thread, then `WORKER_RULES` under a `## Before you finish` heading. |
 | [`resumedPrompt` (worker)](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/worker.ts#L183-L195) | A resumed worker turn: a `— continued` heading, one sentence, the new messages, and `WORKER_RULES` again. The rules are *not* restated — they are in the session's own history. The message rule is the one exception, because the hook that enforces it has no memory of the session either. |
-| [`freshPrompt` (manager)](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/manager.ts#L112-L126) | The concatenation for a first manager turn: `MANAGER_RULES`, `WRITING_RULES`, `SHARED_RULES`, the placement section with no repo, the last 40 messages, and the answer instruction. |
+| [`freshPrompt` (manager)](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/manager.ts#L112-L126) | The concatenation for a first manager turn: `MANAGER_RULES`, `WRITING_RULES` (only when the instructions are not on disk), `SHARED_RULES`, the placement section with no repo, the last 40 messages, and the answer instruction. |
 | [`resumedPrompt` (manager)](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/manager.ts#L136-L149) | A resumed manager turn: heading, one sentence, what has been said since, the answer instruction. |
 | [`joinSections`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/render.ts#L16-L17), [`section`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/render.ts#L20-L21), [`speech`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/render.ts#L37-L38), [`conversation`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/render.ts#L41) | The four primitives every fragment above is glued with. `joinSections` drops nulls, which is how a fragment a run did not earn disappears rather than rendering empty. |
 | [`promptOf`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/render.ts#L119-L122) | Wraps the finished text with its own character count. `promptChars` on a run's telemetry is measured here; the text itself never reaches an event. |
@@ -84,11 +84,14 @@ Each of these is one exported constant, dropped into the prompt whole.
 
 ### [`WRITING_RULES`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/rules.ts#L89-L97) — "How you write"
 
-Every fresh run of either role. **This is the only place the house style reaches an agent.** A run
-never sees the operator's own `AGENTS.md` or `CLAUDE.md` — those sit in a checkout or a personal
-config directory (§7, §8) — and a mounted skill's body is read only if the model invokes one, which
-is not a thing to rely on for style. It says nothing about length: what is short depends on what
-the turn produced, so each role's own block sets its own size.
+Every fresh run whose instructions are **not** on disk, which today means a local-mode turn. A
+container starts inside the run's tree and both CLIs collect a `CLAUDE.md` or `AGENTS.md` from
+every scope above the working directory before the prompt is read, so house style belongs in
+those files: one place to edit, no redeploy. A local turn is a host process with no mounts,
+walking parents that hold nothing, so the same rules are stated in the text instead —
+`instructionsOnDisk` on each builder is that switch, and the rule is that the prompt carries
+house style exactly when the filesystem cannot. It says nothing about length: what is short
+depends on what the turn produced, so each role's own block sets its own size.
 
 ### [`SHARED_RULES`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/rules.ts#L107-L111) — "What counts as finishing"
 
@@ -97,10 +100,12 @@ on a resumed turn.
 
 ### [`artifactRulesOf`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/rules.ts#L180-L185) — "What survives this run"
 
-Every fresh worker run, and no manager run — a manager's only writable directory is its scratch
-directory and nothing is promoted out of it. A function rather than a constant: a run with a
-repository is told that a committed document lives in its pull request and not in the artifacts
-folder as well, and a run with no repository is not sent looking for a pull request it cannot open.
+Every fresh worker run, and no manager run — a manager has no task folder and no project folder,
+so a block about which of them survives is about a run that does not exist. A function rather
+than a constant, on two inputs: a run with a repository is told that a committed document lives
+in its pull request and not in the task folder as well, and a run with no repository is not sent
+looking for a pull request it cannot open; a task with no project loses the project line rather
+than being told about a directory that is not mounted.
 
 ### [`CREDENTIAL_RULES`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/rules.ts#L213-L217) — "The GitHub credential you hold"
 
@@ -147,7 +152,7 @@ is short; the code that produces it is the entry.
 |------|--------------|
 | [Title, brief, acceptance](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/worker.ts#L152-L154) | Worker, fresh turn. The card's own text, as the person or the manager wrote it. `# <title>` is the prompt's first line. |
 | [`projectSection`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/worker.ts#L123-L130) | Worker, fresh turn, when the task belongs to a project: one line of `name — description`. |
-| [`placementSection`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/render.ts#L79-L102) | Both roles, fresh turn, as `## Where you are working`. The repo URL and branch, the writable artifacts directory, the read-only reference directories — and, for a run whose scratch directory *is* its writable one, a different sentence saying so. The policy about those paths is in `artifactRulesOf`; this section only says which directory is which. |
+| [`placementSection`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/render.ts#L79-L102) | Both roles, fresh turn, as `## Where you are working`. One line per level of the run's tree, from the working directory outwards: the checkout with its repo URL and branch (or the scratch directory), this task's directory, this project's when there is one, and the shared directory every run reads. The policy about those paths is in `artifactRulesOf`; this section only says which directory is which. |
 | [`renderThread` / `renderMessage`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/worker.ts#L110-L121) | Worker, both modes. The messages the session has not read, oldest first. |
 | [`messageLabelOf`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/worker.ts#L85-L107) | The attribution line above each message — `the human said:`, `the manager agent said:`, `the orchestrator said:`, `you said:`, `another session on this task (abcd1234) said:`. This is what makes a multi-session review loop readable. |
 | [`KIND_NOTE`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/worker.ts#L63-L67) | Appended to that label: ` (auto-appended final message)` or ` (that run crashed)`. |
@@ -243,7 +248,8 @@ The mounts, however, decide what other text a run can be given:
 |------|--------------|
 | [`CONTAINER_AGENT_HOME_DIR`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/sandbox/src/mounts.ts#L205) and [`AGENT_HOME_ENV_VAR`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/harness/src/paths.ts#L48-L51) | The provider's config directory is a host directory mounted at `/agent-home` and pointed at through `CLAUDE_CONFIG_DIR` / `CODEX_HOME`. **The `user` setting source resolves inside it**, so anything an operator left there — a user-level `CLAUDE.md`, a user `settings.json` — is loaded into every run. It is seeded from a logged-in account by [`scripts/agent-home-login.ts`](https://github.com/Mark-Life/agent-task-manager/blob/main/scripts/agent-home-login.ts) and is not in this repository; [`.docs/agent-homes.md`](./agent-homes.md) describes it. |
 | [`CONTAINER_SKILLS_DIR`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/sandbox/src/mounts.ts#L205-L214) and [`skillsMounts`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/sandbox/src/mounts.ts#L316-L327) | The operator's own skills directory (`ATM_SKILLS_DIR`) mounted read-only at `/agent-home/skills` — the one bind inside another bind, because a provider reads personal skills from a fixed name under its config directory. Every run of both roles is given whatever is in it. Read-only, so no run can edit the instructions later runs get. |
-| [`mounts.ts` header](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/sandbox/src/mounts.ts#L1-L106) | The full argument for the mount set, including which directories are read-only and why. |
+| [`mounts.ts` header](https://github.com/Mark-Life/agent-task-manager/blob/main/packages/sandbox/src/mounts.ts) | The full argument for the mount set, including which directories are read-only and why. |
+| [`runTreeOf`](https://github.com/Mark-Life/agent-task-manager/blob/main/packages/sandbox/src/mounts.ts) and [`ATM_ROOT_MARKER`](https://github.com/Mark-Life/agent-task-manager/blob/main/packages/harness/src/paths.ts) | The four scopes nest under `/workspace`, so a `CLAUDE.md` or `AGENTS.md` a person leaves at any level is loaded root-down at launch — see [sandbox](./sandbox.md). Claude walks up on its own; Codex stops at the nearest `project_root_markers` entry, which the turn entrypoint points at the empty `.atm-root` at the top of the tree. Nothing composes those files: they are whatever is in the folders. |
 
 ---
 

@@ -6,10 +6,11 @@
  * would bloat the write-ahead log and every backup forever. So `list` is JSON
  * and `read` is a stream straight off disk.
  *
- * Only a task's own folder is writable. The project's and the global folder are
- * read-only mounts, and {@link promote} is the deliberate verb that copies into
- * them — if any run could write there, promoted material would drift with no
- * audit and the evidence would be the thing that got overwritten.
+ * A run writes its own task folder and, on a task that has a project, that
+ * project's. The global folder is a read-only mount to every worker, and
+ * {@link promote} is the deliberate verb that copies into either shared folder
+ * — a promotion is somebody deciding a file is worth keeping, where a run's own
+ * write is a side effect of the work, and only the first leaves an audit row.
  */
 
 import { ArtifactId, TaskId } from "@workspace/domain";

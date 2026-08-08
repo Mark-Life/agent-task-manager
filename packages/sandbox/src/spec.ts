@@ -47,7 +47,7 @@ import { Context, type Effect, Schema, type Scope } from "effect";
 import type { EnvFilesWritten } from "./env-files";
 import type { SandboxError } from "./errors";
 import type { HardeningSpec } from "./hardening";
-import type { Mount, MountSources } from "./mounts";
+import type { Mount, MountSources, RunLabels } from "./mounts";
 import type { LabelledContainer } from "./reap";
 
 /**
@@ -310,6 +310,17 @@ export interface MaterializeInput {
    */
   readonly envFiles: readonly EnvFileWrite[];
   readonly identity: RunIdentity;
+  /**
+   * The names the run's container paths are spelled with — the project's name,
+   * the repository's, and the task's title.
+   *
+   * Beside the ids rather than derived from them, because they answer different
+   * questions and only the caller holds both: the id keys the host directory
+   * and the label names the directory inside the container. A caller that knows
+   * a `projectId` always knows the project's name, and materialization must not
+   * be the thing that looks one up — this package reads no database.
+   */
+  readonly labels: RunLabels;
   /** Null for a task with no project: there is no promoted folder to show it. */
   readonly projectId: ProjectId | null;
   /**

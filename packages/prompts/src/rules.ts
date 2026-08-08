@@ -62,6 +62,19 @@
  * not confirm a repository existed and asked the person to check a URL it had
  * guessed. A model does not reach for a capability its instructions deny it.
  *
+ * The two bullets about directories replaced one saying "`/workspace` is
+ * scratch, deleted when this turn ends", for the same class of reason. That was
+ * true while the turn's own empty directory was mounted there and false from the
+ * commit that made that path the shared directory every run reads, with only a
+ * scratch directory under it dying with the turn. A manager told its one
+ * writable path is thrown away will not edit the house rules a worker is handed,
+ * which is the point of giving it write access at all.
+ *
+ * Neither bullet spells a path, and that is the other half of the same lesson.
+ * A rule here is one string for every mode, while the paths are per run and a
+ * local turn's are the host's — so the directories are described and
+ * `placementSection` names them, which is the only place that knows.
+ *
  * **The tools are not listed here.** They used to be, grouped in a bullet list
  * the manager read before its own tool table. The table already carries every
  * name with a description the model reads the same way, so the list was one
@@ -73,14 +86,21 @@
 import { HANDOFF_FILENAME } from "@workspace/domain";
 
 /**
- * How to write, for both roles.
+ * How to write, for both roles, when nothing on disk says it.
  *
- * These runs never see the operator's own `AGENTS.md` or `CLAUDE.md`: those sit
- * in a checkout or a personal config directory, and a run gets the repository
- * it was given plus whatever skills were mounted. A skill's body is read only
- * when a model invokes one, which is not a thing to rely on for house style. So
- * the style that used to live in a file nobody mounted is stated here, where
- * every run is handed it.
+ * A skill's body is read only when a model invokes one, which is not a thing to
+ * rely on for house style, so the style that used to live in a file nobody
+ * mounted was stated here instead. A run whose directories nest reads a
+ * `CLAUDE.md` or `AGENTS.md` at every level above its working directory before
+ * it reads a word of its prompt, and house style belongs in that file: one
+ * place to edit, no redeploy, and the same text for a person as for an agent.
+ *
+ * Both are kept, because one of them is unreachable in the other's mode. A
+ * local run is a host process with no mounts, working in a directory whose
+ * parents hold nothing, so a tree it cannot walk would drop house style
+ * silently. `instructionsOnDisk` on each prompt builder decides, and the rule is
+ * stated rather than implied: the prompt carries house style exactly when the
+ * filesystem cannot.
  *
  * Deliberately about writing and nothing about length. What is short depends on
  * what the turn produced, and each role's own block says so in its own terms: a
@@ -153,14 +173,42 @@ Leave lifecycle facts out of it. That a run started, that a card moved, that a c
  * {@link CREDENTIAL_RULES} is withheld from it.
  */
 
-/** Whether the run has a repository, which is the whole of what changes below. */
+/** What the run was given, which is the whole of what changes below. */
 export interface ArtifactRulesInput {
+  /**
+   * Whether a project directory is mounted. A task with no project has no
+   * middle level at all, and a bullet about a directory that is not there is
+   * the one lie this block cannot afford: it is the block that says where
+   * output goes.
+   */
+  readonly hasProject: boolean;
+  /** Whether the run has a repository. */
   readonly hasRepo: boolean;
 }
 
 /** True of every run with a folder, whatever else it was given. */
 const ARTIFACT_DURABILITY =
-  "One writable artifacts directory, two read-only ones. Everything outside them is scratch and dies with the container.";
+  "Your directories nest, and each level is for something different. Everything outside them is scratch and dies with the container.";
+
+/**
+ * The levels, innermost first, one line each.
+ *
+ * The project level is new as a place to *write*. It used to be read-only
+ * reference material, and the rules said so; a run that reads that and then
+ * finds it can write is a run guessing at which of the two is true. What the
+ * bullet has to carry is not the permission but the audience: a document only
+ * this run's reader wants belongs one level in, and a document the next task on
+ * the same project needs belongs here.
+ */
+const TASK_SCOPE = "- The task directory is this run's own output.";
+const PROJECT_SCOPE =
+  "- The project directory is durable material a later task on the same project reads. Yours to write, and every task in this project sees what you leave there.";
+const SHARED_SCOPE =
+  "- The shared directory is reference material for every run, and you cannot write it.";
+
+/** The levels this run actually has, in the order the paths nest. */
+const scopeLines = (hasProject: boolean) =>
+  [TASK_SCOPE, ...(hasProject ? [PROJECT_SCOPE] : []), SHARED_SCOPE].join("\n");
 
 /**
  * For a run with nowhere else to put anything. Close to what every run used to
@@ -168,19 +216,29 @@ const ARTIFACT_DURABILITY =
  * does have one place, so "worth keeping" really is the whole test.
  */
 const SCRATCH_RUN_ARTIFACTS =
-  "Anything worth keeping goes in the writable one. This run has no repository, so there is nowhere else for it to go.";
+  "Anything worth keeping goes in the task directory. This run has no repository, so there is nowhere else for it to go.";
 
-/** For a run that can commit, which is a run that can duplicate its own work. */
-const REPO_RUN_ARTIFACTS = `The writable one is for output that has nowhere else to live: work you could not commit, notes for the next session or for a person rather than for review.
+/**
+ * For a run that can commit, which is a run that can duplicate its own work.
+ *
+ * The second sentence is about where the checkout now sits. It used to be a
+ * sibling of the artifacts folder and is a child of the task directory, so a
+ * run reading that the task directory outlives the container can read its own
+ * checkout as durable and leave a file there instead of pushing it. The
+ * directories nest; the lifetimes do not.
+ */
+const REPO_RUN_ARTIFACTS = `The task directory is for output that has nowhere else to live: work you could not commit, notes for the next session or for a person rather than for review. Your checkout sits inside it and is not part of it — the checkout goes with the container, so anything you did not push is gone.
 
-- Committed, with a pull request open: the pull request is where your work lives. Do not write a second copy into the artifacts directory. Two copies drift apart as soon as review touches either, and a reader who finds both cannot tell which is current.
-- Committed, but no pull request stands behind it, such as a branch that may never merge: keep it in the artifacts directory too, and name the branch it is also on.`;
+- Committed, with a pull request open: the pull request is where your work lives. Do not write a second copy into the task directory. Two copies drift apart as soon as review touches either, and a reader who finds both cannot tell which is current.
+- Committed, but no pull request stands behind it, such as a branch that may never merge: keep it in the task directory too, and name the branch it is also on.`;
 
 /** Where this run's output belongs, and what happens to everything else. */
-export const artifactRulesOf = ({ hasRepo }: ArtifactRulesInput) =>
+export const artifactRulesOf = ({ hasProject, hasRepo }: ArtifactRulesInput) =>
   `## What survives this run
 
 ${ARTIFACT_DURABILITY}
+
+${scopeLines(hasProject)}
 
 ${hasRepo ? REPO_RUN_ARTIFACTS : SCRATCH_RUN_ARTIFACTS}`;
 
@@ -251,6 +309,11 @@ If GitHub refuses one of those, stop and report it. Say which operation was refu
  * the second into a recovery the loop performs. `readHandoff` in
  * `@workspace/orchestrator` reads exactly this name out of exactly that
  * directory, and `worker.test.ts` asserts the two still agree.
+ *
+ * It is the *task's* artifacts directory, said in those words, because a run
+ * now has three of them and only one is ever read for this file. A handoff left
+ * in the project or the shared directory is a message nobody collects, which is
+ * the failure this rule exists to prevent.
  */
 export const WORKER_RULES = `Before you end your turn, post a message on this task. A turn that ends without one is sent back to write it.
 
@@ -262,7 +325,7 @@ Write the shortest thing that lets a person decide what to do next:
 
 Whatever the thing you linked already says, do not say again here. A few short paragraphs, with no headings and no tables. That is a target and not a cap: a run with nothing to link has to carry its whole result in the message, and should.
 
-If the board tools stop answering, a credential that no longer works or a gateway you cannot reach, write that same message to \`${HANDOFF_FILENAME}\` in your artifacts directory and end your turn. It is read off the disk and posted for you. Do not spend the rest of your turn retrying the tool, and do not describe the file as something a person has to go and fetch.`;
+If the board tools stop answering, a credential that no longer works or a gateway you cannot reach, write that same message to \`${HANDOFF_FILENAME}\` in your task's artifacts directory and end your turn. It is read off the disk and posted for you. Do not spend the rest of your turn retrying the tool, and do not describe the file as something a person has to go and fetch.`;
 
 /**
  * The manager's rules, as the prompt's first section.
@@ -317,7 +380,8 @@ You run in a container with a shell, a network, and \`gh\` logged in as the pers
 - Use it to be right about what you file: confirm a repository exists and read its owner and default branch before you name them, read the issue or pull request being asked about, check whether a branch a run pushed has landed. Look it up rather than guessing, or asking the person to confirm what you could have read.
 - It is not there to do the work. Do not clone a repository to fix something, do not commit, push, or open a pull request, and do not change a repository's settings, even for a one-line change you can see from here. Work done here has no card, no run and no branch anybody chose to review. When a person asks for a repository to be changed, file the card.
 - If GitHub refuses you, say which operation it refused and which scope the refusal named. Do not go round it.
-- \`/workspace\` is scratch, deleted when this turn ends. Somewhere to put a file you are about to read, not somewhere to leave anything.
+- Your working directory is deleted when this turn ends. Somewhere to put a file you are about to read, not somewhere to leave anything.
+- The shared directory every run reads is yours to write, and it is named below. The house rules, notes and reference material a worker is handed live there, so an edit changes every run after this one: make one when the person asks for it, and say what you changed.
 
 ## How a turn ends
 

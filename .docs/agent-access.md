@@ -41,11 +41,12 @@ A shell does not change that, and the request that arrives as *"just fix the typ
 one where an unreviewable one-line commit gets made. When a person asks for a repository change,
 the manager files the card.
 
-**3. No checkout, and no writable directory that outlives the turn.** `/workspace` stays an empty
-scratch that is deleted when the turn ends, and the manager is told that in those words. A manager
-that clones is a manager doing the work, which is decision 2 with more steps; and a durable
-artifacts folder would be a second place for output to live when a conversation's output is the
-reply. The mount set does not change.
+**3. No checkout, and no directory of its own that outlives the turn.** Its working directory is a
+scratch directory deleted when the turn ends, and the manager is told that in those words. A
+manager that clones is a manager doing the work, which is decision 2 with more steps; and a task
+folder of its own would be a second place for output to live when a conversation's output is the
+reply. What it does get is write access to the shared scope at `/workspace`, because the house
+rules a worker reads live there and editing them is a thing a person asks for in conversation.
 
 **4. Its board reach stays wide, and that is now a decision rather than a fall-through.** A manager
 token is bound to a thread and a user, and `checkBinding` in the gateway only narrows a principal

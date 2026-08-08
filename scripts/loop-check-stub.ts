@@ -17,8 +17,9 @@
  *
  * The one thing that differs between the two is where the artifact goes. The
  * host writes into `${DATA_ROOT}/artifacts/tasks/<id>`; the container writes
- * into `/artifacts/task`, which is that same directory seen through a bind
- * mount. So the folder is asked for rather than computed here.
+ * into the task scope of its own tree, which is that same directory seen
+ * through a bind mount and is spelled with the task's name rather than its id.
+ * So the folder is asked for rather than computed here.
  *
  * The stub also writes a transcript, because one of the claims is about a file
  * the loop has to rescue before the agent home holding it is deleted — and a

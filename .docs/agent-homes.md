@@ -42,6 +42,14 @@ transcript into the one tree, so a run can read every other run's conversation. 
 capability the manager needs and a leak for a worker, accepted for v1. Nothing prunes
 `projects/-workspace/` either — that tree grows one JSONL per run forever.
 
+**`config.toml` in the Codex home is written by us.** Every Codex turn rewrites
+`<codex home>/config.toml` with `project_root_markers = [".atm-root"]`, a raised
+`project_doc_max_bytes`, and Executor's MCP server when the install has one. The first two are
+what let a Codex run read the instruction files above its checkout at all — see
+[sandbox](./sandbox.md) — and neither can be passed on the command line, because the exec-server
+config path ignores `-c` for them. So anything you hand-edit into that file is replaced on the
+next turn: put per-scope instructions in the tree instead, where they are meant to live.
+
 **Sharing your own skills.** Set `ATM_SKILLS_DIR` to the directory you keep your skills in — on
 this host `~/.agents/skills` — and every container gets it read-only at `/agent-home/skills`,
 which is where Claude looks for personal skills once `CLAUDE_CONFIG_DIR` points at the agent

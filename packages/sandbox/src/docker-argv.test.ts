@@ -30,7 +30,13 @@ import {
   stripAnsi,
 } from "./docker-argv";
 import { defaultHardening } from "./hardening";
-import { CONTAINER_EVENT_LOG_DIR, mountsFor } from "./mounts";
+import {
+  CONTAINER_EVENT_LOG_DIR,
+  CONTAINER_WORKSPACE_DIR,
+  mountsFor,
+  type RunLabels,
+  runTreeOf,
+} from "./mounts";
 import { identityEnv, type SandboxSpec, TRACEPARENT_ENV_VAR } from "./spec";
 
 const identity = {
@@ -39,6 +45,12 @@ const identity = {
   taskId: newTaskId(),
   traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
   workspaceId: WorkspaceId.make("ws_1"),
+};
+
+const labels: RunLabels = {
+  project: "Atlas",
+  repo: "mark-life/atlas",
+  task: "Ship it",
 };
 
 const spec: SandboxSpec = {
@@ -52,13 +64,14 @@ const spec: SandboxSpec = {
     agentHomeDir: "/home/op/.claude-task-management",
     cacheDir: "/data/caches",
     globalArtifactsDir: "/data/artifacts/global",
+    labels,
     projectArtifactsDir: "/data/artifacts/projects/p1",
     runDir: "/data/runs/r1",
     taskArtifactsDir: "/data/tasks/t1/artifacts",
     workspaceDir: "/data/runs/r1/workspace",
   }),
   timeoutMs: 60_000,
-  workingDir: "/workspace",
+  workingDir: runTreeOf(labels).cwd,
 };
 
 const name = containerName({ nonce: "deadbeef", runId: identity.runId });
@@ -75,7 +88,7 @@ describe("dockerRunArgs", () => {
     expect(args).toContain("--security-opt=no-new-privileges:true");
     expect(args).toContain("--mount=type=bind,src=/data/runs/r1,dst=/run");
     expect(args).toContain(
-      "--mount=type=bind,src=/data/artifacts/global,dst=/artifacts/global,readonly"
+      `--mount=type=bind,src=/data/artifacts/global,dst=${CONTAINER_WORKSPACE_DIR},readonly`
     );
   });
 
@@ -93,7 +106,7 @@ describe("dockerRunArgs", () => {
   });
 
   test("starts in the working directory it was given", () => {
-    expect(args).toContain("--workdir=/workspace");
+    expect(args).toContain(`--workdir=${runTreeOf(labels).cwd}`);
   });
 
   test("carries environment names, never a value", () => {

@@ -333,9 +333,11 @@ export const auditDelete = (subject: AuditSubject) =>
   draftOf("delete", subject, {});
 
 /**
- * An artifact promoted out of the task that made it. Its own action because the
- * shared folders are read-only mounts, so this one deliberate step is the whole
- * audit trail for how anything got into one.
+ * An artifact promoted out of the task that made it. Its own action because a
+ * promotion is a decision: the global folder is a read-only mount to every
+ * worker, and a project's folder is one a run may also write for itself, so
+ * this row is what separates a file somebody chose to keep from one a run
+ * happened to leave behind.
  */
 export const auditPromote = (subject: Omit<AuditSubject, "entityType">) =>
   draftOf("promote", { ...subject, entityType: "artifact" }, {});

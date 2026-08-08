@@ -73,12 +73,34 @@ const project: Project = {
   workspaceId,
 };
 
+/**
+ * The full tree: shared, project, task, checkout, each inside the one before
+ * it. Written out as literal paths rather than joined from segments, because
+ * the nesting is the thing under test and a helper that builds it would agree
+ * with itself whatever it produced.
+ */
 const placement: RunPlacement = {
-  artifactsDir: "/artifacts/task",
+  artifactsDir: "/workspace/worker/widgets/delete-endpoint",
   branch: "atm/task-1",
-  globalArtifactsDir: "/artifacts/global",
-  projectArtifactsDir: "/artifacts/project",
-  workspaceDir: "/workspace",
+  globalArtifactsDir: "/workspace",
+  projectArtifactsDir: "/workspace/worker/widgets",
+  workspaceDir: "/workspace/worker/widgets/delete-endpoint/acme-widgets",
+};
+
+/** The same run with nothing to clone: the working directory is a scratch directory inside the task's. */
+const noRepoPlacement: RunPlacement = {
+  ...placement,
+  branch: null,
+  workspaceDir: "/workspace/worker/widgets/delete-endpoint/scratch",
+};
+
+/** No project and no repo, so the middle level is skipped and the tree is one shorter. */
+const barePlacement: RunPlacement = {
+  artifactsDir: "/workspace/worker/delete-endpoint",
+  branch: null,
+  globalArtifactsDir: "/workspace",
+  projectArtifactsDir: null,
+  workspaceDir: "/workspace/worker/delete-endpoint/scratch",
 };
 
 /** A message on the fixture task, with only the fields a prompt reads spelled out. */
@@ -99,15 +121,18 @@ const messageOf = (
 });
 
 const promptOf = (input: {
+  readonly instructionsOnDisk?: boolean;
   readonly messages?: readonly TaskMessage[];
   readonly mode?: PromptMode;
+  readonly placement?: RunPlacement;
   readonly project?: Project | null;
   readonly repoUrl?: string | null;
 }) =>
   buildWorkerPrompt({
+    instructionsOnDisk: input.instructionsOnDisk,
     messages: input.messages ?? [],
     mode: input.mode ?? "fresh",
-    placement,
+    placement: input.placement ?? placement,
     project: input.project === undefined ? project : input.project,
     readerSessionId: sessionId,
     repoUrl: input.repoUrl === undefined ? task.repoUrl : input.repoUrl,
@@ -145,18 +170,73 @@ describe("a fresh session's prompt", () => {
     expect(text).toContain("which scope or permission the refusal named");
   });
 
-  test("names the writable folder and the read-only ones, and states the rule once", () => {
+  test("names every level of the tree, what each is for, and states the rule once", () => {
     expect(text).toContain(
-      "- `/artifacts/task` is yours to write, and what you leave there outlives the container."
+      "- `/workspace/worker/widgets/delete-endpoint` is this task's directory, yours to write, and what you leave there outlives the container."
     );
     expect(text).toContain(
-      "- Read-only reference material: `/artifacts/project` (this project) and `/artifacts/global`."
+      "- `/workspace/worker/widgets` is this project's directory, yours to write, and shared with every task in it."
     );
-    expect(text).toContain(artifactRulesOf({ hasRepo: true }));
+    expect(text).toContain(
+      "- `/workspace` is the shared directory every run reads. Read-only."
+    );
+    expect(text).toContain(
+      artifactRulesOf({ hasProject: true, hasRepo: true })
+    );
     expect(text).toContain(SHARED_RULES);
-    // The house style reaches both roles from the prompt, because a run sees
-    // neither the operator's `AGENTS.md` nor a skill body it did not invoke.
+    // The house style reaches both roles from the prompt whenever the run has
+    // no tree to read it from, which is what `instructionsOnDisk` decides.
     expect(text).toContain(WRITING_RULES);
+  });
+
+  /**
+   * The paths are what carry the scoping: each level sits inside the one above
+   * it, which is what puts a `CLAUDE.md` or `AGENTS.md` at every level on the
+   * path both providers walk up from the working directory. A prompt naming
+   * four unrelated directories would describe a system that does not load them.
+   */
+  test("spells the four directories as one path, innermost last", () => {
+    expect(
+      placement.workspaceDir.startsWith(`${placement.artifactsDir}/`)
+    ).toBe(true);
+    expect(
+      placement.artifactsDir.startsWith(`${placement.projectArtifactsDir}/`)
+    ).toBe(true);
+    expect(
+      placement.projectArtifactsDir?.startsWith(
+        `${placement.globalArtifactsDir}/`
+      )
+    ).toBe(true);
+    expect(text.indexOf(placement.workspaceDir)).toBeLessThan(
+      text.indexOf(`- \`${placement.artifactsDir}\``)
+    );
+  });
+
+  /**
+   * The rules used to describe the project directory as read-only reference
+   * material, because the mount was. It is read-write now, and a run told the
+   * opposite files a document for the next task on the project into its own
+   * task directory, where that task never looks.
+   */
+  test("says what the project directory is for, now that a run may write it", () => {
+    expect(text).toContain(
+      "The project directory is durable material a later task on the same project reads"
+    );
+    expect(text).toContain("The task directory is this run's own output.");
+    expect(text).toContain(
+      "The shared directory is reference material for every run, and you cannot write it."
+    );
+  });
+
+  test("leaves the project level out of the rules for a task that has no project", () => {
+    const bare = textOf({
+      placement: barePlacement,
+      project: null,
+      repoUrl: null,
+    });
+    expect(bare).toContain("The task directory is this run's own output.");
+    expect(bare).not.toContain("The project directory is durable material");
+    expect(bare).not.toContain("is this project's directory");
   });
 
   /**
@@ -170,7 +250,7 @@ describe("a fresh session's prompt", () => {
   test("sends a document that belongs in a pull request to the pull request only", () => {
     expect(text).toContain("output that has nowhere else to live");
     expect(text).toContain(
-      "Do not write a second copy into the artifacts directory"
+      "Do not write a second copy into the task directory"
     );
     // And the honest exception: committed work with no pull request behind it
     // has nothing else holding it, so the artifacts copy is the right hedge.
@@ -179,21 +259,36 @@ describe("a fresh session's prompt", () => {
     // The sentence the duplicate was obeying is gone from this run's copy, not
     // merely qualified.
     expect(text).not.toContain(
-      "Anything worth keeping goes in the writable one"
+      "Anything worth keeping goes in the task directory"
     );
+  });
+
+  /**
+   * The checkout used to be a sibling of the artifacts folder and is now a
+   * child of the task directory. A run reading that the task directory outlives
+   * the container, and seeing its checkout inside it, can leave a file in the
+   * checkout instead of pushing it and lose it with the container.
+   */
+  test("says the checkout inside the task directory does not share its lifetime", () => {
+    expect(text).toContain(
+      "Your checkout sits inside it and is not part of it"
+    );
+    expect(text).toContain("anything you did not push is gone");
   });
 
   test("keeps the pull request out of it for a run that has no repository", () => {
     // The carve-out is about a better home for a document. A run with no
     // repository has no such home, so it gets the plain rule and is not sent
     // looking for a pull request it cannot open.
-    const scratch = textOf({ repoUrl: null });
-    expect(scratch).toContain(artifactRulesOf({ hasRepo: false }));
+    const scratch = textOf({ placement: noRepoPlacement, repoUrl: null });
     expect(scratch).toContain(
-      "Anything worth keeping goes in the writable one"
+      artifactRulesOf({ hasProject: true, hasRepo: false })
+    );
+    expect(scratch).toContain(
+      "Anything worth keeping goes in the task directory"
     );
     expect(scratch).not.toContain(
-      "Do not write a second copy into the artifacts directory"
+      "Do not write a second copy into the task directory"
     );
   });
 
@@ -241,8 +336,19 @@ describe("a fresh session's prompt", () => {
   });
 
   test("says a run with no repo has a scratch directory, and no project has none", () => {
-    const scratch = textOf({ project: null, repoUrl: null });
-    expect(scratch).toContain("`/workspace` is an empty scratch directory");
+    const scratch = textOf({
+      placement: barePlacement,
+      project: null,
+      repoUrl: null,
+    });
+    // Inside its task directory, and released with the run: the durable line
+    // is about the level above, and this one may not claim it.
+    expect(scratch).toContain(
+      "- `/workspace/worker/delete-endpoint/scratch` is an empty scratch directory, yours to write, released when this run ends. This run has no repo."
+    );
+    expect(scratch).toContain(
+      "- `/workspace/worker/delete-endpoint` is this task's directory"
+    );
     expect(scratch).not.toContain("pull request");
     expect(scratch).not.toContain("## Project");
     // And no credential section: nothing to push, and a token it will not reach
@@ -262,6 +368,33 @@ describe("a fresh session's prompt", () => {
   test("leaves out the conversation heading on a silent task, and measures itself", () => {
     expect(text).not.toContain("conversation on this task so far");
     expect(built.chars).toBe(text.length);
+  });
+});
+
+/**
+ * The prompt carries house style exactly when the filesystem cannot. A run
+ * whose directories nest reads the same rules out of a `CLAUDE.md` above its
+ * working directory, and stating them twice is two copies to keep in step; a
+ * local run is a host process with nothing above its working directory, so
+ * dropping them there would lose them silently.
+ */
+describe("house style, on disk or in the prompt", () => {
+  test("states the writing rules when the run has no tree to read them from", () => {
+    expect(textOf({ instructionsOnDisk: false })).toContain(WRITING_RULES);
+    // A caller that has not been updated is that case, so silence means stated.
+    expect(textOf({})).toContain(WRITING_RULES);
+  });
+
+  test("leaves them out when the directories carry them", () => {
+    const text = textOf({ instructionsOnDisk: true });
+    expect(text).not.toContain(WRITING_RULES);
+    expect(text).not.toContain("## How you write");
+    // Only that block. Everything a file on disk cannot say still has to be here.
+    expect(text).toContain(SHARED_RULES);
+    expect(text).toContain(CREDENTIAL_RULES);
+    expect(text).toContain(
+      artifactRulesOf({ hasProject: true, hasRepo: true })
+    );
   });
 });
 
@@ -296,7 +429,7 @@ describe("a resumed session's prompt", () => {
   test("repeats nothing the session already has in its own history", () => {
     expect(text).not.toContain(task.brief);
     expect(text).not.toContain("the endpoint returns 204");
-    expect(text).not.toContain("/artifacts/task");
+    expect(text).not.toContain(placement.artifactsDir);
     expect(text).not.toContain("## Project");
   });
 

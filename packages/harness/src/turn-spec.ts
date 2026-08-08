@@ -200,9 +200,9 @@ export interface TurnSpecIdentity
  * nullable where it can be absent, for the same reason `RunOptions` is: an
  * omitted key is how a resume silently becomes a fresh session.
  *
- * The three directories are the container's own view — `/run/agent-home/...`,
- * `/workspace` — because the party that reads them is inside it. The host's
- * spelling of the same directories never crosses.
+ * The three directories are the container's own view — `/run/...`, and a
+ * working directory somewhere under `/workspace` — because the party that reads
+ * them is inside it. The host's spelling of the same directories never crosses.
  */
 export const TurnSpec = Schema.Struct({
   /** The provider's config directory for this run, as the container sees it. */
@@ -228,7 +228,15 @@ export const TurnSpec = Schema.Struct({
    * still writes its events, its row and its last word.
    */
   timeoutMs: Schema.NullOr(Schema.Natural),
-  /** The checkout the agent works in, as the container sees it. */
+  /**
+   * The directory the agent works in, as the container sees it: the checkout,
+   * or the run's own scratch directory where there was nothing to clone.
+   *
+   * The deepest level of the run's tree, and deliberately so — both providers
+   * collect instruction files by walking up from here, so a working directory
+   * one level shallower is a run that never reads the most specific rules it
+   * was given.
+   */
   workspaceDir: Schema.String,
 });
 

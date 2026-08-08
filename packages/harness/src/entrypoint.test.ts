@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,11 +13,14 @@ import process from "node:process";
 import { BunFileSystem } from "@effect/platform-bun";
 import { RunId, TaskId, WorkspaceId } from "@workspace/domain";
 import { Telemetry } from "@workspace/telemetry";
+import { TOML } from "bun";
 import { Effect, Layer, Schema, Stream } from "effect";
 import { CLAUDE_CLI_PATH_ENV_VAR } from "./claude";
+import { codexConfigPath } from "./codex-config";
 import { runTurn, specPathFrom } from "./entrypoint";
 import { Unauthenticated } from "./errors";
 import type { AgentEvent } from "./events";
+import { ATM_ROOT_MARKER } from "./paths";
 import {
   type AgentProvider,
   makeProviderRegistry,
@@ -225,6 +229,36 @@ describe("runTurn", () => {
     } finally {
       Reflect.deleteProperty(process.env, STOP_HOOK_COMMAND_ENV_VAR);
     }
+  });
+
+  /**
+   * The bug this pair is about: the Codex config was a side effect of wiring
+   * Executor, so which provider ran decided nothing and whether Executor was
+   * configured decided everything. An install with none wrote no `config.toml`
+   * at all and its Codex runs, left on the default `.git` marker, collected the
+   * checkout's `AGENTS.md` and none of the scopes above it — while a Claude run
+   * on an install that had one got a file its vendor never reads. What the file
+   * then says is `codexConfigToml`'s own test.
+   */
+  it("writes the codex config for a codex turn", async () => {
+    const spec = specFor(runDir);
+    const agentHomeDir = join(runDir, "agent-home", "codex");
+    await run(scripted([SESSION_INIT, TERMINUS]), {
+      ...spec,
+      agentHomeDir,
+      provider: "codex",
+    });
+    const config = TOML.parse(
+      readFileSync(codexConfigPath(agentHomeDir), "utf8")
+    ) as Record<string, unknown>;
+    expect(config.project_root_markers).toEqual([ATM_ROOT_MARKER]);
+  });
+
+  it("leaves no codex config in a claude home, which never reads one", async () => {
+    await run(scripted([SESSION_INIT, TERMINUS]));
+    expect(
+      existsSync(codexConfigPath(join(runDir, "agent-home", "claude")))
+    ).toBe(false);
   });
 
   it("reports a stream that ended without a terminus", async () => {
