@@ -26,9 +26,26 @@ import {
 } from "@workspace/ui/components/sidebar";
 import { useCallback } from "react";
 import { threadsQuery, useCreateThread, usePatchThread } from "@/api/threads";
+import { ShortcutHint, ShortcutLabel } from "@/components/shortcut";
+import { useHotkey, useHotkeys } from "@/lib/hotkey";
 
 /** Placeholder rows while the list is first read. Ids only exist to key them. */
 const PENDING_ROWS = ["first", "second", "third"] as const;
+
+/** The letter that starts a conversation, wherever the operator is. */
+const NEW_KEY = "n";
+
+/**
+ * The digits that open one, against the order the list is drawn in.
+ *
+ * Positional and nothing more: 1 is whatever sits at the top at the moment it
+ * is pressed. Starting a conversation puts a row above the rest and moves every
+ * number down one, so a digit names a place in the list rather than a thread —
+ * nothing here remembers that some conversation was once 3. Nine because that
+ * is where the row of digits ends; a digit past the end of the list opens
+ * nothing rather than wrapping or opening the last.
+ */
+const POSITION_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9"] as const;
 
 interface ThreadListProps {
   /** The conversation the overlay is open on, so the row reads as selected. */
@@ -51,14 +68,38 @@ export const ThreadList = ({
 }: ThreadListProps) => {
   const threads = useQuery(threadsQuery({ status: "active" }));
   const create = useCreateThread();
-  const { mutate: createThread } = create;
+  const { isPending: isCreating, mutate: createThread } = create;
 
+  // The buttons below are disabled while a create is in flight; the shortcut
+  // has no disabled state, so it checks the same flag. Without it a second
+  // press before the first answer opens one conversation and leaves another
+  // behind it.
   const startConversation = useCallback(() => {
+    if (isCreating) {
+      return;
+    }
     createThread(
       {},
       { onSuccess: (thread: Thread) => onOpenThread(thread.id) }
     );
-  }, [createThread, onOpenThread]);
+  }, [createThread, isCreating, onOpenThread]);
+
+  const openByPosition = useCallback(
+    (key: string) => {
+      const thread = threads.data?.[Number(key) - 1];
+      if (thread !== undefined) {
+        onOpenThread(thread.id);
+      }
+    },
+    [onOpenThread, threads.data]
+  );
+
+  // Both bound on the list rather than on the controls it draws, which is what
+  // makes them work with the sidebar collapsed to the rail: the rail keeps one
+  // button and no rows, and the keys are about the conversations, not about
+  // what is on screen.
+  useHotkey(NEW_KEY, startConversation);
+  useHotkeys(POSITION_KEYS, openByPosition);
 
   return (
     <SidebarGroup>
@@ -71,15 +112,21 @@ export const ThreadList = ({
       */}
       <div className="flex items-center gap-1 group-data-[collapsible=icon]:hidden">
         <SidebarGroupLabel className="flex-1">Conversations</SidebarGroupLabel>
-        <SidebarGroupAction
-          aria-label="New conversation"
-          className="static shrink-0"
-          disabled={create.isPending}
-          onClick={startConversation}
-          title="New conversation"
-        >
-          <HugeiconsIcon icon={PlusSignIcon} strokeWidth={2} />
-        </SidebarGroupAction>
+        {/*
+          A plus and no words, so the name stays on the `aria-label` and the
+          tooltip carries the letter as well. It replaces a native `title`,
+          which said the same thing a second later and in the browser's own box.
+        */}
+        <ShortcutHint hotkey={NEW_KEY} label="New conversation">
+          <SidebarGroupAction
+            aria-label="New conversation"
+            className="static shrink-0"
+            disabled={isCreating}
+            onClick={startConversation}
+          >
+            <HugeiconsIcon icon={PlusSignIcon} strokeWidth={2} />
+          </SidebarGroupAction>
+        </ShortcutHint>
       </div>
       <SidebarGroupContent className="group-data-[collapsible=icon]:hidden">
         <SidebarMenu>
@@ -114,9 +161,13 @@ export const ThreadList = ({
         <SidebarMenuItem>
           <SidebarMenuButton
             aria-label="New conversation"
-            disabled={create.isPending}
+            disabled={isCreating}
             onClick={startConversation}
-            tooltip="New conversation"
+            tooltip={{
+              children: (
+                <ShortcutLabel hotkey={NEW_KEY} label="New conversation" />
+              ),
+            }}
           >
             <HugeiconsIcon icon={PlusSignIcon} strokeWidth={2} />
             <span>New conversation</span>

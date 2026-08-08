@@ -13,6 +13,7 @@ import {
 } from "@workspace/ui/components/select";
 import {
   type ChangeEvent,
+  type KeyboardEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -20,6 +21,8 @@ import {
   useState,
 } from "react";
 import { projectsQuery } from "@/api/projects";
+import { ShortcutHint } from "@/components/shortcut";
+import { useHotkey } from "@/lib/hotkey";
 
 /** What the board is filtered to, and how to say it has changed. */
 interface FiltersProps {
@@ -31,6 +34,9 @@ interface FiltersProps {
 
 /** The unfiltered board, which is the state the screen opens in. */
 const ALL_PROJECTS = { label: "All projects", value: null };
+
+/** The letter that opens the search. Board only; see the binding below. */
+const SEARCH_KEY = "f";
 
 /**
  * The board's filters.
@@ -67,7 +73,13 @@ export const BoardFilters = ({
     (event: ChangeEvent<HTMLInputElement>) => onQueryChange(event.target.value),
     [onQueryChange]
   );
-  const openSearch = useCallback(() => setSearching(true), []);
+  const openSearch = useCallback(() => {
+    setSearching(true);
+    // Already open with the caret somewhere else — clicking a card, then the
+    // shortcut. The effect below only runs when the flag changes, so this is
+    // the one path that puts the caret back.
+    searchRef.current?.focus();
+  }, []);
   const closeSearch = useCallback(() => {
     setSearching(false);
     onQueryChange("");
@@ -80,6 +92,31 @@ export const BoardFilters = ({
       searchRef.current?.focus();
     }
   }, [searching]);
+
+  /**
+   * The letter that opens the search, bound here rather than in the board.
+   *
+   * This component is the board's alone, so the binding lives and dies with the
+   * screen and there is nothing to say on the project list or the keys, where
+   * there is no search to open. `f` typed into the field itself is text: the
+   * hook declines a keystroke aimed at an input.
+   */
+  useHotkey(SEARCH_KEY, openSearch);
+
+  /**
+   * Escape leaves the search the way the close button does — field gone, text
+   * cleared, project filter untouched. Handled on the field rather than as
+   * another global binding, because Escape belongs to whatever is in front and
+   * a document-level one would fire from behind an open panel.
+   */
+  const closeOnEscape = useCallback(
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "Escape") {
+        closeSearch();
+      }
+    },
+    [closeSearch]
+  );
 
   const items = useMemo(
     () => [
@@ -105,6 +142,7 @@ export const BoardFilters = ({
             aria-label="Search tasks"
             className="w-full pl-7"
             onChange={type}
+            onKeyDown={closeOnEscape}
             placeholder="Search tasks"
             ref={searchRef}
             type="search"
@@ -141,15 +179,22 @@ export const BoardFilters = ({
           ))}
         </SelectContent>
       </Select>
-      <Button
-        aria-label="Search tasks"
-        className="shrink-0"
-        onClick={openSearch}
-        size="icon"
-        variant="outline"
-      >
-        <HugeiconsIcon icon={SearchIcon} strokeWidth={2} />
-      </Button>
+      {/*
+        The one control on the board with a letter of its own, so it says so
+        the same way the sidebar's do. Without this the letter would be the
+        only binding in the app with nowhere to be found.
+      */}
+      <ShortcutHint hotkey={SEARCH_KEY} label="Search tasks">
+        <Button
+          aria-label="Search tasks"
+          className="shrink-0"
+          onClick={openSearch}
+          size="icon"
+          variant="outline"
+        >
+          <HugeiconsIcon icon={SearchIcon} strokeWidth={2} />
+        </Button>
+      </ShortcutHint>
     </div>
   );
 };

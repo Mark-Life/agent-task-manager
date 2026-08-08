@@ -18,6 +18,13 @@ const TEXT_ENTRY = "input, textarea, select";
  * already means something, and a global shortcut firing underneath would be a
  * second, invisible meaning. `cmdk-root` is the command palette's own marker,
  * which it carries whether or not it was opened inside a dialog.
+ *
+ * The dialog role is also what answers for the conversation and task panels,
+ * which is the case worth spelling out because nothing in our own code says
+ * `dialog`: a `Sheet` is a Base UI `Dialog.Root`, and its popup renders
+ * `role="dialog"` by default. So a letter pressed while one of those is open is
+ * declined wherever focus sits inside it — the chat composer does not have to
+ * hold the caret for the panel around it to claim the keystroke.
  */
 const CAPTURING = [
   '[role="dialog"]',
@@ -48,7 +55,15 @@ const claimsTheKey = (target: EventTarget | null) => {
 };
 
 /**
- * A single unmodified letter, anywhere in the app.
+ * How a bound set is spelled for the dependency list below. A newline, because
+ * no `KeyboardEvent.key` is one — the return key is spelled `Enter` — so
+ * splitting the string back apart cannot invent a key nobody asked for.
+ */
+const BOUND_SEPARATOR = "\n";
+
+/**
+ * A family of single unmodified keys, anywhere in the app, answered by one
+ * handler that is told which of them fired.
  *
  * Document-level rather than bound to a component's subtree: the point of these
  * is that they work without first clicking the control they stand for, so there
@@ -60,15 +75,29 @@ const claimsTheKey = (target: EventTarget | null) => {
  * A held key repeats at the OS rate. Only the first of those counts: a shortcut
  * that flips something would otherwise strobe until the key came back up.
  *
- * The event's default is left alone. These bindings are bare letters, which no
- * browser reserves outside a text field, and swallowing the event would take
- * the keystroke away from anything that comes to depend on it later.
+ * A claimed keystroke is cancelled. The default action of a `keydown` on a
+ * letter is text insertion, and it resolves after this handler has returned,
+ * against whatever holds the caret by then — not against whatever held it when
+ * the key went down. So a shortcut that focuses a field is handed the letter it
+ * was pressed for: `f` opened the board's search with `f` already typed into it.
+ * Cancelling costs nothing, because it is reached only past every decline above
+ * — a letter typed into a field, or pressed under a dialog, never gets here.
  */
-export const useHotkey = (key: string, onPress: () => void) => {
+export const useHotkeys = (
+  keys: readonly string[],
+  onPress: (key: string) => void
+) => {
+  // Flattened to a string before it reaches the dependency list, so a caller
+  // may build the list inline — one letter below, a run of positions elsewhere
+  // — without the listener being torn down and rebuilt on every render.
+  const bound = keys.join(BOUND_SEPARATOR);
+
   useEffect(() => {
+    const answered = new Set(bound.split(BOUND_SEPARATOR));
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (
-        event.key !== key ||
+        !answered.has(event.key) ||
         event.ctrlKey ||
         event.metaKey ||
         event.altKey ||
@@ -79,10 +108,16 @@ export const useHotkey = (key: string, onPress: () => void) => {
       ) {
         return;
       }
-      onPress();
+      event.preventDefault();
+      onPress(event.key);
     };
 
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [key, onPress]);
+  }, [bound, onPress]);
+};
+
+/** One key, for a caller with nothing to tell apart. */
+export const useHotkey = (key: string, onPress: () => void) => {
+  useHotkeys([key], onPress);
 };
