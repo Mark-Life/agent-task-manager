@@ -40,6 +40,10 @@ interface InlineEditProps {
   readonly emptyText: string;
   /** Called with the next value when the edit is committed. */
   readonly onCommit: (next: string) => void;
+  /** The shape an empty box wants, shown while it is being typed into. */
+  readonly placeholder?: string;
+  /** What is wrong with a value, or null. Absent means every value is fine. */
+  readonly problemOf?: (next: string) => string | null;
   /** The value as the record holds it. */
   readonly value: string;
 }
@@ -48,6 +52,7 @@ interface UseInlineEditOptions {
   /** Whether an emptied box is a real value (clears the field) or a mistake (reverts). */
   readonly allowEmpty?: boolean;
   readonly onCommit: (next: string) => void;
+  readonly problemOf?: (next: string) => string | null;
   /** Whitespace policy for committing; single-line text trims, prose does not. */
   readonly trimmed?: boolean;
   readonly value: string;
@@ -57,36 +62,57 @@ interface UseInlineEditOptions {
  * The draft lifecycle both primitives share: begin seeds it from the value,
  * escape abandons it, and commit hands it over only when it says something
  * new — an untouched or reverted box is not worth a request.
+ *
+ * A caller that hands over `problemOf` gets one more state: a value the field
+ * refuses keeps the box open and says why, rather than being sent and becoming
+ * a record nothing downstream can use. Typing clears the message — the box is
+ * unfinished, not wrong — and Escape still abandons the whole edit.
  */
 const useInlineEdit = ({
   allowEmpty = true,
   onCommit,
+  problemOf,
   trimmed = false,
   value,
 }: UseInlineEditOptions) => {
   const [draft, setDraft] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
 
   const begin = useCallback(() => setDraft(value), [value]);
-  const abandon = useCallback(() => setDraft(null), []);
+  const abandon = useCallback(() => {
+    setProblem(null);
+    setDraft(null);
+  }, []);
+
+  const change = useCallback((next: string) => {
+    setProblem(null);
+    setDraft(next);
+  }, []);
 
   const commit = useCallback(() => {
     if (draft === null) {
       return;
     }
     const next = trimmed ? draft.trim() : draft;
+    const refused = problemOf?.(next) ?? null;
+    if (refused !== null) {
+      setProblem(refused);
+      return;
+    }
     setDraft(null);
     if (next !== value && (allowEmpty || next !== "")) {
       onCommit(next);
     }
-  }, [allowEmpty, draft, onCommit, trimmed, value]);
+  }, [allowEmpty, draft, onCommit, problemOf, trimmed, value]);
 
   return {
     abandon,
     begin,
-    change: setDraft,
+    change,
     commit,
     draft,
     editing: draft !== null,
+    problem,
   };
 };
 
@@ -118,6 +144,9 @@ interface EditBoxProps {
   readonly onAbandon: () => void;
   readonly onChange: (next: string) => void;
   readonly onCommit: () => void;
+  readonly placeholder?: string;
+  /** Why the last commit was refused, shown under the box until it is answered. */
+  readonly problem?: string | null;
   readonly value: string;
 }
 
@@ -144,6 +173,8 @@ const EditBox = ({
   onAbandon,
   onChange,
   onCommit,
+  placeholder,
+  problem = null,
   value,
 }: EditBoxProps) => {
   const change = useCallback(
@@ -152,8 +183,9 @@ const EditBox = ({
     [onChange]
   );
 
-  return (
+  const box = (
     <textarea
+      aria-invalid={problem !== null}
       // oxlint-disable-next-line jsx-a11y/no-autofocus
       autoFocus
       className={cn(
@@ -162,14 +194,29 @@ const EditBox = ({
         // once the value wraps, and a line box built around them would sit the
         // two faces at different heights.
         "field-sizing-content -mx-1 block min-h-0 w-full resize-none whitespace-pre-wrap break-words rounded-sm bg-muted/40 px-1 py-0 leading-[inherit] outline-none ring-2 ring-ring/30",
+        problem === null ? undefined : "ring-destructive/40",
         className
       )}
       onBlur={onCommit}
       onChange={change}
       onKeyDown={editKeyHandler(onAbandon, onCommit, false)}
+      placeholder={placeholder}
       rows={1}
       value={value}
     />
+  );
+
+  if (problem === null) {
+    return box;
+  }
+
+  return (
+    <span className="flex w-full flex-col gap-1">
+      {box}
+      <span className="text-destructive text-xs" role="alert">
+        {problem}
+      </span>
+    </span>
   );
 };
 
@@ -195,14 +242,18 @@ export const InlineText = ({
   editLabel,
   emptyText,
   onCommit,
+  placeholder,
+  problemOf,
   value,
 }: InlineTextProps) => {
-  const { abandon, begin, change, commit, draft, editing } = useInlineEdit({
-    allowEmpty,
-    onCommit,
-    trimmed: true,
-    value,
-  });
+  const { abandon, begin, change, commit, draft, editing, problem } =
+    useInlineEdit({
+      allowEmpty,
+      onCommit,
+      problemOf,
+      trimmed: true,
+      value,
+    });
 
   if (!editing) {
     return (
@@ -227,6 +278,8 @@ export const InlineText = ({
       onAbandon={abandon}
       onChange={change}
       onCommit={commit}
+      placeholder={placeholder}
+      problem={problem}
       value={draft ?? ""}
     />
   );
@@ -251,13 +304,17 @@ export const InlineLink = ({
   editLabel,
   emptyText,
   onCommit,
+  placeholder,
+  problemOf,
   value,
 }: InlineEditProps) => {
-  const { abandon, begin, change, commit, draft, editing } = useInlineEdit({
-    onCommit,
-    trimmed: true,
-    value,
-  });
+  const { abandon, begin, change, commit, draft, editing, problem } =
+    useInlineEdit({
+      onCommit,
+      problemOf,
+      trimmed: true,
+      value,
+    });
 
   if (editing) {
     return (
@@ -266,6 +323,8 @@ export const InlineLink = ({
         onAbandon={abandon}
         onChange={change}
         onCommit={commit}
+        placeholder={placeholder}
+        problem={problem}
         value={draft ?? ""}
       />
     );
@@ -278,6 +337,8 @@ export const InlineLink = ({
         editLabel={editLabel}
         emptyText={emptyText}
         onCommit={onCommit}
+        placeholder={placeholder}
+        problemOf={problemOf}
         value={value}
       />
     );

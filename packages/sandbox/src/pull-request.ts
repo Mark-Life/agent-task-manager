@@ -37,6 +37,7 @@
  * an unanswered lookup must not become a run that failed to close.
  */
 
+import { parseRepoUrl } from "@workspace/domain";
 import { Effect, Option, Redacted, Schema } from "effect";
 import {
   FetchHttpClient,
@@ -45,7 +46,6 @@ import {
   HttpClientResponse,
 } from "effect/unstable/http";
 import { readGithubToken } from "./github";
-import { parseRepoUrl } from "./repo";
 
 /** Where the REST API lives. A test points the lookup at its own server. */
 export const GITHUB_API_ORIGIN = "https://api.github.com";
