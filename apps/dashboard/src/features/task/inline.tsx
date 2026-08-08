@@ -16,10 +16,12 @@ import { isHttpUrl, prettyUrl } from "@/lib/url";
  * page is the control that changes it.
  *
  * Read and edit are two renderings of the same value: the read one is a
- * button so a keyboard can reach it, the edit one is an input that arrives
- * already holding the value. The committed value always comes from props —
- * the server is the record and the cache writes back into the read face —
- * while the draft exists only for as long as editing does. Commit fires on
+ * button so a keyboard can reach it, the edit one is a box that arrives
+ * already holding the value. Both wrap, both carry the same padding and line
+ * box, so a value that reads as three lines is edited as three lines and
+ * starting an edit moves nothing on the page. The committed value always comes
+ * from props — the server is the record and the cache writes back into the read
+ * face — while the draft exists only for as long as editing does. Commit fires on
  * blur and on Enter (Cmd+Enter in an area, where Enter is a newline), and
  * Escape throws the draft away; both keys stop at the element, so editing a
  * value never reads as "close the panel this text sits in".
@@ -124,6 +126,18 @@ interface EditBoxProps {
  * face turned out to be. It keeps the read face's padding and line box so the
  * swap moves nothing, and it arrives focused because mounting means somebody
  * just asked to change this value.
+ *
+ * It is a textarea, not an input, because the read faces it stands in for wrap.
+ * A title long enough to read as three lines was being edited through a
+ * one-line slot: the header collapsed, the panel below it jumped up, and the
+ * words being changed were off the right edge behind a horizontal scroll. A
+ * textarea sized to its content wraps to the same lines the read face does, so
+ * opening and closing an edit moves nothing and the whole value stays visible.
+ *
+ * One line is still what it holds. Enter commits rather than breaking the line
+ * — the handler takes it before the textarea sees it — and a newline arriving
+ * by paste is folded into a space on the way into the draft, so the value can
+ * never grow a second line the read face would not show.
  */
 const EditBox = ({
   className,
@@ -133,21 +147,27 @@ const EditBox = ({
   value,
 }: EditBoxProps) => {
   const change = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value),
+    (event: ChangeEvent<HTMLTextAreaElement>) =>
+      onChange(event.target.value.replace(/[\n\r]+/g, " ")),
     [onChange]
   );
 
   return (
-    <input
+    <textarea
       // oxlint-disable-next-line jsx-a11y/no-autofocus
       autoFocus
       className={cn(
-        "-mx-1 h-auto w-full rounded-sm bg-muted/40 px-1 py-0 leading-[inherit] outline-none ring-2 ring-ring/30",
+        // `block` on both faces rather than the inline-block a button and a
+        // textarea default to: their baselines are taken from different lines
+        // once the value wraps, and a line box built around them would sit the
+        // two faces at different heights.
+        "field-sizing-content -mx-1 block min-h-0 w-full resize-none whitespace-pre-wrap break-words rounded-sm bg-muted/40 px-1 py-0 leading-[inherit] outline-none ring-2 ring-ring/30",
         className
       )}
       onBlur={onCommit}
       onChange={change}
       onKeyDown={editKeyHandler(onAbandon, onCommit, false)}
+      rows={1}
       value={value}
     />
   );
@@ -165,8 +185,9 @@ interface InlineTextProps extends InlineEditProps {
  * only hint that pressing it does something, because a permanent border would
  * read as a form on a page that is not one.
  *
- * Both faces carry the same padding and line box, so the swap never shifts
- * the text vertically.
+ * One line of the record, not one line on the screen: a title long enough
+ * wraps, and both faces carry the same padding, line box and wrapping, so the
+ * swap never shifts the text vertically or sideways.
  */
 export const InlineText = ({
   allowEmpty = true,
@@ -188,7 +209,7 @@ export const InlineText = ({
       <button
         aria-label={editLabel}
         className={cn(
-          "-mx-1 w-full rounded-sm px-1 py-0 text-left hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+          "-mx-1 block w-full whitespace-pre-wrap break-words rounded-sm px-1 py-0 text-left hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
           value === "" && "text-muted-foreground",
           className
         )}
