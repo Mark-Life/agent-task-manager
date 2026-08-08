@@ -26,6 +26,7 @@ export {
   InvalidInput,
   NotFound,
   PayloadTooLarge,
+  ProposalAlreadyDecided,
   RunAlreadyLive,
   RunNotLive,
   TooManyRequests,
@@ -35,6 +36,7 @@ export { ArtifactsGroup } from "./groups/artifacts";
 export { HealthGroup } from "./groups/health";
 export { MessagesGroup } from "./groups/messages";
 export { ProjectsGroup } from "./groups/projects";
+export { ProposalsGroup } from "./groups/proposals";
 export { RunCommandsGroup } from "./groups/run-commands";
 export { RunsGroup } from "./groups/runs";
 export { SessionsGroup } from "./groups/sessions";
@@ -55,6 +57,7 @@ export {
   ProjectEnvFileContent,
   ProjectEnvFileSave,
 } from "./schemas/project-env";
+export { Proposal } from "./schemas/proposal";
 export {
   DEFAULT_EVENT_PAGE,
   Run,

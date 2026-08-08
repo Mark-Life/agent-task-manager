@@ -3,6 +3,7 @@ import { ArtifactsGroup } from "./groups/artifacts";
 import { HealthGroup } from "./groups/health";
 import { MessagesGroup } from "./groups/messages";
 import { ProjectsGroup } from "./groups/projects";
+import { ProposalsGroup } from "./groups/proposals";
 import { RunCommandsGroup } from "./groups/run-commands";
 import { RunsGroup } from "./groups/runs";
 import { SessionsGroup } from "./groups/sessions";
@@ -51,6 +52,7 @@ export class Api extends HttpApi.make("atm")
     RunsGroup,
     RunCommandsGroup,
     ArtifactsGroup,
+    ProposalsGroup,
     ThreadsGroup,
     UsageGroup
   )

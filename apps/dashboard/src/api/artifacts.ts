@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { ArtifactId, TaskId } from "@workspace/domain";
+import type { ArtifactId, ProjectId, TaskId } from "@workspace/domain";
 import { keys } from "@/api/keys";
 import { apiMutation, apiQuery } from "@/api/query";
 import type { ApiClientShape } from "@/api/runtime";
@@ -34,6 +34,18 @@ export interface ArtifactPromotion {
 export const artifactsQuery = (taskId: TaskId) =>
   apiQuery(keys.artifacts(taskId), (client) =>
     client.artifacts.list({ params: { taskId } })
+  );
+
+/**
+ * A project's shared folder, most recently written first.
+ *
+ * What a task's list cannot show: the material that outlives the task that
+ * produced it — a document one run left for the next task in the project, and
+ * the copies a promotion put there. One folder on disk, so one list here.
+ */
+export const projectArtifactsQuery = (projectId: ProjectId) =>
+  apiQuery(keys.projectArtifacts(projectId), (client) =>
+    client.artifacts.listProject({ params: { projectId } })
   );
 
 /**

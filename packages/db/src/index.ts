@@ -84,6 +84,12 @@ export {
   type ProjectEnvFileScope,
 } from "./repositories/project-env";
 export {
+  ProposalAlreadyDecided,
+  type ProposalDecision,
+  type ProposalRecord,
+  ProposalRepo,
+} from "./repositories/proposal";
+export {
   RunAlreadyLive,
   RunNotLive,
   RunNotStartable,

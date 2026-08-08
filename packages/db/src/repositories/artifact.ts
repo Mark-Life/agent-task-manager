@@ -485,8 +485,51 @@ const make = Effect.gen(function* () {
     });
   });
 
+  /**
+   * A project's shared folder, most recently written first.
+   *
+   * The use case the writable project mount exists for: a research task leaves a
+   * document and a later task in the same project reads it. Without a listing
+   * that file is on disk, in the index, and reachable only by somebody who
+   * already knows its path.
+   *
+   * A run's own writes and the copies a promotion put there come back as one
+   * list, because they are one folder on disk — a reader looking for material
+   * asks what the project holds, not how each file got there. The workspace is
+   * named beside the project for the same reason every other query names it: a
+   * project id is not a permission.
+   */
+  const listByProject = Effect.fn("ArtifactRepo.listByProject")(
+    function* (input: {
+      readonly projectId: ProjectId;
+      readonly workspaceId: WorkspaceId;
+    }) {
+      yield* Effect.annotateCurrentSpan({ projectId: input.projectId });
+      const rows = yield* execute(
+        "ArtifactRepo.listByProject",
+        db
+          .select()
+          .from(artifact)
+          .where(
+            and(
+              eq(artifact.workspaceId, input.workspaceId),
+              eq(artifact.projectId, input.projectId),
+              eq(artifact.scope, "project")
+            )
+          )
+          .orderBy(desc(artifact.modifiedAt), desc(artifact.id))
+      );
+      return yield* decodeMany({
+        decode: decodeArtifact,
+        entity: ENTITY,
+        rows,
+      });
+    }
+  );
+
   return {
     byId,
+    listByProject,
     listByTask,
     promote,
     replaceProjectIndex,

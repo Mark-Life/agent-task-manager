@@ -249,6 +249,7 @@ export const AUDIT_ENTITY_TYPES = [
   "agent_session",
   "run",
   "artifact",
+  "proposal",
 ] as const;
 
 /** What kind of thing an audit row is about. */

@@ -102,6 +102,16 @@ in its pull request and not in the task folder as well, and a run with no reposi
 looking for a pull request it cannot open; a task with no project loses the project line rather
 than being told about a directory that is not mounted.
 
+It ends with the one door through the read-only mount: a worker asks for a change to a directory
+it cannot write by writing `.atm/proposals/<name>.md` in its task directory, front matter naming
+the scope and the path within it. The block names that path because a mechanism reads exactly it —
+`readProposals` in `@workspace/orchestrator` collects the file after the container is gone, the row
+lands pending and inert, and only an admin-scoped confirm writes the body into the scope. One
+directory is offered, the shared one, because that is the only directory the mount refuses — the
+project folder is read-write and the bullet above says so, and inviting a proposal into it would
+park work behind a person the run never needed. The last line says nothing changes until a person
+accepts it, because a run that believes otherwise reports a rule it did not change.
+
 ### [`CREDENTIAL_RULES`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/rules.ts#L213-L217) — "The GitHub credential you hold"
 
 A fresh worker run **that has a repository** — the conditional is

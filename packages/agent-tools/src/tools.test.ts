@@ -40,7 +40,8 @@ const EXPECTED_NAMES = [
 
 /** Which gateway operation each tool is. Restated here on purpose: two spellings that must agree. */
 const EXPECTED_ENDPOINTS: Readonly<Record<string, string>> = {
-  artifacts_list: "GET /tasks/:taskId/artifacts",
+  artifacts_list:
+    "GET /tasks/:taskId/artifacts | GET /projects/:projectId/artifacts",
   artifacts_read: "GET /tasks/:taskId/artifacts/:artifactId/content",
   messages_list: "GET /tasks/:taskId/messages",
   messages_post: "POST /tasks/:taskId/messages",
@@ -159,6 +160,21 @@ describe("the agent tool table", () => {
     );
     expect(JSON.stringify(propertiesOf("artifacts_read").maxChars)).toContain(
       '"maximum":40000'
+    );
+  });
+
+  /**
+   * A project's shared folder is where a research task leaves a document for the
+   * next task, and a tool that could only address a task made that document
+   * reachable only by somebody who already knew its path.
+   */
+  it("lets the artifact listing name a project instead of a task", () => {
+    expect([...Object.keys(propertiesOf("artifacts_list"))].sort()).toEqual([
+      "projectId",
+      "taskId",
+    ]);
+    expect(agentToolByName("artifacts_list")?.description).toContain(
+      "projectId"
     );
   });
 

@@ -16,6 +16,7 @@ import {
   newProjectId,
   newTaskId,
   newTaskMessageId,
+  PROPOSALS_DIRNAME,
   type Project,
   type Task,
   type TaskMessage,
@@ -190,6 +191,21 @@ describe("a fresh session's prompt", () => {
   });
 
   /**
+   * The one door through the read-only mount, and the two ways it can be
+   * useless. A worker told the wrong directory writes a file nobody collects —
+   * the bug the handoff file had before it was named — so the path has to be the
+   * one `readProposals` in `@workspace/orchestrator` walks. And a worker that
+   * thinks its proposal took effect writes a comment saying the rules now say
+   * something they do not.
+   */
+  test("tells a worker how to ask for a change it cannot make", () => {
+    expect(text).toContain(PROPOSALS_DIRNAME);
+    expect(text).toContain("scope: workspace");
+    expect(text).toContain("path: CLAUDE.md");
+    expect(text).toContain("Nothing changes until a person accepts it");
+  });
+
+  /**
    * The paths are what carry the scoping: each level sits inside the one above
    * it, which is what puts a `CLAUDE.md` or `AGENTS.md` at every level on the
    * path both providers walk up from the working directory. A prompt naming
@@ -290,6 +306,26 @@ describe("a fresh session's prompt", () => {
     expect(scratch).not.toContain(
       "Do not write a second copy into the task directory"
     );
+  });
+
+  /**
+   * A worker's project directory is a read-write mount and the bullet above the
+   * proposal block says so. Inviting a proposal into it would park work behind a
+   * person the run never needed one from, and leave the two sentences
+   * contradicting each other. A run with no project directory is asked the same
+   * way, because the one directory a proposal is for is shared by both.
+   */
+  test("never offers to propose into a directory the run can write", () => {
+    const bare = textOf({
+      placement: barePlacement,
+      project: null,
+      repoUrl: null,
+    });
+
+    expect(text).toContain("The project directory is durable material");
+    expect(text).not.toContain("scope: project");
+    expect(bare).toContain(PROPOSALS_DIRNAME);
+    expect(bare).not.toContain("scope: project");
   });
 
   test("teaches the rule the stop hook enforces", () => {

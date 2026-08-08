@@ -293,14 +293,35 @@ const runsRerun = defineTool({
     }),
 });
 
-/** The index of what the task's runs kept — metadata only, never the bytes. */
+/**
+ * The index of one folder — metadata only, never the bytes.
+ *
+ * Two folders rather than one, because a task's own output and the material its
+ * project keeps are different questions. A project's folder is what a research
+ * task leaves a document in for the next task to build on, and a listing is how
+ * that next task finds the document without being told its path.
+ */
 const artifactsList = defineTool({
   description:
-    "List a task's artifacts, most recently written first. Metadata only; use `artifacts_read` for the contents.",
-  endpoint: "GET /tasks/:taskId/artifacts",
-  input: TaskRef,
+    "List a task's files, or a project's shared folder when `projectId` is given instead of `taskId`. Most recently written first, metadata only; use `artifacts_read` for a task file's contents.",
+  endpoint: "GET /tasks/:taskId/artifacts | GET /projects/:projectId/artifacts",
+  input: Schema.Struct({
+    projectId: Schema.optionalKey(ProjectId),
+    taskId: Schema.optionalKey(TaskId),
+  }),
   name: "artifacts_list",
-  run: ({ client, input }) => client.artifacts.list({ params: input }),
+  run: ({ client, input }) => {
+    if (input.projectId !== undefined) {
+      return client.artifacts.listProject({
+        params: { projectId: input.projectId },
+      });
+    }
+    return input.taskId === undefined
+      ? // Neither folder named is a call with no subject, and a default of
+        // either would list somebody's files because the argument was forgotten.
+        Effect.fail("name a taskId or a projectId")
+      : client.artifacts.list({ params: { taskId: input.taskId } });
+  },
 });
 
 /**

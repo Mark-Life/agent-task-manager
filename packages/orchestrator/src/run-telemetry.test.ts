@@ -369,6 +369,41 @@ describe("withRunEvent", () => {
     expect(typeof end.leaseDurationMs).toBe("number");
   });
 
+  test("the row names the commit each shared scope stood at", async () => {
+    await run(
+      oneRun(
+        [
+          {
+            projectCommit: "b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5",
+            workspaceCommit: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4",
+          },
+          { terminus: finished },
+        ],
+        Effect.succeed("ok")
+      )
+    );
+
+    const { end, start } = bothRows();
+    // Which rules the run had, as bytes somebody can still read.
+    expect(end.workspaceCommit).toBe(
+      "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4"
+    );
+    expect(end.projectCommit).toBe("b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5");
+    // The start row is written before anything is folded in, like every other
+    // fact the loop learns on its way through.
+    expect(start.workspaceCommit).toBeNull();
+    expect(start.projectCommit).toBeNull();
+  });
+
+  test("a scope with no history leaves a null rather than failing the row", async () => {
+    await run(oneRun([{ terminus: finished }], Effect.succeed("ok")));
+
+    const end = endRow();
+    expect(end.workspaceCommit).toBeNull();
+    expect(end.projectCommit).toBeNull();
+    expect(end.outcome).toBe("done");
+  });
+
   test("a failed terminus keeps its class and whatever it did report", async () => {
     await run(oneRun([{ terminus: failed }], Effect.succeed("ok")));
 
@@ -706,10 +741,12 @@ describe("observeRunProgress", () => {
       instructionBytes: null,
       messageFallback: false,
       parked: false,
+      projectCommit: null,
       promptChars: 1200,
       prUrl: null,
       retryInMs: null,
       terminus: finished,
+      workspaceCommit: null,
     });
   });
 });

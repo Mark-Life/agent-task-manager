@@ -413,6 +413,50 @@ test("a rescan keeps the stamp on a file somebody promoted", async () => {
   expect(after?.contentHash).toBe(promoted.contentHash);
 });
 
+/** Paths in the order a reader would check them, whatever order the query gave. */
+const compare = (left: string, right: string) => left.localeCompare(right);
+
+/** One project's folder, as the listing hands it over. */
+const listProject = (workspace: WorkspaceId = workspaceId) =>
+  Effect.flatMap(ArtifactRepo, (artifacts) =>
+    artifacts.listByProject({ projectId: scanned.id, workspaceId: workspace })
+  );
+
+/**
+ * The listing the writable project mount was missing. A research task leaves a
+ * document in this folder for the next task to build on, and without a list that
+ * document is on disk, in the index, and reachable only by somebody who already
+ * knows its path.
+ */
+test("a project's folder lists what a run left there beside what was promoted into it", async () => {
+  const listed = await runtime.runPromise(listProject());
+
+  // One folder on disk, so one list: a reader asks what the project holds, not
+  // how each file got there.
+  expect([...listed].map((row) => row.path).sort(compare)).toEqual([
+    "research/august.md",
+    "research/promoted.md",
+  ]);
+  for (const row of listed) {
+    expect(row.scope).toBe("project");
+    expect(row.projectId).toBe(scanned.id);
+    // A shared row names no task: it outlives whichever run wrote it.
+    expect(row.taskId).toBeNull();
+  }
+  expect(
+    listed.find((row) => row.path === "research/promoted.md")?.promotedAt
+  ).not.toBeNull();
+});
+
+/** A project id is not a permission: the workspace is named beside it, every time. */
+test("a project's folder answers nothing to another workspace", async () => {
+  const listed = await runtime.runPromise(
+    listProject(randomUUID() as WorkspaceId)
+  );
+
+  expect(listed).toEqual([]);
+});
+
 /**
  * The delete is what stops the folder listing files that 404 on click, and it
  * applies to a promoted row too: an index that outlived its bytes reads as a

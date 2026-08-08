@@ -1,5 +1,6 @@
 import {
   Delete02Icon,
+  File01Icon,
   FolderLibraryIcon,
   Key01Icon,
   PencilEdit01Icon,
@@ -41,6 +42,7 @@ import { useCallback, useState } from "react";
 import { projectsQuery, useDeleteProject } from "@/api/projects";
 import { Failed, Pending } from "@/components/query-state";
 import { ProjectEnvFiles } from "@/features/projects/env-files";
+import { ProjectFiles } from "@/features/projects/project-files";
 import { ProjectFormDialog } from "@/features/projects/project-form";
 
 interface ProjectRowProps {
@@ -56,18 +58,23 @@ interface ProjectRowProps {
  * and come back with no project at all, which is a smaller event than the word
  * "delete" suggests and worth saying before rather than after.
  *
- * The environment files open in place rather than on a screen of their own. It
- * is a list of paths, it is empty for most projects, and a row that expands is
- * one click from the project it belongs to instead of two and a back button.
+ * The environment files and the project's own folder open in place rather than
+ * on a screen of their own. Each is a list of paths, empty for most projects,
+ * and a row that expands is one click from the project it belongs to instead of
+ * two and a back button. The folder is offered on every project, repository or
+ * not: a run writes documents into it whether or not there is a checkout, and
+ * that is the whole reason the mount is writable.
  */
 const ProjectRow = ({ onEdit, project }: ProjectRowProps) => {
   const remove = useDeleteProject();
   const { mutate } = remove;
   const [showEnv, setShowEnv] = useState(false);
+  const [showFiles, setShowFiles] = useState(false);
 
   const edit = useCallback(() => onEdit(project), [onEdit, project]);
   const confirm = useCallback(() => mutate(project.id), [mutate, project.id]);
   const toggleEnv = useCallback(() => setShowEnv((shown) => !shown), []);
+  const toggleFiles = useCallback(() => setShowFiles((shown) => !shown), []);
 
   return (
     <div className="flex flex-col gap-2">
@@ -87,6 +94,15 @@ const ProjectRow = ({ onEdit, project }: ProjectRowProps) => {
           )}
         </ItemContent>
         <ItemActions>
+          <Button
+            aria-expanded={showFiles}
+            aria-label={`Files in ${project.name}`}
+            onClick={toggleFiles}
+            size="icon-sm"
+            variant="ghost"
+          >
+            <HugeiconsIcon icon={File01Icon} strokeWidth={2} />
+          </Button>
           {/* Only a project with a repository has a checkout to write files
             into, so a project without one is not offered the panel. */}
           {project.repoUrl === null ? null : (
@@ -142,6 +158,11 @@ const ProjectRow = ({ onEdit, project }: ProjectRowProps) => {
           </AlertDialog>
         </ItemActions>
       </Item>
+      {showFiles ? (
+        <div className="rounded-md border border-dashed px-4 py-3">
+          <ProjectFiles projectId={project.id} />
+        </div>
+      ) : null}
       {showEnv ? (
         <div className="rounded-md border border-dashed px-4 py-3">
           <ProjectEnvFiles projectId={project.id} />

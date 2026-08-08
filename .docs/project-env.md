@@ -24,12 +24,14 @@ back; no consumer holds a key, and no application contains a line of crypto. The
 records that a file's text changed and how long it became — never the value, and never the
 ciphertext either.
 
-**The path is the one thing validated hard.** `EnvFilePath` in `@workspace/domain` refuses an
-absolute path, any `.` or `..` segment, an empty segment, a backslash, a control character, any
-`.git` segment, and anything over 256 characters. Refusals rather than repairs: normalizing a
-path with `..` in it is how a validator and the filesystem come to disagree about which file was
-meant. `.git` is refused at any depth because `.git/hooks/pre-commit` would turn an environment
-file into arbitrary code. Because it is a schema, the API refuses a bad path at decode.
+**The path is the one thing validated hard.** `EnvFilePath` in `@workspace/domain` brands the
+shared `relativePathRefusalOf` rule — the same one a proposal's target path goes through, for the
+same reason — which refuses an absolute path, any `.` or `..` segment, an empty segment, a
+backslash, a control character, any `.git` segment, and anything over 256 characters. Refusals
+rather than repairs: normalizing a path with `..` in it is how a validator and the filesystem
+come to disagree about which file was meant. `.git` is refused at any depth because
+`.git/hooks/pre-commit` would turn an environment file into arbitrary code. Because it is a
+schema, the API refuses a bad path at decode.
 
 **Into the run.** `packages/orchestrator` reads the rows for the task's project, the store
 decrypts them, and they travel to `packages/sandbox` as plain `{path, content}` — so the sandbox

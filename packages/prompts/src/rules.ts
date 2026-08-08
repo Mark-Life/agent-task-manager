@@ -102,7 +102,7 @@
  * individual names that carry a policy: those are quoted where their rule is.
  */
 
-import { HANDOFF_FILENAME } from "@workspace/domain";
+import { HANDOFF_FILENAME, PROPOSALS_DIRNAME } from "@workspace/domain";
 
 /**
  * What is true of every run, whatever it was started to do.
@@ -199,6 +199,40 @@ const scopeLines = (hasProject: boolean) =>
   [TASK_SCOPE, ...(hasProject ? [PROJECT_SCOPE] : []), SHARED_SCOPE].join("\n");
 
 /**
+ * The one door through the read-only mount, stated immediately after the bullet
+ * that says the door is shut.
+ *
+ * It names a mechanism, so it is here and not on disk: `collectRunProposals` in
+ * `@workspace/orchestrator` reads exactly this directory out of the task's
+ * folder and parses exactly this front matter, and the confirm route is what
+ * writes the body. Text that named another path would be a request nobody
+ * collects — the failure the handoff file had before it was named.
+ *
+ * Only the shared directory is offered, and that is not an omission. The
+ * project directory is a read-write mount, and the bullet above says so — a run
+ * that was invited to propose a file it can simply write would wait on a person
+ * for work it was already able to do. The one directory a proposal is for is the
+ * one the mount refuses.
+ *
+ * The last sentence is the load-bearing one. A run that believes its proposal
+ * took effect writes a comment saying the rules now say X, and the next person
+ * to read the file finds that they do not.
+ */
+const PROPOSAL_RULES = `Ask for a change to the shared directory, which you cannot write, by writing a file to \`${PROPOSALS_DIRNAME}/<name>.md\` in your task directory:
+
+\`\`\`
+---
+scope: workspace
+path: CLAUDE.md
+---
+The whole proposed contents of that file.
+\`\`\`
+
+\`path\` says where the file goes inside the shared directory and may not leave it. The body replaces that file whole, so write all of it and not a diff.
+
+Nothing changes until a person accepts it. Say in your comment that you proposed it, and never that the rules now say something.`;
+
+/**
  * For a run with nowhere else to put anything. Close to what every run used to
  * be told, and correct here for the reason it was wrong there: this run really
  * does have one place, so "worth keeping" really is the whole test.
@@ -228,7 +262,9 @@ ${ARTIFACT_DURABILITY}
 
 ${scopeLines(hasProject)}
 
-${hasRepo ? REPO_RUN_ARTIFACTS : SCRATCH_RUN_ARTIFACTS}`;
+${hasRepo ? REPO_RUN_ARTIFACTS : SCRATCH_RUN_ARTIFACTS}
+
+${PROPOSAL_RULES}`;
 
 /**
  * What the run's GitHub credential is, and what to do the moment GitHub refuses

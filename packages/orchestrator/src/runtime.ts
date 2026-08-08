@@ -120,6 +120,7 @@ import { ingestRunEvents, ingestTurnLedger } from "./ingest";
 import { LeaseStore, reconcileLostRuns } from "./lease";
 import { openRun, type RunClaim } from "./open-run";
 import { freeSlots, type PoolLane, type PoolStats, WorkerPool } from "./pool";
+import { collectRunProposals } from "./proposals";
 import { QuotaGate, quotaGateLayer } from "./quota";
 import { stampRetry } from "./retry";
 import { type RunClosed, runOpened } from "./run";
@@ -391,11 +392,20 @@ const make = Effect.gen(function* () {
       // of snapshots is what makes an overwrite recoverable: the project scope
       // is read-write to every run on the project, so two runs reaching for one
       // filename would otherwise leave the first one's bytes nowhere.
-      yield* history.record({
+      const before = yield* history.record({
         dataRoot: planned.claim.dataRoot,
         phase: "before",
         projectId: projectIdOf(context),
         runId: context.runId,
+      });
+
+      // Taken from the `before` snapshot rather than from the `after` one: this
+      // is the tree the run is about to be handed, which is what makes "which
+      // rules did that run have" a lookup on the row instead of a guess at what
+      // those folders hold today.
+      yield* observeRunProgress(progress, {
+        projectCommit: before.heads.project,
+        workspaceCommit: before.heads.workspace,
       });
 
       /** Reads the run's directory back, now that nothing is writing to it. */
@@ -434,6 +444,16 @@ const make = Effect.gen(function* () {
             context,
             dataRoot: planned.claim.dataRoot,
           }).pipe(bestEffort("artifact rescan failed", null));
+
+          // After the snapshot and the rescan, and best-effort like both: a
+          // proposal is a request waiting for a person, so losing one costs
+          // that request rather than the run that made it. Nothing here writes
+          // into a shared scope — the row lands pending, and a person is what
+          // moves it.
+          yield* collectRunProposals({
+            context,
+            dataRoot: planned.claim.dataRoot,
+          }).pipe(bestEffort("proposal collection failed", null));
 
           const ladder = yield* stampStalled({
             claim: planned.claim,

@@ -38,7 +38,7 @@
  */
 
 import { dirname, join, resolve, sep } from "node:path";
-import { type EnvFileWrite, envPathRefusalOf } from "@workspace/domain";
+import { type EnvFileWrite, relativePathRefusalOf } from "@workspace/domain";
 import { Effect } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { EnvFileWriteFailed } from "./errors";
@@ -96,7 +96,7 @@ const writeOne = Effect.fnUntraced(function* (input: {
   const fs = yield* FileSystem;
   const { file, root } = input;
 
-  const refusal = envPathRefusalOf(file.path);
+  const refusal = relativePathRefusalOf(file.path);
   if (refusal !== null) {
     return yield* Effect.fail(
       new EnvFileWriteFailed({

@@ -211,6 +211,9 @@ const REVIEW_TIMEOUT = process.argv.includes("--live")
 /** How long the child gets to claim its task and go quiet. */
 const LIVE_TIMEOUT = "60 seconds";
 
+/** How long the teardown gets to snapshot the shared scopes and rescan the folder. */
+const INDEX_TIMEOUT = "30 seconds";
+
 /** How often the database is asked whether the loop has got there yet. */
 const POLL = "250 millis";
 
@@ -369,6 +372,37 @@ const awaitLiveRun = (input: {
   });
 
 /**
+ * Reads the task's artifact index back until the rescan has landed, or gives up.
+ *
+ * The board does not wait for the index: a run reports its outcome and moves the
+ * task, and only then does teardown snapshot the shared scopes and rescan the
+ * folder. Reading once the moment the task turns up in `review` therefore asks
+ * the question before the answer exists, and a single read would report a
+ * healthy loop as a broken one. The claim being checked is that the rescan
+ * happens, not that it beats the status change.
+ */
+const awaitIndexed = (input: {
+  readonly taskId: TaskId;
+  readonly workspaceId: WorkspaceId;
+}) =>
+  Effect.gen(function* () {
+    const artifacts = yield* ArtifactRepo;
+    const read = artifacts.listByTask(input);
+    return yield* read.pipe(
+      Effect.filterOrFail(
+        (indexed) => indexed.length > 0,
+        () => "not yet"
+      ),
+      Effect.retry(Schedule.spaced(POLL)),
+      Effect.timeout(INDEX_TIMEOUT),
+      // Giving up reads once more rather than failing here, so an index that
+      // stayed empty is reported by the claim below — with what it holds — and
+      // not as a timeout that says nothing about the artifact.
+      Effect.catch(() => read)
+    );
+  });
+
+/**
  * The task this check dispatches: no project, no repo, so no clone and no
  * network.
  *
@@ -521,7 +555,6 @@ const happyPath = (workspaceId: WorkspaceId) =>
     const orchestrator = yield* Orchestrator;
     const ledger = yield* EventLog;
     const messages = yield* TaskMessageRepo;
-    const artifacts = yield* ArtifactRepo;
     const runEvents = yield* RunEventRepo;
 
     const task = yield* fileTask({
@@ -603,10 +636,7 @@ const happyPath = (workspaceId: WorkspaceId) =>
       step: "a run that posted no message had its last message appended as one",
     });
 
-    const indexed = yield* artifacts.listByTask({
-      taskId: task.id,
-      workspaceId,
-    });
+    const indexed = yield* awaitIndexed({ taskId: task.id, workspaceId });
     yield* check({
       detail: `the index holds ${indexed.length} artifacts`,
       // The stub writes one file this script named, so its path is what is

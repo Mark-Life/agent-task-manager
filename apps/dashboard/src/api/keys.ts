@@ -46,6 +46,10 @@ export const keys = {
   /** One project. */
   project: (projectId: ProjectId) => [PROJECTS, projectId] as const,
 
+  /** The files a project keeps, which outlive the tasks that wrote them. */
+  projectArtifacts: (projectId: ProjectId) =>
+    [PROJECTS, projectId, "artifacts"] as const,
+
   /** One of a project's environment files, with its text. Fetched only by the editor. */
   projectEnvFile: (projectId: ProjectId, fileId: ProjectEnvFileId) =>
     [PROJECTS, projectId, "env", fileId] as const,

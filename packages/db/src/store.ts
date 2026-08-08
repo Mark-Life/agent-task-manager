@@ -7,6 +7,7 @@ import { ChatNotificationRepo } from "./repositories/chat-notification";
 import { ChatThreadRepo } from "./repositories/chat-thread";
 import { ProjectRepo } from "./repositories/project";
 import { ProjectEnvFileRepo } from "./repositories/project-env";
+import { ProposalRepo } from "./repositories/proposal";
 import { RunRepo } from "./repositories/run";
 import { RunCommandRepo } from "./repositories/run-command";
 import { RunEventRepo } from "./repositories/run-event";
@@ -41,6 +42,7 @@ export const repositoriesLayer = Layer.mergeAll(
   TaskMessageRepo.layer,
   ProjectEnvFileRepo.layer,
   ProjectRepo.layer,
+  ProposalRepo.layer,
   RunCommandRepo.layer,
   RunEventRepo.layer,
   RunRepo.layer,

@@ -1,7 +1,7 @@
 # Gateway (`bun run gateway:start`, `bun run gateway:check`)
 
 **One typed contract, four consumers.** `packages/api` declares every operation — projects,
-tasks, task messages, sessions, runs, run commands, artifacts, conversations, provider usage — as an Effect `HttpApi` and holds no
+tasks, task messages, sessions, runs, run commands, artifacts, proposals, conversations, provider usage — as an Effect `HttpApi` and holds no
 handlers at all. `apps/gateway` implements it group by group over the repositories, and
 `openapi.json` falls out of the same value. That derivation is the whole reason this is HttpApi
 rather than RPC: an external agent reaching the board through [Executor](https://executor.sh)
@@ -24,7 +24,11 @@ agents send a signed, scoped, expiring bearer token; a person's script or agent 
 that person issued, in `x-api-key`. All three resolve to the same three facts — the actor every
 write is attributed to, the scope the credential is good for, and the one workspace it can see.
 Scopes are floors, not exact matches: `read` is every GET, `task-write` is ordinary work
-including erasing a task, `admin` is deleting a project. Who may erase a task is then a second
+including erasing a task, `admin` is deleting a project, reading a project's environment files,
+and confirming a proposal. That last one is the whole reason the proposals group exists at that
+scope: an agent's credential has a `task-write` ceiling and can never be minted higher, so
+"a person, and only a person, may change the directory a worker could not write" is arithmetic on
+a token rather than a check a handler remembers. Who may erase a task is then a second
 question asked of the actor rather than the scope — a run's token reaches every write on its own
 card and still may not delete it, which a scope alone cannot express.
 Tokens are signed rather than stored, so verifying one is arithmetic on
@@ -73,8 +77,16 @@ delivered to nobody.
 **Artifacts are metadata in Postgres and bytes on disk.** `list` is a query, `read` is a stream
 straight off local disk, and every path is resolved against the task's own folder and refused —
 twice, once before `realPath` and once after — unless it stays inside. Promotion copies into the
-project's folder or the global one — the global folder is a read-only mount to every worker, so
-nothing else reaches it.
+project's folder or the global one. The global folder is a read-only mount to every worker, and a
+run's own token reaches this route — `task-write` is what promoting into a project needs — so the
+global destination is refused to anything but a person: otherwise a run could write a file into
+its own folder and promote it into the directory every later run reads, and the proposal a person
+has to accept would be the long way round a door standing open. Two folders are listable, `GET /tasks/:taskId/artifacts` and
+`GET /projects/:projectId/artifacts`: the project's is mounted read-write into every run on it, so
+a research task leaves a document there for the next task, and without the second listing that
+document is reachable only by somebody who already knows its path. It answers a run's own writes
+and the copies a promotion made as one list, because they are one folder. The bytes are still a
+task-folder read — a project file is opened by a run through its mount, not through this API.
 
 **`atm.request`, one row per request, on every exit path.** Route *pattern* rather than path,
 method, status, `durationMs`, workspace, actor kind and id, token scope, bytes out, whether it

@@ -21,6 +21,7 @@ import type {
   ChatThread,
   Project,
   ProjectEnvFile,
+  Proposal,
   Run,
   RunCommand,
   RunEvent,
@@ -40,6 +41,7 @@ import type {
 import { conforms, type Decoded } from "./conformance";
 import type { decodeProject } from "./project";
 import type { decodeProjectEnvFile } from "./project-env";
+import type { decodeProposal } from "./proposal";
 import type { decodeRun } from "./run";
 import type { decodeRunCommand } from "./run-command";
 import type { decodeRunEvent } from "./run-event";
@@ -99,6 +101,12 @@ test("a decoded run command is a RunCommand, tag rejoined with its payload", () 
 
 test("a decoded artifact is an Artifact", () => {
   expect(conforms<Decoded<typeof decodeArtifact>, Artifact>(true)).toBe(true);
+});
+
+// The one row that carries a document rather than an index of one, so the
+// body and its digest are as much a part of the entity as the state is.
+test("a decoded proposal is a Proposal", () => {
+  expect(conforms<Decoded<typeof decodeProposal>, Proposal>(true)).toBe(true);
 });
 
 test("a decoded audit entry is an AuditEntry", () => {

@@ -124,10 +124,25 @@ export interface ScopeHistoryInput {
   readonly runId: RunId;
 }
 
-/** What one call actually wrote. */
+/**
+ * Where each shared scope stood once the snapshot was taken, or null for a scope
+ * that has no history to stand on — a folder nothing has created yet, a
+ * repository whose first commit has not been made, a git that refused.
+ *
+ * This is what turns "which rules did that run have" into a lookup. The `before`
+ * snapshot commits whatever a person changed since the last run, so the commit
+ * it leaves behind is exactly the tree the run is about to be handed — and a
+ * commit names bytes somebody can still `git show`, which a content hash of the
+ * same tree would not.
+ */
+export type ScopeCommits = Readonly<Record<SharedScope, string | null>>;
+
+/** What one call actually wrote, and where it left each scope. */
 export interface ScopeHistoryReport {
   /** The scopes that produced a commit — empty when nothing had changed. */
   readonly committed: readonly SharedScope[];
+  /** The commit each scope stands at now. Null where there is no history. */
+  readonly heads: ScopeCommits;
 }
 
 /** One scope's directory, and what it is called when something goes wrong. */
@@ -135,6 +150,20 @@ interface ScopeDirectory {
   readonly directory: string;
   readonly scope: SharedScope;
 }
+
+/** What one scope's snapshot produced: whether it committed, and where it left the branch. */
+interface SnapshotResult {
+  readonly committed: boolean;
+  readonly head: string | null;
+}
+
+/**
+ * What a scope reports when its snapshot did not happen at all — the folder is
+ * absent, git timed out, git failed. No commit, and no commit to point at
+ * either: a head read off a snapshot that was abandoned would name a tree
+ * nobody can vouch this run was handed.
+ */
+const NO_SNAPSHOT: SnapshotResult = { committed: false, head: null };
 
 /**
  * The directories one run shares with others. The workspace scope is in every
@@ -223,7 +252,28 @@ export const makeScopeHistory = Effect.fnUntraced(function* (
   ];
 
   /**
-   * One scope, snapshotted. Answers with whether a commit was made.
+   * The commit a scope stands at, or null where it stands at none.
+   *
+   * `run` rather than `mustRun`: a repository whose first commit has not been
+   * made answers `rev-parse` with a non-zero exit, and a folder that was seeded
+   * and never changed is a scope with no history rather than a snapshot that
+   * failed.
+   */
+  const headOf = Effect.fnUntraced(function* (scope: ScopeDirectory) {
+    const result = yield* git.run({
+      args: ["rev-parse", "HEAD"],
+      cwd: scope.directory,
+      executable: "git",
+      repo: scope.scope,
+    });
+    const head = result.stdout.trim();
+    return result.exitCode === 0 && head.length > 0 ? head : null;
+  });
+
+  /**
+   * One scope, snapshotted. Answers with whether a commit was made, and with the
+   * commit the scope stands at afterwards — which is the tree the run either was
+   * handed or has just left behind, depending on the phase.
    *
    * `git init` is asked for only when there is no object store, so the first run
    * on an install creates the repository and every run after it adds to the same
@@ -245,7 +295,7 @@ export const makeScopeHistory = Effect.fnUntraced(function* (
     // the end of the run initialises it.
     const present = yield* fs.exists(directory);
     if (!present) {
-      return false;
+      return NO_SNAPSHOT;
     }
 
     const initialised = yield* fs.exists(join(directory, GIT_DIR));
@@ -262,7 +312,9 @@ export const makeScopeHistory = Effect.fnUntraced(function* (
       args: ["diff", "--cached", "--quiet"],
     });
     if (staged.exitCode === 0) {
-      return false;
+      // Nothing to record, and still a tree to name: an unchanged scope is the
+      // one whose commit answers "which rules did that run have" most often.
+      return { committed: false, head: yield* headOf(input.scope) };
     }
     yield* git.mustRun({
       ...inScope,
@@ -277,7 +329,7 @@ export const makeScopeHistory = Effect.fnUntraced(function* (
         input.message,
       ],
     });
-    return true;
+    return { committed: true, head: yield* headOf(input.scope) };
   });
 
   const record = Effect.fn("ScopeHistory.record")(function* (
@@ -285,6 +337,13 @@ export const makeScopeHistory = Effect.fnUntraced(function* (
   ) {
     const message = historyMessageOf(input);
     const committed: SharedScope[] = [];
+    // A scope this run does not have stays null rather than absent, so a caller
+    // reading `heads.project` gets the same answer for a task with no project as
+    // for a project folder that has no history yet: nothing to point at.
+    const heads: Record<SharedScope, string | null> = {
+      project: null,
+      workspace: null,
+    };
     for (const scope of scopesOf(input)) {
       const done = yield* Semaphore.withPermit(lock)(
         snapshot({ message, scope })
@@ -298,7 +357,7 @@ export const makeScopeHistory = Effect.fnUntraced(function* (
             Effect.logWarning("scope history timed out", {
               path: scope.directory,
               scope: scope.scope,
-            }).pipe(Effect.as(false)),
+            }).pipe(Effect.as(NO_SNAPSHOT)),
         }),
         // Per scope rather than around the loop: a workspace folder somebody
         // made read-only must not cost the project folder its history, and each
@@ -308,18 +367,19 @@ export const makeScopeHistory = Effect.fnUntraced(function* (
             cause,
             path: scope.directory,
             scope: scope.scope,
-          }).pipe(Effect.as(false))
+          }).pipe(Effect.as(NO_SNAPSHOT))
         )
       );
-      if (done) {
+      if (done.committed) {
         committed.push(scope.scope);
       }
+      heads[scope.scope] = done.head;
     }
     yield* Effect.annotateCurrentSpan({
       committed: committed.length,
       phase: input.phase,
     });
-    return { committed } satisfies ScopeHistoryReport;
+    return { committed, heads } satisfies ScopeHistoryReport;
   });
 
   return ScopeHistory.of({ record } satisfies ScopeHistoryInterface);

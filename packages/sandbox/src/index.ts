@@ -167,6 +167,7 @@ export {
   type HistoryPhase,
   historyMessageOf,
   makeScopeHistory,
+  type ScopeCommits,
   ScopeHistory,
   type ScopeHistoryInput,
   type ScopeHistoryInterface,

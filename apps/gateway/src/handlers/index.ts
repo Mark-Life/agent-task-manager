@@ -18,6 +18,7 @@ import { artifactsHandlers } from "./artifacts";
 import { healthHandlers } from "./health";
 import { messagesHandlers } from "./messages";
 import { projectsHandlers } from "./projects";
+import { proposalsHandlers } from "./proposals";
 import { runCommandsHandlers } from "./run-commands";
 import { runsHandlers } from "./runs";
 import { sessionsHandlers } from "./sessions";
@@ -35,6 +36,7 @@ export const handlersLayer = Layer.mergeAll(
   runsHandlers,
   runCommandsHandlers,
   artifactsHandlers,
+  proposalsHandlers,
   threadsHandlers,
   usageHandlers
 );

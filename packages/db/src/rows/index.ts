@@ -78,6 +78,12 @@ export {
   ProjectEnvFileRow,
   ProjectEnvFileUpdate,
 } from "./project-env";
+export {
+  decodeProposal,
+  ProposalInsert,
+  ProposalRow,
+  ProposalUpdate,
+} from "./proposal";
 export { decodeRun, RunInsert, RunRow, RunUpdate } from "./run";
 export {
   decodeRunCommand,

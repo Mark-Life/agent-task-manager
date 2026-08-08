@@ -126,6 +126,53 @@ describe("the first snapshot of a shared scope", () => {
     const report = await record({ phase: "before", projectId: PROJECT });
 
     expect(report.committed).toEqual([]);
+    expect(report.heads.project).toBeNull();
+  });
+});
+
+/**
+ * The provenance half: a run's row names the commit each shared folder stood at
+ * when the run was handed it, so "which rules did that run have" is a `git show`
+ * rather than a guess at what those folders hold today. A commit is what makes
+ * that answer point at bytes somebody can still read.
+ */
+describe("the commit a scope stands at", () => {
+  test("is reported for every shared scope the run touches", async () => {
+    write(workspaceScope(), "AGENTS.md", "# House rules\n");
+    write(projectScope(), "research.md", "an answer\n");
+
+    const report = await record({ phase: "before", projectId: PROJECT });
+
+    expect(report.heads.workspace).toBe(
+      git(workspaceScope(), "rev-parse", "HEAD")
+    );
+    expect(report.heads.project).toBe(git(projectScope(), "rev-parse", "HEAD"));
+    // Two repositories, so two histories: one commit cannot stand for both.
+    expect(report.heads.workspace).not.toBe(report.heads.project);
+  });
+
+  /**
+   * The common case by far. Most runs change nothing in the shared folders, and
+   * a scope with no commit of its own still has rules the run was given.
+   */
+  test("is reported when the snapshot had nothing to commit", async () => {
+    write(workspaceScope(), "AGENTS.md", "# House rules\n");
+    const first = await record({ phase: "before" });
+
+    const second = await record({ phase: "after" });
+
+    expect(second.committed).toEqual([]);
+    expect(second.heads.workspace).toBe(first.heads.workspace);
+  });
+
+  /** A run that never had a project was given no project rules to name. */
+  test("is null for a scope this run does not have", async () => {
+    write(workspaceScope(), "AGENTS.md", "# House rules\n");
+
+    const report = await record({ phase: "before" });
+
+    expect(report.heads.project).toBeNull();
+    expect(report.heads.workspace).not.toBeNull();
   });
 });
 
@@ -240,5 +287,8 @@ describe("a scope that cannot be recorded", () => {
     const report = await record({ phase: "before" });
 
     expect(report.committed).toEqual([]);
+    // Nothing to point a run's row at either: a commit read off a snapshot that
+    // was abandoned would name a tree nobody can vouch the run was handed.
+    expect(report.heads.workspace).toBeNull();
   });
 });

@@ -16,6 +16,7 @@ import {
 import { chatMessage, chatNotification, chatThread } from "./chat";
 import { comment } from "./comment";
 import { project } from "./project";
+import { proposal } from "./proposal";
 import { run, runCommand, runEvent } from "./run";
 import { task } from "./task";
 
@@ -53,6 +54,7 @@ const tables = {
   chatThread,
   comment,
   project,
+  proposal,
   run,
   runCommand,
   runEvent,
@@ -179,9 +181,29 @@ const appRelations = defineRelationsPart(tables, (r) => ({
       from: r.project.id,
       to: r.artifact.projectId,
     }),
+    proposals: r.many.proposal({
+      from: r.project.id,
+      to: r.proposal.projectId,
+    }),
     tasks: r.many.task({ from: r.project.id, to: r.task.projectId }),
     workspace: r.one.organization({
       from: r.project.workspaceId,
+      optional: false,
+      to: r.organization.id,
+    }),
+  },
+  proposal: {
+    // Optional on both: a proposal into the workspace scope names no project,
+    // and the run that raised it can be erased while the request still waits.
+    project: r.one.project({ from: r.proposal.projectId, to: r.project.id }),
+    run: r.one.run({ from: r.proposal.runId, to: r.run.id }),
+    task: r.one.task({
+      from: r.proposal.taskId,
+      optional: false,
+      to: r.task.id,
+    }),
+    workspace: r.one.organization({
+      from: r.proposal.workspaceId,
       optional: false,
       to: r.organization.id,
     }),
@@ -191,6 +213,7 @@ const appRelations = defineRelationsPart(tables, (r) => ({
     commands: r.many.runCommand({ from: r.run.id, to: r.runCommand.runId }),
     comments: r.many.comment({ from: r.run.id, to: r.comment.runId }),
     events: r.many.runEvent({ from: r.run.id, to: r.runEvent.runId }),
+    proposals: r.many.proposal({ from: r.run.id, to: r.proposal.runId }),
     session: r.one.agentSession({
       from: r.run.agentSessionId,
       optional: false,
@@ -246,6 +269,7 @@ const appRelations = defineRelationsPart(tables, (r) => ({
       to: r.task.id,
     }),
     project: r.one.project({ from: r.task.projectId, to: r.project.id }),
+    proposals: r.many.proposal({ from: r.task.id, to: r.proposal.taskId }),
     runs: r.many.run({ from: r.task.id, to: r.run.taskId }),
     sessions: r.many.agentSession({
       from: r.task.id,
