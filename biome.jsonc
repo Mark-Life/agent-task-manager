@@ -56,6 +56,25 @@
           }
         }
       }
+    },
+    {
+      // Two lookup tables whose entire content is numbers somebody else chose:
+      // a vendor's published price per million tokens, and a model's context
+      // window. Naming each one would produce sixty constants named after the
+      // number they hold. Both files carry the date their figures were read and
+      // the page they were read from, which is the provenance the rule is
+      // reaching for.
+      "includes": [
+        "packages/domain/src/model-price.ts",
+        "packages/harness/src/model-window.ts"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noMagicNumbers": "off"
+          }
+        }
+      }
     }
   ],
   "linter": {

@@ -13,8 +13,9 @@
  * Exported: the provider registry and the vocabulary a caller needs to use it —
  * the normalized event union and its mapping onto the domain's run events, the
  * typed failures and their classification, the run layout, where each provider's
- * system-owned agent home lives, the transcript reader, the stop-hook rule, and
- * the turn event's environment contract.
+ * system-owned agent home lives, the transcript reader, the per-session usage
+ * summary derived from it, the stop-hook rule, and the turn event's environment
+ * contract.
  *
  * Not exported, deliberately, and each for its own reason.
  *
@@ -140,6 +141,12 @@ export {
   providerTable,
 } from "./registry";
 export {
+  GROWTH_POINT_LIMIT,
+  LARGEST_ENTRY_LIMIT,
+  type SummarizeInput,
+  summarizeSession,
+} from "./session-usage";
+export {
   ALLOW_TURN_END,
   COMMENT_MARKER_ENV_VAR,
   COMMENT_MARKER_FILE,
@@ -174,6 +181,7 @@ export {
   TranscriptNotFound,
   TranscriptRole,
   TranscriptUnreadable,
+  TranscriptUsage,
   transcriptChars,
 } from "./transcript";
 export {

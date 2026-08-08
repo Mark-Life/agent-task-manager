@@ -469,8 +469,15 @@ const transaction =
  * through the gateway — where the manager's actor carries the thread id, so the
  * conversation is already named on the row it caused. Auditing the conversation
  * as well would double every message with a row saying a message was written.
+ *
+ * `agent_session_usage` is here because it is derived rather than decided:
+ * every row is the ingest recomputing one session's figures from the transcript
+ * it just read, so the answer to "who changed this" is the same on every row
+ * that will ever exist, and an audit trail of it is noise in a log whose only
+ * value is that it is not noise.
  */
 export type UnauditedTable =
+  | "agent_session_usage"
   | "artifact"
   | "chat_message"
   | "chat_notification"

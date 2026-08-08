@@ -39,6 +39,11 @@ export {
   decodeAgentSession,
 } from "./agent-session";
 export {
+  AgentSessionUsageInsert,
+  AgentSessionUsageRow,
+  decodeAgentSessionUsage,
+} from "./agent-session-usage";
+export {
   ArtifactInsert,
   ArtifactRow,
   ArtifactUpdate,

@@ -19,7 +19,11 @@ import {
   OpenApi,
 } from "effect/unstable/httpapi";
 import { NotFound } from "../errors";
-import { AgentSession, Transcript } from "../schemas/session";
+import {
+  AgentSession,
+  AgentSessionUsage,
+  Transcript,
+} from "../schemas/session";
 import { ReadAccess } from "../security";
 
 /** A task's sessions, newest first — the order the switcher lists them in. */
@@ -62,9 +66,36 @@ const transcript = HttpApiEndpoint.get(
   .middleware(ReadAccess)
   .annotate(OpenApi.Summary, "Read a session's transcript");
 
-/** Sessions, and the transcripts behind them. */
+/**
+ * What each of a task's sessions spent: tokens by kind, how much of the model's
+ * context window the conversation is occupying, the curve it took to get there,
+ * which tools did the work, and an estimated cost.
+ *
+ * One request for the whole panel rather than one per session, because the
+ * figure a reader wants at a glance — how full is this window — belongs on
+ * every row of the list, and a per-row request would put the board's session
+ * list back to N calls to draw N bars.
+ *
+ * A session with no summary is absent from the array rather than present and
+ * zeroed. Nothing has been computed for it: either no run has finished on it
+ * yet, or the run that did died before the provider answered once. Both are
+ * "nothing recorded", which is not "spent nothing".
+ *
+ * These figures are recomputed and stored at the end of each run, so a session
+ * with a run in flight answers with what its last completed run left, and
+ * `computedAt` is what says so.
+ */
+const usage = HttpApiEndpoint.get("usage", "/tasks/:taskId/sessions/usage", {
+  error: NotFound,
+  params: { taskId: TaskId },
+  success: Schema.Array(AgentSessionUsage),
+})
+  .middleware(ReadAccess)
+  .annotate(OpenApi.Summary, "Read what a task's sessions spent");
+
+/** Sessions, the transcripts behind them, and what they spent. */
 export class SessionsGroup extends HttpApiGroup.make("sessions")
-  .add(list, get, transcript)
+  .add(list, get, transcript, usage)
   .annotate(
     OpenApi.Description,
     "Agent sessions: one conversation each, and the transcript it left."

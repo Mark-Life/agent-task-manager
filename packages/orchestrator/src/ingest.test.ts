@@ -28,6 +28,7 @@ import { join } from "node:path";
 import { BunFileSystem } from "@effect/platform-bun";
 import {
   AgentSessionRepo,
+  AgentSessionUsageRepo,
   ArtifactRepo,
   CurrentActor,
   RunEventRepo,
@@ -44,7 +45,7 @@ import type {
   Task,
   WorkspaceId,
 } from "@workspace/domain";
-import { Actor, CostUsd, UserId } from "@workspace/domain";
+import { Actor, CostUsd, PRICE_TABLE_VERSION, UserId } from "@workspace/domain";
 import type { AgentEvent } from "@workspace/harness";
 import {
   AgentEventRecord,
@@ -184,6 +185,19 @@ const TRANSCRIPT_LINES = [
       ],
       model: "claude-opus-5",
       role: "assistant",
+      // Every real assistant line carries one of these, and it is where the
+      // session's economics come from.
+      usage: {
+        cache_creation: {
+          ephemeral_1h_input_tokens: 400,
+          ephemeral_5m_input_tokens: 0,
+        },
+        cache_creation_input_tokens: 400,
+        cache_read_input_tokens: 1200,
+        input_tokens: 100,
+        output_tokens: 50,
+        speed: "standard",
+      },
     },
     sessionId: PROVIDER_SESSION,
     timestamp: "2026-08-01T10:00:04.000Z",
@@ -556,6 +570,51 @@ test("a run with no event stream gets its timeline back from the transcript", as
   // The provider's own id lands on the session row, which is what a resume is
   // pointed at — the one durable place a transcript's identity fits today.
   expect(session.providerSessionId).toBe(PROVIDER_SESSION);
+});
+
+test("the ingest leaves what the session spent, and it outlives the file", async () => {
+  const stored = await runtime.runPromise(
+    Effect.gen(function* () {
+      yield* ingestTranscript({
+        agentHomeDir,
+        context: restored,
+        providerSessionId: PROVIDER_SESSION,
+      });
+      const usage = yield* AgentSessionUsageRepo;
+      return yield* usage.byId({
+        sessionId: restored.session.session.id,
+        workspaceId,
+      });
+    })
+  );
+
+  // 100 fresh input + 1,200 read from cache + 400 written to it is what the
+  // one request in the fixture put in front of the model.
+  expect(stored?.usage.peakContextTokens).toBe(1700);
+  expect(stored?.usage.requests).toBe(1);
+  expect(stored?.usage.totals.outputTokens).toBe(50);
+  expect(stored?.usage.toolCalls).toEqual([
+    { calls: 1, errors: 1, name: "Bash" },
+  ]);
+  // The window is not in the file: Claude records none, so it is looked up and
+  // marked as looked up.
+  expect(stored?.usage.contextWindowSource).toBe("inferred");
+  expect(stored?.usage.cost?.priceTableVersion).toBe(PRICE_TABLE_VERSION);
+
+  // The row is the record from here on. Removing every trace of the transcript
+  // leaves the figures standing, which is the whole reason they are stored
+  // rather than parsed when somebody opens the panel.
+  rmSync(durableTranscriptPathOf(restored.layout), { force: true });
+  const survived = await runtime.runPromise(
+    Effect.gen(function* () {
+      const usage = yield* AgentSessionUsageRepo;
+      return yield* usage.byId({
+        sessionId: restored.session.session.id,
+        workspaceId,
+      });
+    })
+  );
+  expect(survived?.usage.peakContextTokens).toBe(1700);
 });
 
 test("the restored timeline is not written twice", async () => {

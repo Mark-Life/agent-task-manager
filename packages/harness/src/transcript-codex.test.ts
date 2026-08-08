@@ -196,6 +196,7 @@ describe("parseCodexTranscript", () => {
     expect(parseCodexTranscript(["", "not json", "[]"])).toEqual({
       entries: [],
       providerSessionId: null,
+      usage: [],
     });
   });
 });

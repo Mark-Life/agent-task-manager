@@ -2184,6 +2184,97 @@
         "summary": "Read a session's transcript"
       }
     },
+    "/tasks/{taskId}/sessions/usage": {
+      "get": {
+        "tags": [
+          "sessions"
+        ],
+        "operationId": "sessions.usage",
+        "parameters": [
+          {
+            "name": "taskId",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "userApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AgentSessionUsage"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequestsJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Read what a task's sessions spent"
+      }
+    },
     "/tasks/{taskId}/runs": {
       "get": {
         "tags": [
@@ -5924,6 +6015,193 @@
         ],
         "additionalProperties": false
       },
+      "TranscriptUsage": {
+        "type": "object",
+        "properties": {
+          "cacheRead": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cacheWrite": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cacheWrite1h": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cacheWrite5m": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "context": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "contextWindow": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "input": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "line": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "occurredAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "output": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reasoningOutput": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "speed": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "cacheRead",
+          "cacheWrite",
+          "cacheWrite1h",
+          "cacheWrite5m",
+          "context",
+          "contextWindow",
+          "input",
+          "line",
+          "model",
+          "occurredAt",
+          "output",
+          "reasoningOutput",
+          "speed"
+        ],
+        "additionalProperties": false
+      },
       "Transcript": {
         "type": "object",
         "properties": {
@@ -5942,11 +6220,487 @@
                 "type": "null"
               }
             ]
+          },
+          "usage": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TranscriptUsage"
+            }
           }
         },
         "required": [
           "entries",
-          "providerSessionId"
+          "providerSessionId",
+          "usage"
+        ],
+        "additionalProperties": false
+      },
+      "SessionCost": {
+        "type": "object",
+        "properties": {
+          "priceTableEffective": {
+            "type": "string"
+          },
+          "priceTableVersion": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "pricedRequests": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "totalUsd": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^-?\\d+(\\.\\d+)?$"
+              }
+            ]
+          },
+          "unpricedModels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "unpricedRequests": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          }
+        },
+        "required": [
+          "priceTableEffective",
+          "priceTableVersion",
+          "pricedRequests",
+          "totalUsd",
+          "unpricedModels",
+          "unpricedRequests"
+        ],
+        "additionalProperties": false
+      },
+      "UsagePoint": {
+        "type": "object",
+        "properties": {
+          "cacheReadTokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "contextTokens": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "inputTokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "occurredAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outputTokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "cacheReadTokens",
+          "contextTokens",
+          "inputTokens",
+          "occurredAt",
+          "outputTokens"
+        ],
+        "additionalProperties": false
+      },
+      "LargestEntry": {
+        "type": "object",
+        "properties": {
+          "chars": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "line": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "toolName": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "chars",
+          "line",
+          "role",
+          "toolName"
+        ],
+        "additionalProperties": false
+      },
+      "ToolCallCount": {
+        "type": "object",
+        "properties": {
+          "calls": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "errors": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "calls",
+          "errors",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "SessionTokenTotals": {
+        "type": "object",
+        "properties": {
+          "cacheReadTokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cacheWriteTokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "inputTokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outputTokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reasoningOutputTokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "cacheReadTokens",
+          "cacheWriteTokens",
+          "inputTokens",
+          "outputTokens",
+          "reasoningOutputTokens"
+        ],
+        "additionalProperties": false
+      },
+      "SessionUsage": {
+        "type": "object",
+        "properties": {
+          "computedAt": {
+            "type": "string"
+          },
+          "contextWindow": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "contextWindowSource": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "inferred",
+                  "reported"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionCost"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "entries": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "finalContextTokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "growth": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsagePoint"
+            }
+          },
+          "growthSampled": {
+            "type": "boolean"
+          },
+          "largestEntries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LargestEntry"
+            }
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "peakContextTokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "allOf": [
+                  {
+                    "minimum": 0
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "requests": {
+            "type": "integer",
+            "allOf": [
+              {
+                "minimum": 0
+              }
+            ]
+          },
+          "toolCalls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolCallCount"
+            }
+          },
+          "totals": {
+            "$ref": "#/components/schemas/SessionTokenTotals"
+          }
+        },
+        "required": [
+          "computedAt",
+          "contextWindow",
+          "contextWindowSource",
+          "cost",
+          "entries",
+          "finalContextTokens",
+          "growth",
+          "growthSampled",
+          "largestEntries",
+          "models",
+          "peakContextTokens",
+          "provider",
+          "requests",
+          "toolCalls",
+          "totals"
+        ],
+        "additionalProperties": false
+      },
+      "AgentSessionUsage": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "usage": {
+            "$ref": "#/components/schemas/SessionUsage"
+          },
+          "workspaceId": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          }
+        },
+        "required": [
+          "sessionId",
+          "usage",
+          "workspaceId"
         ],
         "additionalProperties": false
       },
@@ -7773,6 +8527,9 @@
               "secondary"
             ]
           },
+          "label": {
+            "type": "string"
+          },
           "remainingPercent": {
             "anyOf": [
               {
@@ -7797,9 +8554,6 @@
                 "type": "null"
               }
             ]
-          },
-          "label": {
-            "type": "string"
           },
           "usedPercent": {
             "anyOf": [
@@ -7829,9 +8583,9 @@
         },
         "required": [
           "kind",
+          "label",
           "remainingPercent",
           "resetsAt",
-          "label",
           "usedPercent",
           "windowSeconds"
         ],

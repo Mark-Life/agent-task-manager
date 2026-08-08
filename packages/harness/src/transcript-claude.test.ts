@@ -149,6 +149,7 @@ describe("parseClaudeTranscript", () => {
     expect(parseClaudeTranscript(["", "not json", "[]"])).toEqual({
       entries: [],
       providerSessionId: null,
+      usage: [],
     });
   });
 });

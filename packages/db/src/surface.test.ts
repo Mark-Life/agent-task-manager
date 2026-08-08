@@ -21,6 +21,7 @@ import * as schema from "./schema";
 const SURFACE = [
   "AgentSessionEnded",
   "AgentSessionRepo",
+  "AgentSessionUsageRepo",
   "ArtifactAlreadyPromoted",
   "ArtifactRepo",
   "AuditLogRepo",

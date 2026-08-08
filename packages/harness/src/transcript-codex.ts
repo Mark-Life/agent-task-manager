@@ -23,7 +23,12 @@
  * rather than guessed at, and a line truncated by a killed process is dropped.
  */
 
-import type { Transcript, TranscriptEntry, TranscriptRole } from "./transcript";
+import type {
+  Transcript,
+  TranscriptEntry,
+  TranscriptRole,
+  TranscriptUsage,
+} from "./transcript";
 
 /** A line or a payload, once it is known to be an object. Every field is read defensively. */
 type Line = Readonly<Record<string, unknown>>;
@@ -218,8 +223,8 @@ const draftOfItem = (payload: Line): EntryDraft | null => {
 
 /**
  * One `event_msg` payload, as a draft entry. Only the three that carry
- * conversation: token counts and turn markers are economics, and economics
- * reach the database as run events rather than as transcript lines.
+ * conversation: a `token_count` is economics rather than something said, and it
+ * is read separately into the usage stream.
  */
 const draftOfEvent = (payload: Line): EntryDraft | null => {
   switch (stringOf(payload.type)) {
@@ -267,6 +272,108 @@ const sessionIdOf = (records: readonly (Line | null)[]) =>
       : (stringOf(payload.session_id) ?? stringOf(payload.id));
   }, null);
 
+/** A token count, refusing anything that is not one. See the Claude reader's twin. */
+const countOf = (value: unknown) =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : null;
+
+/**
+ * One `token_count` event's reading, or null where it carries none.
+ *
+ * Codex emits one of these after every model response, and it is the only place
+ * in the rollout where tokens are written down: `last_token_usage` is the
+ * request that just finished and `total_token_usage` is the running total.
+ * Reading the last of each is what makes the series per-request rather than a
+ * cumulative curve counted twice. A `token_count` with a null `info` is the
+ * turn's opening event and reports nothing.
+ *
+ * Codex's `input_tokens` is the whole prompt, cached part included, which is
+ * the opposite of Claude's convention — so the fresh half is worked out here
+ * and `context` is taken as reported. Getting that backwards is a session whose
+ * input total counts its cache twice.
+ */
+const usageOfEvent = (
+  payload: Line,
+  line: number,
+  occurredAt: string | null,
+  model: string | null
+): TranscriptUsage | null => {
+  if (stringOf(payload.type) !== "token_count") {
+    return null;
+  }
+  const info = asRecord(payload.info);
+  const last = info === null ? null : asRecord(info.last_token_usage);
+  if (last === null) {
+    return null;
+  }
+  const context = countOf(last.input_tokens);
+  if (context === null || context === 0) {
+    return null;
+  }
+  const cacheRead = countOf(last.cached_input_tokens);
+  return {
+    cacheRead,
+    // Reported since 0.146, and structurally zero: the Responses API has no
+    // cache-creation figure for Codex to fill it from. Carried as written
+    // rather than nulled, because what the provider says is the record.
+    cacheWrite: countOf(last.cache_write_input_tokens),
+    // No cache lifetimes to split by. Both null, so the summary prices the
+    // whole write at the input rate rather than inventing a discount.
+    cacheWrite1h: null,
+    cacheWrite5m: null,
+    context,
+    // Authoritative, unlike Claude's, and preferred over any lookup of ours.
+    contextWindow: info === null ? null : countOf(info.model_context_window),
+    input: Math.max(0, context - (cacheRead ?? 0)),
+    line,
+    model,
+    occurredAt,
+    output: countOf(last.output_tokens),
+    reasoningOutput: countOf(last.reasoning_output_tokens),
+    // Codex names no speed tier.
+    speed: null,
+  };
+};
+
+/**
+ * The readings the rollout holds, each stamped with the model in force when it
+ * was written.
+ *
+ * The model is on neither the `token_count` event nor the session header: it is
+ * declared by the `turn_context` line that opens each turn, and a session that
+ * switched model mid-way has several. So the walk carries the last one seen
+ * forward, which is what the request it stamps actually ran on.
+ */
+const usageStream = (
+  records: readonly (Line | null)[]
+): readonly TranscriptUsage[] => {
+  let model: string | null = null;
+  return records.flatMap((record, line) => {
+    if (record === null) {
+      return [];
+    }
+    const payload = asRecord(record.payload);
+    if (payload === null) {
+      return [];
+    }
+    if (stringOf(record.type) === "turn_context") {
+      model = stringOf(payload.model) ?? model;
+      return [];
+    }
+    if (stringOf(record.type) !== "event_msg") {
+      return [];
+    }
+    const usage = usageOfEvent(
+      payload,
+      line,
+      stringOf(record.timestamp),
+      model
+    );
+    return usage === null ? [] : [usage];
+  });
+};
+
 /**
  * Parses a Codex rollout. Pure over the file's lines, so the vendor half of the
  * reader is testable against a fixture with no provider and no disk.
@@ -283,5 +390,6 @@ export const parseCodexTranscript = (lines: readonly string[]): Transcript => {
   return {
     entries: items.length > 0 ? items : events,
     providerSessionId: sessionIdOf(records),
+    usage: usageStream(records),
   };
 };
