@@ -9,7 +9,7 @@
  *
  * Four blocks, and the split is the whole of what a role is allowed to change.
  * {@link SHARED_RULES} is true of anything this system runs in a container.
- * {@link ARTIFACT_RULES} is true of a run that has an artifacts folder, which
+ * {@link artifactRulesOf} is true of a run that has an artifacts folder, which
  * is every worker and no manager. {@link WORKER_RULES} and
  * {@link MANAGER_RULES} are the per-role text, and they are the only per-role
  * text there is.
@@ -96,10 +96,69 @@ Lifecycle facts are not part of that. That a run started, that a card moved, tha
  * turn: that run's only writable directory is its scratch directory, nothing is
  * promoted out of it, and telling it that anything worth keeping goes there is
  * telling it to file its work somewhere nobody will ever read.
+ *
+ * **{@link REPO_RUN_ARTIFACTS} is the carve-out, and it was written because
+ * {@link ARTIFACT_DURABILITY} on its own is obeyed too well.** A spike run
+ * wrote a seventeen-kilobyte findings document, committed it to the repository,
+ * opened a pull request with it — and then copied the same bytes into its
+ * artifacts folder under a different filename, because the rule it had been
+ * given said anything worth keeping goes there and the document was worth
+ * keeping. Nothing in this system copies files into that folder; `scanArtifacts`
+ * in `@workspace/sandbox` only indexes what the agent itself wrote, so the
+ * duplicate was a choice the prompt asked for.
+ *
+ * Two copies of one document is not a harmless belt-and-braces. They go out of
+ * step the moment a reviewer's comment changes one of them, and the artifacts
+ * copy is the one nothing will change — so the folder that exists to be evidence
+ * fills up with stale evidence, and a reader who finds it has no way to tell
+ * which of the two is current.
+ *
+ * No detector for this: an artifact whose bytes match a committed file is
+ * cheaply findable — the scan already walks the tree and `copyArtifact` already
+ * hashes — but flagging it would need the run's checkout to compare against,
+ * which the scan does not have and should not grow, and the honest answer to a
+ * flag is "delete one of these", which is a decision the run that wrote them
+ * had already made wrongly. The prompt is where this is fixed, and that rule's
+ * own last paragraph is why a detector would have to be wrong sometimes anyway:
+ * a committed file with no pull request behind it is a legitimate reason to
+ * hold a second copy.
+ *
+ * Which is also why this is a function of the run rather than one constant. The
+ * carve-out is entirely about a place other than the folder to put a document,
+ * and a run with no repository has no such place — telling it what belongs in a
+ * pull request sends it looking for one, the same reason `CREDENTIAL_RULES` is
+ * withheld from it.
  */
-export const ARTIFACT_RULES = `## What survives this run
 
-You have one writable artifacts directory and two read-only ones. Anything worth keeping goes in the writable one; everything outside it is scratch and dies with the container.`;
+/** Whether the run has a repository, which is the whole of what changes below. */
+export interface ArtifactRulesInput {
+  readonly hasRepo: boolean;
+}
+
+/** True of every run with a folder, whatever else it was given. */
+const ARTIFACT_DURABILITY =
+  "You have one writable artifacts directory and two read-only ones. Everything outside them is scratch and dies with the container.";
+
+/**
+ * For a run with nowhere else to put anything. Close to what every run used to
+ * be told, and correct here for the reason it was wrong there: this run really
+ * does have one place, so "worth keeping" really is the whole test.
+ */
+const SCRATCH_RUN_ARTIFACTS =
+  "Anything worth keeping goes in the writable one. This run has no repository, so there is nowhere else for it to go.";
+
+/** For a run that can commit, which is a run that can duplicate its own work. */
+const REPO_RUN_ARTIFACTS = `The writable one is for output that has nowhere else to live: work you could not commit, notes meant for the next session or for a person rather than for review. What you commit is not that. When you open a pull request, the pull request is where your work lives — commit the document there and do not write a second copy into the artifacts directory. Two copies of one file drift apart as soon as review touches either, and a reader who finds both cannot tell which one is current.
+
+If the work is committed but no pull request stands behind it — a branch that may never merge, a run that stopped before opening one — then the artifacts directory is the right place for it after all. Leave it there and name the branch it is also on.`;
+
+/** Where this run's output belongs, and what happens to everything else. */
+export const artifactRulesOf = ({ hasRepo }: ArtifactRulesInput) =>
+  `## What survives this run
+
+${ARTIFACT_DURABILITY}
+
+${hasRepo ? REPO_RUN_ARTIFACTS : SCRATCH_RUN_ARTIFACTS}`;
 
 /**
  * What the run's GitHub credential is, and what to do the moment GitHub refuses
@@ -144,7 +203,29 @@ If GitHub refuses one of those, stop and report it. Say which operation was refu
  * `NO_COMMENT_REFUSAL` in `@workspace/harness` on purpose: one rule stated
  * twice, not two rules that nearly agree.
  *
- * The second paragraph exists because a worker that loses the board mid-run
+ * The second paragraph is about length, and it is here because the first
+ * paragraph on its own asks for three things and sets no size. What that
+ * produced was a comment that mirrored an entire committed document — headings,
+ * tables and all, four and a half thousand characters restating a file the same
+ * run had already linked. A person reading the card has to get through all of it
+ * to learn the one thing the document does not say, which in that run was a bug
+ * found and left unfixed.
+ *
+ * So the rule names the job rather than the topics: the shortest thing that lets
+ * a reader decide what to do next. What survives that test is the outcome, the
+ * link, and whatever they would be wrong not to know *before* they follow the
+ * link — a caveat is worth more here than a summary, because the summary is
+ * already written where they are going and the caveat is what tells them whether
+ * to go. The size is stated as a target and not a cap on purpose: a run with
+ * nothing to link genuinely has to carry its whole result in the comment, and a
+ * cap would make that run's honest answer a violation.
+ *
+ * Nothing here names a pull request, though that is what most runs will be
+ * linking. This block reaches a run with no repository too — the rule is about
+ * what a comment is for, and a run whose result lives in its artifacts folder
+ * owes the reader exactly the same sentence, link and caveat.
+ *
+ * The third paragraph exists because a worker that loses the board mid-run
  * otherwise invents its own answer, and the two it reaches for are both bad: it
  * retries the dead tool until its deadline, or it writes the file under a name
  * of its choosing and tells a person to go and copy it. Naming the file is what
@@ -153,6 +234,8 @@ If GitHub refuses one of those, stop and report it. Say which operation was refu
  * directory, and `worker.test.ts` asserts the two still agree.
  */
 export const WORKER_RULES = `Before you end your turn, post a comment on this task: what you did, what changed, and anything the next session or a human reviewer needs to know. A turn that ends without one is sent back to write it.
+
+Write the shortest thing that lets a person decide what to do next: the outcome or the recommendation in a sentence, a link to where the detail lives, and anything they would be wrong not to know before they open it — a bug you found and did not fix, something you could not verify, a decision still open. Whatever the thing you linked already says, do not say again here. A few short paragraphs, plainly written, with no headings and no tables. That is a target and not a cap: a run with nothing to link has to carry its whole result in the comment, and should.
 
 If the board tools stop answering — a credential that no longer works, a gateway you cannot reach — write that same comment to \`${HANDOFF_FILENAME}\` in your artifacts directory and end your turn. It is read off the disk and posted for you. Do not spend the rest of your turn retrying the tool, and do not describe the file as something a person has to go and fetch.`;
 

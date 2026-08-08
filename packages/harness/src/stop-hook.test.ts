@@ -130,6 +130,13 @@ describe("decideStop", () => {
       "read off the disk and posted for you"
     );
   });
+
+  test("asks for a short comment rather than three topics at length", () => {
+    // This arrives as the prompt the comment is written from, so a refusal that
+    // named what to cover and nothing about size would be the last word on it.
+    expect(NO_COMMENT_REFUSAL).toContain("Keep it short");
+    expect(NO_COMMENT_REFUSAL).toContain("rather than restating it");
+  });
 });
 
 describe("stopHookResponseOf", () => {

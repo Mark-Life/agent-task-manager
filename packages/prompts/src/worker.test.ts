@@ -24,7 +24,7 @@ import {
 } from "@workspace/domain";
 import { DateTime } from "effect";
 import type { PromptMode, RunPlacement } from "./render";
-import { ARTIFACT_RULES, CREDENTIAL_RULES, SHARED_RULES } from "./rules";
+import { artifactRulesOf, CREDENTIAL_RULES, SHARED_RULES } from "./rules";
 import { buildWorkerPrompt, commentLabelOf } from "./worker";
 
 const at = DateTime.makeUnsafe("2026-08-02T10:00:00.000Z");
@@ -147,13 +147,78 @@ describe("a fresh session's prompt", () => {
     expect(text).toContain(
       "- Read-only reference material: `/artifacts/project` (this project) and `/artifacts/global`."
     );
-    expect(text).toContain(ARTIFACT_RULES);
+    expect(text).toContain(artifactRulesOf({ hasRepo: true }));
     expect(text).toContain(SHARED_RULES);
+  });
+
+  /**
+   * The rule that replaced a duplicate. A spike run committed its findings
+   * document, opened a pull request with it, and copied the same bytes into its
+   * artifacts folder — because it had been told anything worth keeping goes
+   * there, and it was right about the document being worth keeping. So the
+   * folder has to be described by what it is *for* rather than by how valuable
+   * its contents are.
+   */
+  test("sends a document that belongs in a pull request to the pull request only", () => {
+    expect(text).toContain("output that has nowhere else to live");
+    expect(text).toContain(
+      "do not write a second copy into the artifacts directory"
+    );
+    // And the honest exception: committed work with no pull request behind it
+    // has nothing else holding it, so the artifacts copy is the right hedge.
+    expect(text).toContain("no pull request stands behind it");
+    expect(text).toContain("name the branch it is also on");
+    // The sentence the duplicate was obeying is gone from this run's copy, not
+    // merely qualified.
+    expect(text).not.toContain(
+      "Anything worth keeping goes in the writable one"
+    );
+  });
+
+  test("keeps the pull request out of it for a run that has no repository", () => {
+    // The carve-out is about a better home for a document. A run with no
+    // repository has no such home, so it gets the plain rule and is not sent
+    // looking for a pull request it cannot open.
+    const scratch = textOf({ repoUrl: null });
+    expect(scratch).toContain(artifactRulesOf({ hasRepo: false }));
+    expect(scratch).toContain(
+      "Anything worth keeping goes in the writable one"
+    );
+    expect(scratch).not.toContain(
+      "do not write a second copy into the artifacts directory"
+    );
   });
 
   test("teaches the rule the stop hook enforces", () => {
     expect(text).toContain("post a comment on this task");
     expect(text).toContain("sent back to write it");
+  });
+
+  /**
+   * What came out of the same spike was a comment that mirrored the committed
+   * document — headings, tables, four and a half thousand characters of a file
+   * it had already linked. The one thing the document did not say, a bug found
+   * and left unfixed, was buried in the middle of it.
+   */
+  test("asks for a closing comment that points at the write-up instead of repeating it", () => {
+    expect(text).toContain(
+      "the shortest thing that lets a person decide what to do next"
+    );
+    expect(text).toContain("a link to where the detail lives");
+    expect(text).toContain(
+      "Whatever the thing you linked already says, do not say again here"
+    );
+    // The caveat is the part a summary would lose, and the part that decides
+    // whether the reader follows the link at all.
+    expect(text).toContain("a bug you found and did not fix");
+    expect(text).toContain("no headings and no tables");
+  });
+
+  test("states the length as a target, because a run with no write-up carries more", () => {
+    expect(text).toContain("A few short paragraphs");
+    expect(text).toContain(
+      "a target and not a cap: a run with nothing to link has to carry its whole result in the comment"
+    );
   });
 
   test("tells a worker that loses the board where to leave its comment instead", () => {
@@ -229,6 +294,11 @@ describe("a resumed session's prompt", () => {
 
   test("still states the rule the stop hook enforces per turn", () => {
     expect(text).toContain("post a comment on this task");
+    // Including how long it should be. Every turn of a resumed session ends
+    // with a comment too, and this is the only place that rule is stated.
+    expect(text).toContain(
+      "the shortest thing that lets a person decide what to do next"
+    );
   });
 
   test("says so plainly when a rerun added nothing", () => {

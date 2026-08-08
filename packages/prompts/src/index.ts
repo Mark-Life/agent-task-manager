@@ -39,8 +39,9 @@ export {
   section,
   speech,
 } from "./render";
+export type { ArtifactRulesInput } from "./rules";
 export {
-  ARTIFACT_RULES,
+  artifactRulesOf,
   CREDENTIAL_RULES,
   MANAGER_RULES,
   SHARED_RULES,

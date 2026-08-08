@@ -24,7 +24,7 @@ import {
 } from "./manager";
 import type { PromptMode, RunPlacement } from "./render";
 import {
-  ARTIFACT_RULES,
+  artifactRulesOf,
   MANAGER_RULES,
   SHARED_RULES,
   WORKER_RULES,
@@ -126,7 +126,8 @@ describe("a first turn's prompt", () => {
    */
   test("is told nothing about an artifacts folder it does not have", () => {
     const text = textOf({ messages: [message({ body: "hi", role: "user" })] });
-    expect(text).not.toContain(ARTIFACT_RULES);
+    expect(text).not.toContain(artifactRulesOf({ hasRepo: true }));
+    expect(text).not.toContain(artifactRulesOf({ hasRepo: false }));
     expect(text).not.toContain("What survives this run");
   });
 

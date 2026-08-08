@@ -72,7 +72,7 @@ export interface PlacementSectionInput {
  * Where the run works, as a list of paths and nothing else.
  *
  * The policy about those paths — which one is writable, what happens to
- * everything outside them — is in `ARTIFACT_RULES`, stated once. This
+ * everything outside them — is in `artifactRulesOf`, stated once. This
  * section only says which directory is which, because the paths change per run
  * and the policy does not.
  */
