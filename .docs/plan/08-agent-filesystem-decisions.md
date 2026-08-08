@@ -127,7 +127,11 @@ Existing artifacts on the running install need nothing done to them.
 One consequence to know about: docker creates a nested bind's destination directory through the
 parent bind, so each scope directory acquires one empty child naming the level below it — a `worker/`
 inside the global folder, a `<task>/` inside a project folder. They hold nothing. `scanArtifacts`
-drops directories, so they produce no rows, and the file browser hides an empty mount point.
+drops directories, so they produce no rows.
+
+**Built differently:** the file browser does not hide them. The API cannot tell a mount point from an
+empty folder a person made, and inventing a name blacklist would hide a real `worker/` somebody wrote.
+They draw as empty folders and the pane says so.
 
 Because the workspace scope is read-only (D3), those mount points cannot be created by the daemon at
 start time. `materialize` pre-creates them from the mount list itself.
@@ -161,8 +165,22 @@ cannot.
 run and records them pending and inert. This is the shape the handoff file already uses, and it falls
 out of D3 rather than being invented beside it.
 
+## D12 — revisions are git, not a table
+
+The brief asks for append-only revisions with an author and the run that raised them. The shared
+scopes are git repositories snapshotted before and after every run, so that already exists: the
+author is the committer, the run id is the message, and `git log` is the query. A second revision
+store would be a worse copy of it.
+
+What went on the run row is the commit each shared scope was at when the run started. That points at
+bytes somebody can still read, which a content hash would not.
+
 ## Still open
 
 - Vault sync, and secrets in the vault. Untouched by this build, by the card's own scope.
 - Where the vault sits relative to `.atm-root`. It is a hole in the tree the later card fills.
 - Composing a per-run skills directory so Claude sees scope-level skills (D6).
+- The skill routes have no dashboard surface yet — they ship reachable by an HTTP client only.
+- The editor's size warning measures one file. A run walks four, against one combined budget, so two
+  files at 40% each read "spare" while together they crowd out the task's rules.
+- A person's commit is authored as their user id rather than a name and mailbox.
