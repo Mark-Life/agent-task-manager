@@ -1,9 +1,9 @@
 /**
- * The comment a run could not post, read back off the disk it could reach.
+ * The message a run could not post, read back off the disk it could reach.
  *
  * **The fallback of last resort, and the only one that survives losing the
  * board entirely.** A run has three ways to get its words onto the card, and
- * they degrade in order: it posts a comment itself; failing that the loop posts
+ * they degrade in order: it posts a message itself; failing that the loop posts
  * its final assistant message; failing *that* — because a final message is only
  * as good as what the model chose to put in it, and a model that has spent an
  * hour being refused often ends with an apology rather than the work — the loop
@@ -18,9 +18,9 @@
  *
  * **The file is not deleted after it is read.** The rescan indexes it as an
  * artifact in the same teardown, so it stays visible on the task as a file as
- * well as readable as a comment, and a re-ingest weeks later reads the same
+ * well as readable as a message, and a re-ingest weeks later reads the same
  * bytes. A run that posts the handoff and is then rerun would re-post a stale
- * one, which is the cost accepted here: a duplicate comment naming its own
+ * one, which is the cost accepted here: a duplicate message naming its own
  * source is a line a reader skips, and deleting a run's only surviving output
  * to prevent it is the trade in the wrong direction.
  */
@@ -42,7 +42,7 @@ export interface HandoffInput {
 export interface Handoff {
   /** The file's contents, whole. The caller owns the clip, because it owns the budget. */
   readonly body: string;
-  /** Where it was read from, so the comment can say where the rest of it is. */
+  /** Where it was read from, so the message can say where the rest of it is. */
   readonly path: string;
 }
 
@@ -63,8 +63,8 @@ export const handoffPathOf = (input: HandoffInput) =>
  * to close.
  *
  * A file of nothing but whitespace reads as absent. An agent that created the
- * file and then wrote its comment through the tool after all leaves an empty
- * one behind, and a blank comment on the card is worse than no comment: it
+ * file and then wrote its message through the tool after all leaves an empty
+ * one behind, and a blank message on the card is worse than no message: it
  * reads as a run that had nothing to say.
  */
 export const readHandoff = Effect.fn("Ingest.handoff")(function* (

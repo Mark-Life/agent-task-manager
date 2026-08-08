@@ -92,13 +92,13 @@ import {
   bindingClaims,
   boardClaims,
   cleanUp,
-  commentClaims,
   doorClaims,
   ledgerClaims,
   lifecycleClaims,
   runSurfaceClaims,
   specClaims,
   streamClaims,
+  taskMessageClaims,
   threadClaims,
 } from "./gateway-check-claims";
 import {
@@ -328,7 +328,7 @@ const drive = (input: {
       caller,
       adminToken
     );
-    yield* commentClaims({
+    yield* taskMessageClaims({
       caller,
       taskId,
       token: adminToken,

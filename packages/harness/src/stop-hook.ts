@@ -5,7 +5,7 @@
  * Claude and Codex each fire a hook when the agent tries to end its turn. The
  * hook is handed the final assistant message and may refuse the ending; the
  * refusal reason is fed back to the model as its next prompt. So "this run
- * finished without posting a comment" turns from a thing noticed afterwards
+ * finished without posting a message" turns from a thing noticed afterwards
  * into a thing corrected during the turn.
  *
  * One script serves both harnesses because the two payloads are the same
@@ -19,8 +19,8 @@
  * covers both, with the differences typed as optional rather than papered over.
  *
  * **The rule is about a turn that has a task.** A manager turn answers in a
- * conversation and has no card to comment on, so the hook is never registered
- * on one — see {@link commentRuleApplies}, which is what the entrypoint asks
+ * conversation and has no card to post on, so the hook is never registered
+ * on one — see {@link messageRuleApplies}, which is what the entrypoint asks
  * before it names the command. {@link decideStop} itself stays unconditional:
  * it is the rule for a turn the rule applies to, and a second "does this
  * count" test inside it would be the same question answered in two places.
@@ -45,7 +45,7 @@ import { containerRunLayout, type RunLayout } from "./paths";
 import type { TurnSpecIdentity } from "./turn-spec";
 
 /**
- * The file whose existence means this run posted a comment.
+ * The file whose existence means this run posted a task message.
  *
  * The hook runs inside the sandbox with no database handle and no gateway
  * token, so the question has to be answerable from the filesystem alone. The
@@ -53,58 +53,58 @@ import type { TurnSpecIdentity } from "./turn-spec";
  * never read, so `touch` is a complete implementation and a half-written file
  * cannot be misread.
  *
- * Whoever observes the comment being posted creates it. In the normal path that
+ * Whoever observes the message being posted creates it. In the normal path that
  * is the orchestrator, which streams this run's normalized events, sees the
- * comment tool's `tool_result`, and creates the file on the host — the container
- * sees it immediately through the same mount. A provider that wires the comment
+ * message tool's `tool_result`, and creates the file on the host — the container
+ * sees it immediately through the same mount. A provider that wires the message
  * tool in-process may create it directly instead. Neither party needs to know
  * about the other, because both mean the same file.
  */
-export const COMMENT_MARKER_FILE = "comment-posted";
+export const MESSAGE_MARKER_FILE = "message-posted";
 
 /**
- * Overrides where {@link commentMarkerPath} looks. Set by the orchestrator when
+ * Overrides where {@link messageMarkerPath} looks. Set by the orchestrator when
  * the run directory is mounted somewhere other than the standard container
  * path — a local run outside a container being the usual reason.
  */
-export const COMMENT_MARKER_ENV_VAR = "ATM_COMMENT_MARKER";
+export const MESSAGE_MARKER_ENV_VAR = "ATM_MESSAGE_MARKER";
 
 /**
  * The marker for a run, under whichever root is looking. It sits in the run
  * directory beside the event log rather than in the agent home, because the
  * agent home belongs to a vendor that rewrites it and the run directory is ours.
  */
-export const commentMarkerPathOf = (layout: RunLayout) =>
-  join(layout.runDir, COMMENT_MARKER_FILE);
+export const messageMarkerPathOf = (layout: RunLayout) =>
+  join(layout.runDir, MESSAGE_MARKER_FILE);
 
 /**
  * The marker as the hook process sees it: the override when it is set, and the
  * container's own run directory otherwise. The default is what makes the hook
  * work with no environment wiring at all inside a standard sandbox.
  */
-export const commentMarkerPath = (
+export const messageMarkerPath = (
   env: Readonly<Record<string, string | undefined>>
 ) =>
-  trimmedOrNull(env[COMMENT_MARKER_ENV_VAR]) ??
-  commentMarkerPathOf(containerRunLayout);
+  trimmedOrNull(env[MESSAGE_MARKER_ENV_VAR]) ??
+  messageMarkerPathOf(containerRunLayout);
 
 /**
- * Whether this turn is one the comment rule is about at all.
+ * Whether this turn is one the message rule is about at all.
  *
- * The rule is "post a comment on your task", and a manager turn has no task: it
+ * The rule is "post a message on your task", and a manager turn has no task: it
  * answers in a conversation, and the orchestrator writes that answer back when
  * the turn ends. Registering the hook on one produces a refusal the agent has
- * no way to obey — {@link NO_COMMENT_REFUSAL} arrives as its next prompt, names
+ * no way to obey — {@link NO_MESSAGE_REFUSAL} arrives as its next prompt, names
  * a task that does not exist, and the turn is spent explaining that it will not
  * post onto an unrelated card to satisfy a hook. That is what a person reading
  * the chat sees, and it is the whole of this bug.
  *
  * Read off the turn's own identity rather than off a role flag, because
  * `taskId` being null *is* the fact the rule turns on: there is nothing to
- * comment on. A container started by hand with a taskless spec gets the same
+ * post on. A container started by hand with a taskless spec gets the same
  * answer for the same reason.
  */
-export const commentRuleApplies = (
+export const messageRuleApplies = (
   identity: Pick<TurnSpecIdentity, "taskId">
 ) => identity.taskId !== null;
 
@@ -119,7 +119,7 @@ export const STOP_HOOK_COMMAND_ENV_VAR = "ATM_STOP_HOOK_COMMAND";
 /**
  * The stop-hook command to register, or null when none is configured. Absence
  * is not an error: a run outside a sandbox has no hook, and the orchestrator's
- * comment fallback covers the same rule from the other side.
+ * fallback message covers the same rule from the other side.
  */
 export const stopHookCommand = (
   env: Readonly<Record<string, string | undefined>>
@@ -149,7 +149,7 @@ export const StopHookPayload = Schema.Struct({
   /**
    * The final assistant message. Claude omits the key when there is none;
    * Codex sends the key with `null`. Not read by the rule below — the message
-   * is the orchestrator's fallback comment, not evidence that one was posted.
+   * is the orchestrator's fallback message, not evidence that one was posted.
    */
   last_assistant_message: Schema.optional(Schema.NullOr(Schema.String)),
   /** Codex only, and Codex always sends it. */
@@ -193,11 +193,11 @@ export interface StopHookResponse
 
 /**
  * Why a turn was allowed to end. Three literals rather than a boolean, because
- * "the run commented" and "the run ignored us and we are out of retries" are
+ * "the run posted" and "the run ignored us and we are out of retries" are
  * the same response and very different facts about the run.
  */
 export const STOP_ALLOW_REASONS = [
-  "comment_posted",
+  "message_posted",
   "retry_spent",
   "unreadable_payload",
 ] as const;
@@ -222,13 +222,13 @@ export interface StopRefused {
 export type StopDecision = StopAllowed | StopRefused;
 
 /**
- * What the agent is told when it tries to finish without having commented.
+ * What the agent is told when it tries to finish without having posted.
  * Written as an instruction with a stopping condition, because it arrives as a
  * prompt and an agent that reads it as criticism will apologize instead of
- * writing the comment.
+ * writing the message.
  *
  * The brevity clause is here because this text can be the last word on what a
- * comment is: it arrives at the moment one is being written, and without it the
+ * task message is: it arrives at the moment one is being written, and without it the
  * naming of topics and nothing about size reads as an invitation to cover them
  * all at length. `WORKER_RULES` in `@workspace/prompts` says the same thing
  * first and says it more fully. This is the short form of one rule, not a
@@ -239,20 +239,20 @@ export type StopDecision = StopAllowed | StopRefused;
  * whose board tools have stopped answering reads "post one now" as an
  * instruction it has already tried and cannot follow, and what it does next is
  * either burn its remaining turn retrying a dead tool or end without the
- * comment anyway. Naming the file gives the refusal something to be complied
+ * message anyway. Naming the file gives the refusal something to be complied
  * with. The name is `HANDOFF_FILENAME`, which `@workspace/orchestrator` reads
  * back off the task's artifacts directory: one convention, three packages, no
  * second spelling.
  */
-export const NO_COMMENT_REFUSAL = `This run has not posted a comment on its task. Post one now, then end your turn: the outcome in a sentence, a link to where the detail lives, and anything a reader would be wrong not to know before they open it. Do not restate what you linked, and do not repeat work you have already finished. If the tool that posts comments is not answering, write the same text to \`${HANDOFF_FILENAME}\` in your artifacts directory instead and end your turn; it is read off the disk and posted for you.`;
+export const NO_MESSAGE_REFUSAL = `This run has not posted a message on its task. Post one now, then end your turn: the outcome in a sentence, a link to where the detail lives, and anything a reader would be wrong not to know before they open it. Do not restate what you linked, and do not repeat work you have already finished. If the tool that posts messages is not answering, write the same text to \`${HANDOFF_FILENAME}\` in your artifacts directory instead and end your turn; it is read off the disk and posted for you.`;
 
 /** The allowing response. One object, because it carries no per-decision detail. */
 export const ALLOW_TURN_END: StopHookResponse = { continue: true };
 
 /** What the rule is asked about: one attempted turn end, and what the run has done so far. */
 export interface StopDecisionInput {
-  /** Whether this run has posted a comment, as the marker file reports it. */
-  readonly commentPosted: boolean;
+  /** Whether this run has posted a message, as the marker file reports it. */
+  readonly messagePosted: boolean;
   /** The decoded payload, or null when it could not be read. */
   readonly payload: StopHookPayload | null;
 }
@@ -263,26 +263,26 @@ export interface StopDecisionInput {
  *
  * The order is the rule. An unreadable payload allows, because a hook that
  * cannot parse its own input must not be the thing that wedges a run. A posted
- * comment allows and says so, which is also what a successful enforcement looks
+ * message allows and says so, which is also what a successful enforcement looks
  * like on the second pass. `stop_hook_active` allows next: the harness sets it
  * on a turn that only exists because we already refused once, so refusing again
  * is a loop neither harness will break for us. Only a first attempt with no
- * comment is refused.
+ * message is refused.
  */
 export const decideStop = ({
-  commentPosted,
+  messagePosted,
   payload,
 }: StopDecisionInput): StopDecision => {
   if (payload === null) {
     return { kind: "allow", why: "unreadable_payload" };
   }
-  if (commentPosted) {
-    return { kind: "allow", why: "comment_posted" };
+  if (messagePosted) {
+    return { kind: "allow", why: "message_posted" };
   }
   if (payload.stop_hook_active) {
     return { kind: "allow", why: "retry_spent" };
   }
-  return { kind: "refuse", reason: NO_COMMENT_REFUSAL };
+  return { kind: "refuse", reason: NO_MESSAGE_REFUSAL };
 };
 
 /** The wire response for a decision. The only place the block shape is written. */
@@ -292,7 +292,7 @@ export const stopHookResponseOf = (decision: StopDecision): StopHookResponse =>
     : {
         decision: "block",
         reason: decision.reason,
-        systemMessage: "stop refused: the run has posted no comment",
+        systemMessage: "stop refused: the run has posted no message",
       };
 
 /** Decoder over the payload, built once — it compiles an AST on every call otherwise. */

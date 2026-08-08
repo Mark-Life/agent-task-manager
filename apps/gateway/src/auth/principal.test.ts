@@ -65,7 +65,7 @@ const ORIGIN = "http://gateway.test";
 /** The route a task-scoped request matched, as the router would have matched it. */
 const TASK_ROUTE = HttpRouter.route(
   "POST",
-  "/tasks/:taskId/comments",
+  "/tasks/:taskId/messages",
   HttpServerResponse.empty()
 );
 

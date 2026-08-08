@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { type CommentId, newCommentId } from "@workspace/domain";
+import { newTaskMessageId, type TaskMessageId } from "@workspace/domain";
 import { DateTime } from "effect";
 import { isAfterWatermark, nextWatermarkOf, unreadOf } from "./unread";
 
@@ -20,13 +20,13 @@ const later = DateTime.makeUnsafe("2026-08-02T11:00:00.000Z");
 interface Row {
   readonly body: string;
   readonly createdAt: DateTime.Utc;
-  readonly id: CommentId;
+  readonly id: TaskMessageId;
 }
 
 const row = (body: string, createdAt = at): Row => ({
   body,
   createdAt,
-  id: newCommentId(),
+  id: newTaskMessageId(),
 });
 
 const first = row("one");
@@ -94,7 +94,7 @@ describe("where the watermark lands after a read", () => {
 
   test("keeps the row's own id type, so the caller can store it", () => {
     const next = nextWatermarkOf([first]);
-    const id: CommentId | undefined = next?.id;
+    const id: TaskMessageId | undefined = next?.id;
     expect(id).toBe(first.id);
   });
 });

@@ -16,7 +16,7 @@
  * agent home, checked and never created — an auto-created empty home boots a
  * container that reports an auth error nobody can tell from an expired token.
  *
- * **The ending.** A worker's answer is a comment on its task and a move into
+ * **The ending.** A worker's answer is a message on its task and a move into
  * review; a manager's is a message in its conversation. One row, carrying the
  * run that produced it, so a dashboard can open the turn behind a sentence and
  * the bot can render the same row into the chat it came from. Nothing here

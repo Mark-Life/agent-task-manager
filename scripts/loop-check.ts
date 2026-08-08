@@ -18,7 +18,7 @@
  * (`SANDBOX_MODE=local`), free and in seconds. It proves the loop, claim by
  * claim: a task moved into *in progress* is claimed, run and landed in review;
  * the run row closes as `done`; the normalized events reach `run_events`; a run
- * that posted no comment has its last message appended as one; the file the run
+ * that posted no message has its last message appended as one; the file the run
  * wrote is in the artifact index; the transcript written inside the run's agent
  * home is in the run directory once that home has been torn down, and no
  * credential came out with it; the run leaves exactly one `atm.run` start row
@@ -137,11 +137,11 @@ import {
   ArtifactRepo,
   ChatMessageRepo,
   ChatThreadRepo,
-  CommentRepo,
   CurrentActor,
   RunEventRepo,
   RunRepo,
   storeLayer,
+  TaskMessageRepo,
   TaskRepo,
   withActor,
 } from "@workspace/db";
@@ -518,7 +518,7 @@ const happyPath = (workspaceId: WorkspaceId) =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator;
     const ledger = yield* EventLog;
-    const comments = yield* CommentRepo;
+    const messages = yield* TaskMessageRepo;
     const artifacts = yield* ArtifactRepo;
     const runEvents = yield* RunEventRepo;
 
@@ -580,10 +580,10 @@ const happyPath = (workspaceId: WorkspaceId) =>
       step: "the normalized events reached run_events",
     });
 
-    const thread = yield* comments.forTask({ taskId: task.id, workspaceId });
+    const thread = yield* messages.forTask({ taskId: task.id, workspaceId });
     yield* check({
-      detail: `the thread holds ${thread.length} comments, kinds ${thread
-        .map((comment) => comment.kind)
+      detail: `the thread holds ${thread.length} messages, kinds ${thread
+        .map((message) => message.kind)
         .join(", ")}`,
       // A stub ends on a sentence this file knows, so the body is checked
       // against it and the fallback is proved to carry the run's own last
@@ -592,13 +592,13 @@ const happyPath = (workspaceId: WorkspaceId) =>
       // not empty — pinning a phrase there would be a check on the model's
       // prose, which is not what this claim is about.
       ok: thread.some(
-        (comment) =>
-          comment.kind === "fallback" &&
+        (message) =>
+          message.kind === "fallback" &&
           (ANSWERED_LIVE
-            ? comment.body.trim().length > 0
-            : comment.body.includes(STUB_FINAL_TEXT))
+            ? message.body.trim().length > 0
+            : message.body.includes(STUB_FINAL_TEXT))
       ),
-      step: "a run that posted no comment had its last message appended as one",
+      step: "a run that posted no message had its last message appended as one",
     });
 
     const indexed = yield* artifacts.listByTask({

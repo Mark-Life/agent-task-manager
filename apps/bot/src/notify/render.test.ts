@@ -84,7 +84,7 @@ describe("renderNotice", () => {
     });
 
     expect(labels(review.keyboard)).toContain("Approve");
-    expect(labels(review.keyboard)).toContain("Comment");
+    expect(labels(review.keyboard)).toContain("Message");
     expect(labels(backlog.keyboard)).toContain("Start");
     expect(labels(backlog.keyboard)).not.toContain("Approve");
   });

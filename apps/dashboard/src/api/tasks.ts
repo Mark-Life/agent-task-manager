@@ -198,7 +198,7 @@ export const useSelectNextSession = () => {
 };
 
 /**
- * Remove a task. Its comments, sessions, runs and artifacts go with it, so the
+ * Remove a task. Its messages, sessions, runs and artifacts go with it, so the
  * whole subtree under the task's key is dropped rather than refetched — there is
  * nothing left on the server to answer with.
  */

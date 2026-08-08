@@ -51,7 +51,7 @@ reply. The mount set does not change.
 token is bound to a thread and a user, and `checkBinding` in the gateway only narrows a principal
 carrying a `boundTaskId` — which a worker has and a manager does not. So the manager may write
 anywhere on the board. That is the job: it files work, re-prioritises, briefs workers through
-comments, steers runs. Deletes stay out of reach for both roles, at `admin` scope, which no agent
+task messages, steers runs. Deletes stay out of reach for both roles, at `admin` scope, which no agent
 token is minted at. Nothing here changed; it is recorded because it was previously true by omission.
 
 **5. Which GitHub token the manager holds is the operator's call.** `turnEnvironment` now returns

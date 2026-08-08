@@ -265,26 +265,26 @@ const make = (options: BoardOptions) =>
       });
 
     /** Say something on a task. The author comes off the credential, not the payload. */
-    const addComment = (input: {
+    const postMessage = (input: {
       readonly actor: ManagerActorRef;
       readonly body: string;
       readonly taskId: TaskId;
     }) =>
       call({
         actor: input.actor,
-        operation: "bot.board.addComment",
+        operation: "bot.board.postMessage",
         run: (client) =>
-          client.comments.append({
+          client.messages.post({
             params: { taskId: input.taskId },
             payload: { body: input.body },
           }),
       });
 
     return {
-      addComment,
       listTasks,
       moveTask,
       placeTask,
+      postMessage,
       rerunTask,
       stopRun,
       stopThread,

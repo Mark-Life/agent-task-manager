@@ -32,8 +32,8 @@ export {
   Unauthorized,
 } from "./errors";
 export { ArtifactsGroup } from "./groups/artifacts";
-export { CommentsGroup } from "./groups/comments";
 export { HealthGroup } from "./groups/health";
+export { MessagesGroup } from "./groups/messages";
 export { ProjectsGroup } from "./groups/projects";
 export { RunCommandsGroup } from "./groups/run-commands";
 export { RunsGroup } from "./groups/runs";
@@ -48,7 +48,6 @@ export {
   PROMOTION_SCOPES,
   PromotionScope,
 } from "./schemas/artifact";
-export { Comment, CommentAppend } from "./schemas/comment";
 export { HealthStatus } from "./schemas/health";
 export { Project, ProjectCreate, ProjectPatch } from "./schemas/project";
 export {
@@ -85,6 +84,7 @@ export {
   TaskPlacement,
   TaskTransition,
 } from "./schemas/task";
+export { TaskMessage, TaskMessagePost } from "./schemas/task-message";
 export {
   DEFAULT_MESSAGE_PAGE,
   DEFAULT_THREAD_PAGE,

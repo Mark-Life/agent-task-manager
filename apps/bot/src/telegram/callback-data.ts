@@ -46,7 +46,8 @@ export const TASK_VERBS = [
   "rstop",
   /** Queue a rerun command for the task. */
   "rrun",
-  /** Arm the chat to turn the next message into a comment on the task. */
+  /** Arm the chat to turn the next message into a task message. Still `cadd`: the
+   * verb is encoded into buttons already sitting in chat history. */
   "cadd",
 ] as const;
 

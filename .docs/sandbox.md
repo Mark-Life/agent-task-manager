@@ -6,7 +6,7 @@ it, and removes it — on every exit path including the interrupt a stop command
 Interrupting the fiber *is* how a run is stopped, which is why there is no `kill` method. The
 package never imports `packages/db`.
 
-**Seven mounts, and nothing else.** The run directory (rw, mounted at `/run`, holding the comment
+**Seven mounts, and nothing else.** The run directory (rw, mounted at `/run`, holding the message
 marker, the turn spec and the event ledger), the provider's agent home (rw, `/agent-home`, see
 [agent homes](./agent-homes.md)), the workspace checkout (rw, `/workspace`), the shared package
 store (rw, `/cache`, the other mount shared between runs — see below), the

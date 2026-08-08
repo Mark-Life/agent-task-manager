@@ -85,7 +85,7 @@ const tasksOf = (options: {
       ...options,
     },
     {
-      brief: "Boards, run timelines, comments, session switching.",
+      brief: "Boards, run timelines, messages, session switching.",
       prUrl: "https://github.com/Mark-Life/agent-task-manager/pull/1",
       status: "review",
       title: "Dashboard reads the board from the gateway",

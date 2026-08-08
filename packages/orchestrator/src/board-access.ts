@@ -9,7 +9,7 @@
  * paged, because from every row's point of view the run worked.
  *
  * So the signal is taken from the one place it exists: the run's own event
- * stream, which the loop is already reading to know whether a comment was
+ * stream, which the loop is already reading to know whether a message was
  * posted. A board tool that answers proves the credential is live; a board tool
  * refused on the credential proves it is not. That is a fact about the run
  * worth a column, and {@link boardFailureOf} turns it into the ending the card
@@ -41,7 +41,7 @@ import { TOKEN_REJECTIONS } from "@workspace/token";
 
 /**
  * The class a run ending with no board access carries onto its row and its
- * crash comment.
+ * crash message.
  *
  * Its own name rather than the harness's `Unauthenticated`, which means the
  * provider login failed rather than the board one. The two are answered by
@@ -89,7 +89,7 @@ export const isBoardAuthFailure = (summary: string) =>
  * `refusals` is a count and not a flag because the two answer different
  * questions: whether the run ended able to write is `lost`, and how much of the
  * run was spent unable to is the count — a run refused once at the end lost a
- * comment, a run refused two hundred times lost its whole second half.
+ * message, a run refused two hundred times lost its whole second half.
  */
 export interface BoardAccess {
   /** The refusal, as the model saw it. Null until one happens; kept for the card. */

@@ -10,7 +10,7 @@ import { recordFields, Timestamp } from "./primitives";
  * that moved, a network the container lost — and the agent still holds the
  * thing the whole run was for. The task's artifacts directory is the one place
  * it can write that outlives the container, so a file with this exact name in
- * that directory is a comment the run could not post, and the orchestrator
+ * that directory is a task message the run could not post, and the orchestrator
  * attaches it on the way out.
  *
  * It is a name rather than a mechanism on purpose. The agent needs no new tool

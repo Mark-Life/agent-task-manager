@@ -3,19 +3,19 @@
  *
  * The prompt text is asserted in `@workspace/prompts`, against rows built in a
  * file with no database in sight. What is left here is the walk that proves the
- * watermark: the comparison deciding which comments a session has already read
+ * watermark: the comparison deciding which messages a session has already read
  * is a row-wise `(created_at, id)` tuple evaluated by Postgres, so a fake would
  * only prove that the fake orders things the way the test does. It runs against
  * the real database, against the workspace the seed created, and deletes the
- * task it made — which cascades its session and its comments. The audit rows
+ * task it made — which cascades its session and its messages. The audit rows
  * stay, as they do for every mutation in this system.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
   AgentSessionRepo,
-  CommentRepo,
   storeLayer,
+  TaskMessageRepo,
   TaskRepo,
   WorkspaceRepo,
   withActor,
@@ -23,8 +23,8 @@ import {
 import {
   type Actor,
   type AgentSession,
-  newCommentId,
   newRunId,
+  newTaskMessageId,
   type Task,
   UnreadWatermarkId,
   UserId,
@@ -56,7 +56,7 @@ describe("the session's read position", () => {
     expect(
       watermarkOf({ unreadWatermarkAt: at, unreadWatermarkId: null })
     ).toBeNull();
-    const id = UnreadWatermarkId.make(newCommentId());
+    const id = UnreadWatermarkId.make(newTaskMessageId());
     expect(
       watermarkOf({ unreadWatermarkAt: at, unreadWatermarkId: id })
     ).toEqual({ createdAt: at, id });
@@ -136,7 +136,7 @@ class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
 const walk = Effect.gen(function* () {
   const workspaces = yield* WorkspaceRepo;
   const tasks = yield* TaskRepo;
-  const comments = yield* CommentRepo;
+  const messages = yield* TaskMessageRepo;
   const sessions = yield* AgentSessionRepo;
 
   const [workspace] = yield* workspaces.list();
@@ -147,7 +147,7 @@ const walk = Effect.gen(function* () {
 
   const filed = yield* tasks.create({
     acceptance: "the watermark moves",
-    brief: "prove the prompt reads each comment exactly once",
+    brief: "prove the prompt reads each message exactly once",
     title: "prompt watermark walk",
     workspaceId: scope,
   });
@@ -159,13 +159,13 @@ const walk = Effect.gen(function* () {
     workspaceId: scope,
   });
 
-  yield* comments.append({
+  yield* messages.post({
     author: { kind: "human", userId: UserId.make("prompt-test-human") },
     body: "start with the delete path",
     taskId: filed.id,
     workspaceId: scope,
   });
-  const second = yield* comments.append({
+  const second = yield* messages.post({
     author: { kind: "agent", runId: null, sessionId: opened.id },
     body: "opened the PR",
     kind: "fallback",
@@ -215,7 +215,7 @@ const walk = Effect.gen(function* () {
   });
   const afterSecond = yield* reread();
 
-  const third = yield* comments.append({
+  const third = yield* messages.post({
     author: { kind: "human", userId: UserId.make("prompt-test-human") },
     body: "the review found a missing 404",
     taskId: filed.id,
@@ -265,7 +265,7 @@ afterAll(async () => {
 });
 
 /**
- * The watermark column carries no table's brand — it points at a comment on a
+ * The watermark column carries no table's brand — it points at a message on a
  * task's session and at a chat message on a thread's — so a comparison against
  * either spells both sides as text.
  */
@@ -277,7 +277,7 @@ describe("the watermark walk, against Postgres", () => {
     expect(walked.firstPrompt.text).toContain("opened the PR");
   });
 
-  test("moves the watermark to the last comment it handed over", () => {
+  test("moves the watermark to the last message it handed over", () => {
     expect(idText(walked.afterFirst.unreadWatermarkId)).toBe(
       idText(walked.ids.second)
     );
@@ -291,11 +291,11 @@ describe("the watermark walk, against Postgres", () => {
     );
   });
 
-  test("does not read the session's own fallback comment back as input", () => {
+  test("does not read the session's own fallback message back as input", () => {
     expect(walked.secondPrompt.text).not.toContain("opened the PR");
   });
 
-  test("hands over exactly the comment added since, labelled", () => {
+  test("hands over exactly the message added since, labelled", () => {
     expect(walked.thirdPrompt.text).toContain(
       "the human said:\nthe review found a missing 404"
     );

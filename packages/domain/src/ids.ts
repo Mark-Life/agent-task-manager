@@ -63,11 +63,11 @@ export type TaskId = typeof TaskId.Type;
 export const newTaskId = mint(TaskId);
 
 /** One message in a task's conversation. */
-export const CommentId = ownId("CommentId");
-export type CommentId = typeof CommentId.Type;
+export const TaskMessageId = ownId("TaskMessageId");
+export type TaskMessageId = typeof TaskMessageId.Type;
 
-/** Mints a fresh {@link CommentId}. */
-export const newCommentId = mint(CommentId);
+/** Mints a fresh {@link TaskMessageId}. */
+export const newTaskMessageId = mint(TaskMessageId);
 
 /**
  * One agent conversation on a task. Named `AgentSession` throughout, because
@@ -110,7 +110,7 @@ export const newArtifactId = mint(ArtifactId);
 /**
  * One conversation between a person and the manager agent, in one Telegram
  * chat. Named `Thread` because that is what the audit log's `actor_thread_id`
- * has always meant; a task's comments are a thread of a different kind and are
+ * has always meant; a task's messages are a thread of a different kind and are
  * addressed by their task.
  */
 export const ThreadId = ownId("ThreadId");
@@ -127,7 +127,7 @@ export type ChatMessageId = typeof ChatMessageId.Type;
 export const newChatMessageId = mint(ChatMessageId);
 
 /**
- * The row a session has read up to: a `comment` on a session attached to a
+ * The row a session has read up to: a task message on a session attached to a
  * task, a `chat_message` on one attached to a thread. A brand of its own rather
  * than either of those, because the column is a position and deliberately
  * carries no foreign key — typing it as one of the two would claim it always

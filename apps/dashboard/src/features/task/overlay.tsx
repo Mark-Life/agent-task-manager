@@ -15,7 +15,7 @@ interface TaskOverlayProps {
  * One task, read and worked over the top of the board.
  *
  * A side panel rather than the task page: a card opened from the board is
- * usually a glance — at what the run is doing, at a comment — and a page
+ * usually a glance — at what the run is doing, at a message — and a page
  * navigation throws the board's scroll and drag state away for it. The board
  * stays mounted behind the panel, so closing puts the reader back where they
  * were. Like the conversation overlay, visibility is a fact about the URL, so

@@ -72,7 +72,7 @@ const ENTITY = "chat_thread";
 
 /**
  * A chat thread is never addressed by id alone: every query names its
- * workspace. Spelled in full because `ThreadRef` already means a task's comment
+ * workspace. Spelled in full because `ThreadRef` already means a task's message
  * thread in this package.
  */
 export interface ChatThreadRef {

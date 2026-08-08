@@ -163,7 +163,7 @@ export const canCreateWithStatus = (request: {
  * distinction matters here more than anywhere else, because a worker run's
  * token *is* good for writes on the task it was dispatched for — without this,
  * an agent could delete the task it was asked to work on, taking its own
- * transcript, its comments and every other run on the card with it.
+ * transcript, its messages and every other run on the card with it.
  */
 export const canDeleteTask = (request: { readonly actorKind: ActorKind }) =>
   movesFreely(request.actorKind);

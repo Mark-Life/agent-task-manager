@@ -1,6 +1,6 @@
 import { Schema } from "effect";
-import { CommentAuthorKind, CommentKind } from "./enums";
-import { AgentSessionId, CommentId, RunId, TaskId, UserId } from "./ids";
+import { TaskMessageAuthorKind, TaskMessageKind } from "./enums";
+import { AgentSessionId, RunId, TaskId, TaskMessageId, UserId } from "./ids";
 import { recordFields } from "./primitives";
 
 /**
@@ -12,21 +12,26 @@ import { recordFields } from "./primitives";
  * Attribution is what makes several sessions on one task readable — the UI can
  * say "from the review session" instead of presenting one undifferentiated
  * voice — so the author, its session and its run are all columns.
+ *
+ * The row lives in a table called `comment`, which is what this was called
+ * everywhere until the name became part of the contract an external agent is
+ * handed. The rename stops at the row layer: `packages/db` maps the table to
+ * this entity, and nothing above it says comment.
  */
-export const Comment = Schema.Struct({
+export const TaskMessage = Schema.Struct({
   ...recordFields,
   /** Which session spoke. */
   agentSessionId: Schema.NullOr(AgentSessionId),
-  authorKind: CommentAuthorKind,
+  authorKind: TaskMessageAuthorKind,
   /** Set for a human or the manager. No foreign key: attribution outlives accounts. */
   authorUserId: Schema.NullOr(UserId),
   body: Schema.String,
-  id: CommentId,
-  kind: CommentKind,
+  id: TaskMessageId,
+  kind: TaskMessageKind,
   /** Which attempt spoke. */
   runId: Schema.NullOr(RunId),
   /** The thread belongs to the task, not to the session that happened to write in it. */
   taskId: TaskId,
 });
 
-export interface Comment extends Schema.Schema.Type<typeof Comment> {}
+export interface TaskMessage extends Schema.Schema.Type<typeof TaskMessage> {}

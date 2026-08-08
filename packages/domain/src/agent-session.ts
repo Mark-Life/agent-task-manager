@@ -31,7 +31,7 @@ export const AgentSession = Schema.Struct({
   threadId: Schema.NullOr(ThreadId),
   /**
    * The last row this session has been shown, compared as a `(createdAt, id)`
-   * tuple so a same-millisecond tie cannot skip one. It is a `comment` on a
+   * tuple so a same-millisecond tie cannot skip one. It is a task message on a
    * session attached to a task and a `chat_message` on one attached to a
    * thread — the same question either way, which is why it is one pair of
    * columns.

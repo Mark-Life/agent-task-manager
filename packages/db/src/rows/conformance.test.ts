@@ -18,13 +18,13 @@ import type {
   ChatMessage,
   ChatNotification,
   ChatThread,
-  Comment,
   Project,
   ProjectEnvFile,
   Run,
   RunCommand,
   RunEvent,
   Task,
+  TaskMessage,
   Workspace,
 } from "@workspace/domain";
 import type { decodeAgentSession } from "./agent-session";
@@ -35,7 +35,6 @@ import type {
   decodeChatNotification,
   decodeChatThread,
 } from "./chat";
-import type { decodeComment } from "./comment";
 import { conforms, type Decoded } from "./conformance";
 import type { decodeProject } from "./project";
 import type { decodeProjectEnvFile } from "./project-env";
@@ -43,6 +42,7 @@ import type { decodeRun } from "./run";
 import type { decodeRunCommand } from "./run-command";
 import type { decodeRunEvent } from "./run-event";
 import type { decodeTask } from "./task";
+import type { decodeTaskMessage } from "./task-message";
 import type { decodeWorkspace } from "./workspace";
 
 test("a decoded project is a Project", () => {
@@ -61,8 +61,10 @@ test("a decoded task is a Task", () => {
   expect(conforms<Decoded<typeof decodeTask>, Task>(true)).toBe(true);
 });
 
-test("a decoded comment is a Comment", () => {
-  expect(conforms<Decoded<typeof decodeComment>, Comment>(true)).toBe(true);
+test("a decoded task message is a TaskMessage", () => {
+  expect(conforms<Decoded<typeof decodeTaskMessage>, TaskMessage>(true)).toBe(
+    true
+  );
 });
 
 test("a decoded agent session is an AgentSession", () => {

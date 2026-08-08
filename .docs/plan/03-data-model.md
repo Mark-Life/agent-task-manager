@@ -42,7 +42,7 @@ Two implementation rules that are invisible at the call site and wrong by defaul
 | `UserId` | text(32) | Better Auth `user.id` |
 | `ProjectId` | uuid | uuidv7 |
 | `TaskId` | uuid | uuidv7 |
-| `CommentId` | uuid | uuidv7 |
+| `TaskMessageId` | uuid | uuidv7 |
 | `AgentSessionId` | uuid | uuidv7 |
 | `RunId` | uuid | uuidv7 |
 | `RunEventId` | uuid | uuidv7 |
@@ -70,11 +70,11 @@ Two implementation rules that are invisible at the call site and wrong by defaul
 | `RunEventKind` | `started` `assistant_message` `reasoning` `tool_call` `tool_result` `usage` `log` `error` `finished` `failed` `stopped` | Normalized harness events + lifecycle. |
 | `RunCommandKind` | `stop` `rerun` `start_session` | Intents; only the orchestrator acts. |
 | `RunCommandStatus` | `pending` `consumed` `rejected` | |
-| `CommentAuthorKind` | `human` `manager` `agent` `orchestrator` | The orchestrator authors the crash comment: the process that died cannot. |
-| `CommentKind` | `message` `fallback` `run_error` | Orthogonal to author. Only `fallback` collapses in the UI. |
+| `TaskMessageAuthorKind` | `human` `manager` `agent` `orchestrator` | The orchestrator authors the crash message: the process that died cannot. |
+| `TaskMessageKind` | `message` `fallback` `run_error` | Orthogonal to author. Only `fallback` collapses in the UI. |
 | `ArtifactScope` | `task` `project` `global` | Two of the three are read-only mounts. |
 | `AuditAction` | `create` `update` `delete` `transition` `promote` | `promote` is queryable on its own, because promotion is a deliberate verb. |
-| `AuditEntityType` | `project` `task` `comment` `agent_session` `run` `artifact` | |
+| `AuditEntityType` | `project` `task` `comment` `agent_session` `run` `artifact` | Table names, which is why a task message is still `comment` here. |
 | `ThreadStatus` | `active` `archived` | Never deleted: the audit log points at a thread, and erasing one orphans every row that named it. |
 | `ChatMessageRole` | `user` `manager` | Two voices. Not `RunRole` — this is who spoke, that is what ran. |
 | `ChatIntakeKind` | `text` `voice` `forward` `command` `callback` `api` | How an inbound message arrived. `api` is a message posted through the gateway rather than Telegram. |
@@ -98,7 +98,7 @@ only.
 | `RunEventPayload` | tagged union keyed by `RunEventKind` | See below. |
 
 **`Actor` and `RunRole` are two axes and both are needed.** `Actor` is who wrote a row;
-`RunRole` is what the run is. A manager-role run authors comments and audit entries as
+`RunRole` is what the run is. A manager-role run authors messages and audit entries as
 `Manager`, a worker-role run as `WorkerRun`, and the orchestrator authors as itself on behalf
 of either.
 
@@ -187,7 +187,7 @@ finished would be a refusal nobody asked for.
 **Erasing a task is the third door**, and the only one that leads off the board. Same actors
 as the free movers: a person and the manager. Not a run, whose token *is* good for writes on
 the task it was dispatched for — without that check an agent could delete the card it was
-asked to work on and take its own transcript with it. It is a hard delete: comments, sessions,
+asked to work on and take its own transcript with it. It is a hard delete: messages, sessions,
 runs, run events and artifact index rows cascade, nothing archives, and there is no undo. The
 audit row survives, because `entity_id` carries no foreign key, and is then the only evidence
 the task existed.
@@ -277,7 +277,7 @@ URLs) and nothing reads an archive flag. Both come back the day the dashboard ha
 
 Check: `not (next_session_new and next_session_id is not null)`.
 
-### `comment`
+### `comment` — a task message
 
 Append-only: no edit, no delete. That is why there is no `edited_at`.
 
@@ -285,11 +285,11 @@ Append-only: no edit, no delete. That is why there is no `edited_at`.
 | --- | --- | --- | --- | --- |
 | `task_id` | uuid | no | — | The conversation belongs to the task, not the session. |
 | `body` | text | no | — | |
-| `author_kind` | text | no | — | `CommentAuthorKind`. |
+| `author_kind` | text | no | — | `TaskMessageAuthorKind`. |
 | `author_user_id` | text | yes | — | Set for `human` / `manager`. No FK: history outlives accounts. |
 | `agent_session_id` | uuid | yes | — | Which session spoke. Makes "from the review session" possible. |
 | `run_id` | uuid | yes | — | Which attempt spoke. |
-| `kind` | text | no | `'message'` | `CommentKind`. `fallback` = the final-message auto-append, collapsed by the UI. `run_error` = a crashed run's error text, authored by the orchestrator and never collapsed. |
+| `kind` | text | no | `'message'` | `TaskMessageKind`. `fallback` = the final-message auto-append, collapsed by the UI. `run_error` = a crashed run's error text, authored by the orchestrator and never collapsed. |
 
 Checks: `(author_kind in ('human','manager')) = (author_user_id is not null)`;
 `(author_kind = 'agent') = (agent_session_id is not null)`.
@@ -309,7 +309,7 @@ Named `agent_session` because Better Auth owns `session`.
 | `provider` | text | no | — | `claude` / `codex`. |
 | `provider_session_id` | text | yes | — | Unknown until the harness reports it; stored apart so the provider can change. **The only place a provider session id lives** — a thread does not carry its own. |
 | `status` | text | no | `'running'` | `SessionStatus`. |
-| `unread_watermark_id` | uuid | yes | — | Last row this session has been shown — a `comment` for a worker session, a `chat_message` for a manager one. No FK: a watermark is a position, not a reference, and one column cannot reference two tables anyway. |
+| `unread_watermark_id` | uuid | yes | — | Last row this session has been shown — a `comment` row (a task message) for a worker session, a `chat_message` for a manager one. No FK: a watermark is a position, not a reference, and one column cannot reference two tables anyway. |
 | `unread_watermark_at` | timestamptz | yes | — | Compared with the id as a `(created_at, id)` tuple, so a same-millisecond tie can't skip a row. |
 | `error_message` | text | yes | — | Why a failed session failed, without opening the run. |
 | `ended_at` | timestamptz | yes | — | When the last run on this session terminated. `status` says whether it can be resumed. |
@@ -318,8 +318,8 @@ Checks: `(status = 'running') = (ended_at is null)`;
 `(unread_watermark_id is null) = (unread_watermark_at is null)`;
 `(task_id is not null) <> (thread_id is not null)`.
 
-The watermark columns are not named for comments because they no longer hold only comment
-ids, and a column called `comment_watermark_id` holding a chat message id is a lie the next
+The watermark columns are not named for task messages because they no longer hold only
+message ids, and a column called `comment_watermark_id` holding a chat message id is a lie the next
 reader believes.
 
 **Resumable** means `status <> 'failed'`. A cleanly finished session is the normal resume
@@ -328,7 +328,7 @@ is not a disqualification.
 
 **The watermark advances at prompt-build time** to the newest row it rendered, including
 rows this session's own previous run posted. Without that, a resumed run re-reads its own
-fallback comment as new input. It is also what makes several messages queued during a live
+fallback message as new input. It is also what makes several messages queued during a live
 manager turn arrive as one prompt on the next one: coalescing is not built, it is what a
 watermark does.
 
@@ -576,7 +576,7 @@ one two-card gap with nothing else moving.
 | `task` | `(parent_task_id)` | Subtasks of a task. |
 | `task` | `(project_id)` | FK check on project delete — the composite index leads with `workspace_id` and cannot serve it. |
 | `task` | `(next_session_id)` | FK check on session delete. |
-| `comment` | `(task_id, created_at, id)` | Thread render, and "comments since this session's watermark". |
+| `comment` | `(task_id, created_at, id)` | Thread render, and "messages since this session's watermark". |
 | `comment` | `(agent_session_id)` | FK check. |
 | `comment` | `(run_id)` | FK check. |
 | `agent_session` | unique `(workspace_id, id)` | Composite-FK target. |
@@ -763,7 +763,7 @@ for Better Auth's promise API.
 | Transcript / message rows | Shape is whatever the normalized harness event model turns out to be. Phase 2 owns it; guessing now means migrating twice. |
 | A queued-message state on `chat_message` | The watermark already answers "unread" and the live-run index already answers "is a turn running". A third column would be the same fact spelled a third way, and the one that drifts. |
 | A live-turn marker on `chat_thread` | Same: `run` is where liveness lives, for both roles. |
-| `comment.source` / `external_ref` | PR-thread comments are read by the agent through `gh`, not ingested. Ingest needs a loop-prevention rule as much as a column, so both land together or not at all. |
+| `comment.source` / `external_ref` | PR review comments are read by the agent through `gh`, not ingested. Ingest needs a loop-prevention rule as much as a column, so both land together or not at all. |
 | Scoped API tokens | Phase 5. Likely a Better Auth plugin table, not ours. |
 | Telegram account link codes | Phase 6. |
 | Run lease | The lease is a heartbeated file on the host, by design. A lease table would be a second source of truth for container ownership. |
@@ -796,9 +796,9 @@ for Better Auth's promise API.
 | Next-session selection, cleared after dispatch | `task.next_session_id` + `next_session_new`; orchestrator resets both to null / false after claiming. |
 | The review loop: a new session reviews the PR, the original resumes | `next_session_new = true` for the review session; then `next_session_id` naming the original for the resume. What each session is for lives in its prompt, not in a column. |
 | Session unread watermark | `agent_session.unread_watermark_id` + `_at`, compared as a `(created_at, id)` tuple against `comment` or `chat_message`, advanced at prompt-build time. |
-| Comment authorship incl. session and run | `comment.author_kind` / `author_user_id` / `agent_session_id` / `run_id`. |
-| Auto-generated comment collapses, crash comment does not | `comment.kind` — `fallback` collapses, `run_error` does not. |
-| Run lifecycle events kept out of comments | `run_event` table, separate `kind` union; the dashboard interleaves at read time. |
+| Task-message authorship incl. session and run | `comment.author_kind` / `author_user_id` / `agent_session_id` / `run_id`. |
+| The auto-generated message collapses, the crash message does not | `comment.kind` — `fallback` collapses, `run_error` does not. |
+| Run lifecycle events kept out of the message thread | `run_event` table, separate `kind` union; the dashboard interleaves at read time. |
 | "A run is live" is not "the task is in progress" | `run.status in ('queued','running')` + the partial index; the board reads the run, not the column. |
 | A failed session is visible as failed, not absent | `agent_session.status = 'failed'` + `error_message`. |
 | Stop and rerun consumed by the orchestrator | `run_command` + the `atm_run_command` NOTIFY + the pending partial index. |
@@ -812,7 +812,7 @@ for Better Auth's promise API.
 | One run per task at a time | Partial unique index on `run(task_id)` where status is live. |
 | Transcript location | Nowhere in this schema. One system-owned agent home per provider, mounted into every container; the session is located inside it by `agent_session.provider_session_id`. |
 | Actor on every mutation | `audit_entry`, written in the mutation's transaction; `Actor` is an Effect requirement; `ActorKind` includes the orchestrator, which writes most of them. |
-| Crash posts a comment and moves to review | `comment` with `kind = 'run_error'`, authored by the orchestrator, + `agent_session.status = 'failed'` + the `in_progress → review` transition. |
+| Crash posts a message and moves to review | `comment` with `kind = 'run_error'`, authored by the orchestrator, + `agent_session.status = 'failed'` + the `in_progress → review` transition. |
 | A request's trace reaches the run it caused | `task.dispatch_traceparent` on the card, `run_command.traceparent` on the intent; the orchestrator parses whichever the row carried and dispatches under it, so `run.trace_id` and the `atm.run` event land in the request's trace. |
 
 ---

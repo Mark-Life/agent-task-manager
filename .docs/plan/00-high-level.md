@@ -17,7 +17,7 @@ Two full interfaces over the same data, neither subordinate to the other:
 - **Telegram** — voice, forwarded messages, approvals, quick status. Good on the move,
   bad at dense data.
 - **Web dashboard** — boards, run timelines, logs, diffs, and direct editing. Create
-  tasks, drag them between statuses, comment, cancel runs, all by hand and without
+  tasks, drag them between statuses, post messages, cancel runs, all by hand and without
   involving the manager agent.
 
 ## Why not an off-the-shelf board
@@ -59,8 +59,8 @@ ideas → backlog → in progress → review → done
   live run is waiting for a slot or has stalled, and the UI shows the difference (a spinner
   while an agent is working).
 - **review** — the human gate. The run finished and left something to look at: a PR, a
-  document, a calendar. Comment here or on the PR itself, then move the task back to *in
-  progress* and the worker resumes with those comments as its next prompt.
+  document, a calendar. Post a message here or on the PR itself, then move the task back to *in
+  progress* and the worker resumes with those messages as its next prompt.
 - **done**.
 
 Two agent spawn points (*backlog* on demand, *in progress* always) and one review gate
@@ -77,9 +77,9 @@ SDK reports it. Run ends → task moves *in progress → review*. Inspecting whe
 actually opened is a later refinement, not a v1 gate.
 
 **Stop and rerun** are always available on a live run. Stop kills the process. Rerun
-resumes the same session with any comments added since as extra prompt input — the same
+resumes the same session with any messages added since as extra prompt input — the same
 move as interrupting an agent mid-thought, adding a correction, and letting it carry on.
-Because entering *in progress* auto-starts, "stop, comment, rerun" is the steering loop.
+Because entering *in progress* auto-starts, "stop, post, rerun" is the steering loop.
 
 ### Entities
 
@@ -87,7 +87,7 @@ Because entering *in progress* auto-starts, "stop, comment, rerun" is the steeri
 (a trip, a piece of writing, an area of life). Tasks can also belong to no project at all.
 
 **Task** — kind, optional project, status, title, brief, structured inputs, acceptance
-criteria, parent task. Carries comments, artifacts, and sessions.
+criteria, parent task. Carries messages, artifacts, and sessions.
 
 **Run** — one attempt by one agent, carrying its **role**: a worker run attempts a task, a
 manager run answers a thread. Append-only `run_events` with `pg_notify` on insert: the live
@@ -107,8 +107,8 @@ an absence. The dashboard lists them and lets you switch between them.
 data, generated output. Attaches to a task and can be fed as context into any later run on
 it. See *Artifacts* below.
 
-**Comment** — the task's conversation. Human, agent, and manager all write here; every
-comment records its author, and an agent comment also records which session and run it came
+**Task message** — the task's conversation. Human, agent, and manager all write here; every
+message records its author, and an agent message also records which session and run it came
 from. This is the cross-session channel (see *How agents talk back*).
 
 ### Tools are uniform
@@ -153,7 +153,7 @@ end up writing one value.
 
 The shape this enables, end to end: an implementation run opens a PR and the task lands in
 *review*. A **new** session reviews that PR with no memory of having written it. Its review
-becomes an artifact or a comment. The task goes back to *in progress*, and the **original**
+becomes an artifact or a message. The task goes back to *in progress*, and the **original**
 implementation session resumes, now with the review as its next prompt. Two sessions on one
 task, each doing what it is good at, both visible and switchable in the UI.
 
@@ -165,12 +165,12 @@ Two channels, deliberately not the same thing.
 ingested wholesale and rendered in the dashboard. Nobody decides what goes in; it is the
 full record, and it is where you go when you want to know what actually happened.
 
-**Comments** are deliberate and short. This is the task's conversation, and the only
-channel that crosses sessions. Agents get a comment tool and are expected to use it to say
+**Task messages** are deliberate and short. This is the task's conversation, and the only
+channel that crosses sessions. Agents get a message tool and are expected to use it to say
 the thing the next reader needs.
 
-**The final assistant message is auto-appended as a comment only if the run posted no
-comment of its own**, and it is flagged as auto-generated so the UI can collapse it. Always
+**The final assistant message is auto-appended as a message only if the run posted no
+message of its own**, and it is flagged as auto-generated so the UI can collapse it. Always
 appending it turns the thread into a dump of "I've updated the file, let me know if you
 need anything else", which duplicates the transcript. Never appending it means a run that
 forgets the tool leaves the task silent. The fallback rule gets both.
@@ -178,7 +178,7 @@ forgets the tool leaves the task silent. The fallback rule gets both.
 **The rule can also be enforced, on both harnesses.** Claude and Codex each expose a stop
 hook that fires when the agent tries to end its turn, receives the final assistant message,
 and can refuse — returning a reason that the agent then reads as its next prompt. So a run
-that finished without commenting gets sent back to write one. The input payload and the
+that finished without posting gets sent back to write one. The input payload and the
 refusal contract are compatible across the two, so one hook serves both. Cap it at a single
 retry; both harnesses flag a re-entered stop hook, and neither enforces a limit for you.
 
@@ -188,28 +188,28 @@ turn the Codex stop hook does not run at all, so enforcement covers clean comple
 crashes are handled by the orchestrator watching for the failure event, below. Keep the
 auto-append fallback regardless — enforcement is the belt, the fallback is the braces.
 
-**Attribution is what makes multiple sessions work.** Every comment carries an author —
+**Attribution is what makes multiple sessions work.** Every message carries an author —
 human, or an agent plus its session and run. The UI can then say "from the review session"
 rather than presenting one undifferentiated voice.
 
-**Each session carries a watermark**: the last comment it has seen. On resume, its prompt is
-every comment added since, each labelled with its author. That single mechanism covers the
+**Each session carries a watermark**: the last message it has seen. On resume, its prompt is
+every message added since, each labelled with its author. That single mechanism covers the
 whole review loop — the implementation session comes back and reads "the review session
 found X" and "you said Y", with no special-casing anywhere. It works unchanged for two
 sessions or ten.
 
 **Structured writes go through the same API the dashboard uses**, not through raw SQL. The
 gateway already exposes every operation; a run gets a token scoped to its own task, so it
-can update that task, comment on it, and attach artifacts, while only reading everything
+can update that task, post on it, and attach artifacts, while only reading everything
 else. Fields the UI renders (status, title, brief, PR link) are real columns. Anything else
 an agent wants to record goes in a `metadata` JSON blob — free to write, no migration, and
 a key that proves itself gets promoted to a column later.
 
-**Run lifecycle events are not comments.** Started, finished, failed, cost, duration live on
+**Run lifecycle events are not task messages.** Started, finished, failed, cost, duration live on
 the run and in `run_events`. The dashboard interleaves them into the thread for reading; the
-storage keeps them apart so the comment thread stays a conversation.
+storage keeps them apart so the message thread stays a conversation.
 
-**A crashed run posts its error as a comment and moves the task to *review* anyway.** No
+**A crashed run posts its error as a message and moves the task to *review* anyway.** No
 summarization, no auto-retry, no special failure state on the task — the error text lands
 in the thread, the session is marked failed, and a human decides. If that turns out to read
 badly in practice, summarizing the failure or having an agent respond to it are additive
@@ -476,7 +476,7 @@ force-sends by stopping the current turn and appending the message to the sessio
 exists in `telegram-claude` — port it, do not design it.
 
 Mid-run steering of a **worker** stays out of scope for v1 — Codex has no clean input path.
-Stop, comment, rerun, the same way a human interrupts.
+Stop, post, rerun, the same way a human interrupts.
 
 Stuck-run detection starts as a cheap heuristic: no file edits plus repeating tool
 signatures over N minutes → flag, let the manager decide.

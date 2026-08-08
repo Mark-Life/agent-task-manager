@@ -72,17 +72,6 @@ export {
   THREAD_TITLE_MAX_CHARS,
 } from "./repositories/chat-thread";
 export {
-  type AgentAuthor,
-  type CommentAppend,
-  type CommentAuthor,
-  CommentRepo,
-  type CommentWatermark,
-  type HumanAuthor,
-  type ManagerAuthor,
-  type OrchestratorAuthor,
-  type ThreadRef,
-} from "./repositories/comment";
-export {
   type ProjectCreate,
   type ProjectPatch,
   type ProjectRef,
@@ -112,5 +101,16 @@ export {
 } from "./repositories/task";
 export type { TaskBoardView } from "./repositories/task-board";
 export type { TaskPatch, TaskRef } from "./repositories/task-edit";
+export {
+  type AgentAuthor,
+  type HumanAuthor,
+  type ManagerAuthor,
+  type OrchestratorAuthor,
+  type TaskMessageAuthor,
+  type TaskMessagePost,
+  TaskMessageRepo,
+  type TaskMessageWatermark,
+  type ThreadRef,
+} from "./repositories/task-message";
 export { WorkspaceRepo } from "./repositories/workspace";
 export { chatStoreLayer, repositoriesLayer, storeLayer } from "./store";

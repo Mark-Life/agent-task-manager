@@ -89,7 +89,7 @@ at startup (`version`, git sha, `host`). Economics are nullable and stay null on
 outcomes — never a fabricated 0.
 
 **Rules that hold everywhere.** Content is measured, never carried: `promptChars`,
-`transcriptChars`, a hash — no prompts, transcripts, comment bodies, or file contents on an
+`transcriptChars`, a hash — no prompts, transcripts, message bodies, or file contents on an
 event. Every free-text field passes one pure, unit-tested sanitizer that collapses
 whitespace, redacts secret shapes, and clips to 240 chars. Emission is best-effort and
 wrapped in `Effect.ignoreCause` — telemetry can never abort or mask the work it describes.
@@ -160,7 +160,7 @@ network call.
 
 ## Phase 1 — Store and domain — **shipped**
 
-1. **Domain entities** in `packages/domain`: workspace, project, task, comment, session,
+1. **Domain entities** in `packages/domain`: workspace, project, task, task message, session,
    run, run event, run command, artifact, audit entry. Effect schemas, branded ids.
 2. **Status machine** as data, not conditionals: the five statuses, which transitions are
    legal, and which actor kinds may perform each. One place, used by every writer.
@@ -169,7 +169,7 @@ network call.
    is. Both are needed.
 4. **Drizzle schema and first migration.** `workspace_id` on every table from this
    migration, not a later one. Indexes for the queries the orchestrator and board actually
-   run: tasks by status, comments by task, run events by run.
+   run: tasks by status, messages by task, run events by run.
 5. **Task fields**: status, kind, project (nullable), repo (nullable), title, brief,
    acceptance, `metadata` JSON, `next_session` selection, PR link.
 6. **Session fields**: provider, provider session id, status (running / finished /
@@ -216,7 +216,7 @@ Port from `telegram-claude`, do not invent. Copy the provider abstraction and ad
 5. **Transcript reader** — parse the JSONL each harness writes into normalized records
    ready for the database.
 6. **Stop hook**: one script serving both harnesses, reading the final assistant message
-   and refusing turn-end when the run posted no comment. Single-retry cap.
+   and refusing turn-end when the run posted no message. Single-retry cap.
 7. **Codex hook trust flag** on every headless invocation, or hooks silently never fire.
 8. **Failure detection**: distinguish clean finish, failed turn, and abort-with-no-terminal-event.
 9. **Executor MCP wiring** — same server exposed to every provider.
@@ -318,11 +318,11 @@ the whole phase, which is what Phase 6 first built.
 6. **Run lifecycle**: create run row, start sandbox, stream normalized events into
    `run_events`, close out on terminal event.
 7. **Terminal handling**: clean finish moves the task to *review*; failure posts the error
-   as a comment and moves to *review* too, marking the session failed. Process gone with no
+   as a message and moves to *review* too, marking the session failed. Process gone with no
    terminal event counts as failure. The task move is the one branch that reads the role; a
    manager run ends the same way and moves no card.
-8. **Comment fallback**: auto-append the final assistant message when the run posted no
-   comment, flagged as auto-generated. A manager run's answer lands in its thread as a
+8. **Message fallback**: auto-append the final assistant message when the run posted no
+   message, flagged as auto-generated. A manager run's answer lands in its thread as a
    message the same way.
 9. **Transcript ingest** into sessions and messages after each run.
 10. **Artifact index rescan** of the task directory after each run.
@@ -339,7 +339,7 @@ the whole phase, which is what Phase 6 first built.
     attempt and max-attempts, `queueWaitMs`, `leaseDurationMs`, lane and pool depth at claim,
     outcome
     (`done | errored | parked | interrupted | skipped | lost`), rolled-up turn economics,
-    comment-fallback flag, artifact count written, `errorClass` / `errorMessage`. One emit
+    message-fallback flag, artifact count written, `errorClass` / `errorMessage`. One emit
     site, one row per run, never double-emitted on the park path.
 15. **Metrics** off that event: `runs_total` (role, outcome, provider, kind) — without the
     role tag "what did chat cost this week" is not a query — `retries_total`,
@@ -371,7 +371,7 @@ nothing.
 
 ## Phase 5 — Gateway — **shipped**
 
-1. **HttpApi contract** in `packages/api`: projects, tasks, comments, sessions, runs,
+1. **HttpApi contract** in `packages/api`: projects, tasks, messages, sessions, runs,
    artifacts, run commands, threads and thread messages, promotion. Every operation the
    dashboard and either role need — and because an agent's tools **are** this surface, a
    missing endpoint is a missing agent capability, not a coverage gap.
@@ -436,7 +436,7 @@ re-implemented here.
 6. **Notifications**: run finished, run failed, task needs review. Summaries and links, not
    raw tool calls. A manager run's terminal event is what puts its answer in the chat —
    end-of-turn sync, no mid-turn streaming into anything but Telegram's own draft.
-7. **Approval actions** on messages — move to *in progress*, approve, comment.
+7. **Approval actions** on messages — move to *in progress*, approve, post a message.
 8. **One live turn per thread**: a mid-turn message is stored and the person told it is
    queued, several queued messages coalesce into one prompt by the watermark that already
    feeds a resumed worker, and a Force Send button files a stop command. Ported from
@@ -451,7 +451,7 @@ re-implemented here.
     and exit code are **not** here — they are on the `atm.run` row this one points at.
 
 **Exit:** create a project, file three tasks, dispatch one, read its status, stop it,
-comment, and rerun — entirely by talking to the bot. Send a message while a turn is running:
+post a message, and rerun — entirely by talking to the bot. Send a message while a turn is running:
 it is queued, the reply says so, and the next turn answers it. Every manager turn leaves one
 `atm.run` row with `role: "manager"`, and `bun run logs` counts chat cost the same way it
 counts a worker's.
@@ -493,7 +493,7 @@ force a second thread model.
 
 1. **App shell**: auth, workspace context, routing, layout.
 2. **Board**: columns by status, drag between them, filters by project and kind.
-3. **Task detail**: brief, metadata, comments thread with authors, PR link.
+3. **Task detail**: brief, metadata, message thread with authors, PR link.
 4. **Sessions panel**: list with status, transcript viewer, next-session selector.
 5. **Run timeline**: the run's events, tool calls, cost, duration — synced at end of turn.
    No mid-turn streaming in v1; Telegram's own draft-editing is local to the bot and stays.

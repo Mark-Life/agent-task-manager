@@ -40,7 +40,7 @@ const LANGUAGES = [
  * One highlighter for the whole app.
  *
  * Building it walks the registry, so it is done once at module load rather
- * than per code block — a task with forty comments would otherwise build forty
+ * than per code block — a task with forty messages would otherwise build forty
  * identical ones.
  */
 export const highlighter = createHighlighter({

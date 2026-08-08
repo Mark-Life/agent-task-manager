@@ -80,7 +80,7 @@ const CODEX_COMMAND = "codex";
  * interactively — a per-run `CODEX_HOME` never has it. Without this flag the
  * hooks are silently skipped: no error, no non-zero exit, just a turn that ends
  * when the model wants it to. The stop hook is what forces a second turn out of
- * a run that posted no comment, so dropping this flag disables that check
+ * a run that posted no message, so dropping this flag disables that check
  * everywhere at once and looks like the model simply behaving well. The flag on
  * its own registers nothing: the definition it trusts is the
  * {@link CODEX_HOOKS_FILE} written into this run's `CODEX_HOME` below, and the
@@ -99,7 +99,7 @@ const JSON_FLAG = "--json";
 
 /**
  * The prompt argument that means "read it from stdin". Used on every
- * invocation: a brief plus its comment thread outgrows what an argument list
+ * invocation: a brief plus its message thread outgrows what an argument list
  * will carry, and an argument list is also world-readable in the process table.
  */
 const STDIN_PROMPT = "-";
@@ -292,7 +292,7 @@ const runCodex = (options: RunOptions) =>
     Effect.gen(function* () {
       // Before the child, because Codex reads its hooks out of `CODEX_HOME`
       // once at startup. A definition that cannot be written costs the run its
-      // stop hook and nothing else — the orchestrator's fallback comment covers
+      // stop hook and nothing else — the orchestrator's fallback message covers
       // the same rule from the other side — so it is a warning, not an ending.
       //
       // TODO: this writes a whole file into a directory every other container

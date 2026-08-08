@@ -1,10 +1,10 @@
 import type {
   AgentSessionId,
-  CommentAuthorKind,
-  CommentId,
-  CommentKind,
   RunId,
   TaskId,
+  TaskMessageAuthorKind,
+  TaskMessageId,
+  TaskMessageKind,
   UserId,
 } from "@workspace/domain";
 import { sql } from "drizzle-orm";
@@ -26,10 +26,14 @@ import { task } from "./task";
  * and short, unlike the transcript, which is captured wholesale — this is where
  * a run says the thing the next reader needs.
  *
+ * A row here is a **task message** everywhere above `packages/db/src/rows`. The
+ * table and its columns keep the older name because renaming them is a
+ * migration against a live board that buys nothing a mapping does not.
+ *
  * Append-only by convention: there is no `edited_at` because nothing edits a
- * comment. Attribution is what makes many sessions on one task readable, so an
- * agent comment names both the session that spoke and the attempt it spoke from,
- * and the UI can say "from the review session" instead of presenting one
+ * message. Attribution is what makes many sessions on one task readable, so an
+ * agent's message names both the session that spoke and the attempt it spoke
+ * from, and the UI can say "from the review session" instead of presenting one
  * undifferentiated voice.
  *
  * `author_user_id` has no foreign key, here and everywhere else: attribution
@@ -38,16 +42,16 @@ import { task } from "./task";
 export const comment = pgTable(
   "comment",
   {
-    ...mutableColumns<CommentId>(),
+    ...mutableColumns<TaskMessageId>(),
     agentSessionId: uuid("agent_session_id")
       .$type<AgentSessionId>()
       .references(() => agentSession.id, { onDelete: "set null" }),
-    authorKind: text("author_kind").$type<CommentAuthorKind>().notNull(),
+    authorKind: text("author_kind").$type<TaskMessageAuthorKind>().notNull(),
     authorUserId: text("author_user_id").$type<UserId>(),
     body: text("body").notNull(),
     // `fallback` is the auto-appended final message, collapsed by the UI;
     // `run_error` is a crashed run's error text and is never collapsed.
-    kind: text("kind").$type<CommentKind>().notNull().default("message"),
+    kind: text("kind").$type<TaskMessageKind>().notNull().default("message"),
     runId: uuid("run_id")
       .$type<RunId>()
       .references(() => run.id, { onDelete: "set null" }),
@@ -70,7 +74,7 @@ export const comment = pgTable(
       "comment_author_session_ck",
       sql`(${t.authorKind} = 'agent') = (${t.agentSessionId} is not null)`
     ),
-    // Renders the thread, and answers "comments since this session's watermark"
+    // Renders the thread, and answers "messages since this session's watermark"
     // in the same `(created_at, id)` order the watermark is compared in.
     index("comment_task_id_created_at_id_idx").on(t.taskId, t.createdAt, t.id),
     index("comment_agent_session_id_idx").on(t.agentSessionId),

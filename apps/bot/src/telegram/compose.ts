@@ -15,7 +15,7 @@
  * turn. *Cancel* drops it and nothing is written at all.
  *
  * **The buffer is per chat and in memory.** Same reasoning as the pending
- * comment beside it: it holds words a person has not decided to send yet, and a
+ * task message beside it: it holds words a person has not decided to send yet, and a
  * buffer that survived a restart would deliver, hours later, a message they
  * assumed was lost. A restart loses it, and the anchor message left in the chat
  * is answered with "that compose session has expired" rather than acted on.

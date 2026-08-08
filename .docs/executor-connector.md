@@ -45,7 +45,7 @@ Executor reads specs from its own network — that returned:
   "version": "0.0.1",
   "servers": [{ "url": "http://localhost:3199", "description": "This gateway" }],
   "operationCount": 32,
-  "tags": ["artifacts", "comments", "health", "projects", "runCommands", "runs", "sessions", "tasks"],
+  "tags": ["artifacts", "health", "messages", "projects", "runCommands", "runs", "sessions", "tasks"],
   "securitySchemes": [
     { "name": "readToken", "type": "http", "scheme": "Bearer", "bearerFormat": "opaque" },
     { "name": "sessionCookie", "type": "apiKey", "in": "cookie", "headerName": "better-auth.session_token" },
@@ -73,7 +73,7 @@ actually decides the connector's reach is which token you paste.
 | Connector's job | Scope | What it costs you if the agent is confused |
 | --- | --- | --- |
 | Read the board, summarise, report | `read` | Nothing. Every mutation 403s. |
-| File tasks, comment, steer runs, clear cards off the board | `task-write` | A wrong task edited — in the audit log, reversible. Or a wrong task *deleted*, with every comment, session and run under it: audited, and not reversible. |
+| File tasks, post messages, steer runs, clear cards off the board | `task-write` | A wrong task edited — in the audit log, reversible. Or a wrong task *deleted*, with every message, session and run under it: audited, and not reversible. |
 | Delete projects | `admin` | A project, and the workspace's own furniture. |
 
 **Read it twice before you hand out `task-write`.** Erasing a task lives under

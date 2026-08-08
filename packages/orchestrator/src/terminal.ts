@@ -17,26 +17,26 @@
  *
  * **A manager run ends here too, and takes the same path.** The run row, the
  * session ending, the economics and the wide event are shared; what a role
- * changes is only what the ending is written back to — a comment and a board
- * move for a task, a message for a conversation, which is `./chat-turn`. A run
+ * changes is only what the ending is written back to — a message and a board
+ * move for a task, a chat reply for a conversation, which is `./chat-turn`. A run
  * with no task makes no board move because there is no card to move, and that
  * is the one branch below.
  *
  * **Everything here is best-effort and loud.** The terminal path runs from an
  * `onExit`, which is also the interruption path, so a step that fails must not
- * take the remaining steps with it: a comment the database refused should not
+ * take the remaining steps with it: a message the database refused should not
  * be what leaves a task sitting in *in progress* forever. Each write is logged
  * at error level and reported as a flag on {@link TerminalReport}, so the loop
  * above can count what did not happen instead of discovering it a day later.
  *
- * **Lifecycle facts are not comments.** Started, finished, failed, cost and
+ * **Lifecycle facts are not task messages.** Started, finished, failed, cost and
  * duration go on the run row and into `run_events`; the thread stays a
- * conversation. The only two comments this file writes are the crash text and
- * the fallback — and the fallback exists because a run that forgets the comment
+ * conversation. The only two messages this file writes are the crash text and
+ * the fallback — and the fallback exists because a run that forgets the message
  * tool would otherwise leave the task silent.
  *
  * **The pull request is written here for the same reason the fallback is.** A
- * worker that opened one says so in its comment, in prose, and the card's own
+ * worker that opened one says so in its message, in prose, and the card's own
  * `prUrl` column stayed null on every task this board has ever run. Closing the
  * run asks GitHub what pull request the run's branch has and writes the answer
  * onto the task — see `pullRequestForBranch` — so the field is a fact the loop
@@ -47,13 +47,13 @@
 
 import {
   AgentSessionRepo,
-  CommentRepo,
   RunRepo,
+  TaskMessageRepo,
   TaskRepo,
   withActor,
 } from "@workspace/db";
-import type { CommentKind, RunOutcome } from "@workspace/domain";
-import { commentMarkerPathOf } from "@workspace/harness";
+import type { RunOutcome, TaskMessageKind } from "@workspace/domain";
+import { messageMarkerPathOf } from "@workspace/harness";
 import { pullRequestForBranch } from "@workspace/sandbox";
 import { Effect } from "effect";
 import { FileSystem } from "effect/FileSystem";
@@ -73,9 +73,9 @@ import { clipToBytes } from "./mapping";
 import type { WorkerAttachment } from "./subject";
 
 /**
- * How much of a final assistant message survives into a fallback comment.
+ * How much of a final assistant message survives into a fallback message.
  *
- * A comment is meant to be read, and a model asked to summarize its work at the
+ * A message is meant to be read, and a model asked to summarize its work at the
  * end of a long turn occasionally answers with the work. The full text is in
  * the transcript either way, so the thread keeps the first sixteen kilobytes
  * and says that it did — the same order of magnitude the domain allows one run
@@ -83,7 +83,7 @@ import type { WorkerAttachment } from "./subject";
  */
 const FALLBACK_BODY_BUDGET_BYTES = 16_384;
 
-/** Appended when a fallback comment was cut, so the reader knows where to look. */
+/** Appended when a fallback message was cut, so the reader knows where to look. */
 const TRUNCATION_NOTE =
   "\n\n— message clipped; the full text is in the transcript.";
 
@@ -91,7 +91,7 @@ const TRUNCATION_NOTE =
 const UNSTATED_FAILURE = "the run ended without reporting a reason";
 
 /**
- * Names the tools that post a comment on the task.
+ * Names the tools that post a message on the task.
  *
  * The orchestrator watches this run's own event stream for the tool result, so
  * the marker file the stop hook reads gets created on the host and the container
@@ -100,15 +100,17 @@ const UNSTATED_FAILURE = "the run ended without reporting a reason";
  * gateway's own API surface and the same operation exposed through an MCP server
  * that prefixes every name it serves.
  *
- * Over-matching is the safe direction: a run whose comment was miscounted as
- * posted loses a fallback comment, while an unrecognized comment tool means the
- * stop hook refuses a turn that had already done what it was asked.
+ * Over-matching is the safe direction, and this deliberately still does: it
+ * catches `messages_list` and a chat read as well as `messages_post`. A run
+ * whose message was miscounted as posted loses a fallback message, while an
+ * unrecognized posting tool means the stop hook refuses a turn that had already
+ * done what it was asked.
  */
-const COMMENT_TOOL_PATTERN = /comment/i;
+const MESSAGE_TOOL_PATTERN = /message/i;
 
-/** Whether a tool by this name posts a comment on the task. */
-export const isCommentTool = (toolName: string) =>
-  COMMENT_TOOL_PATTERN.test(toolName);
+/** Whether a tool by this name posts a message on the task. */
+export const isMessageTool = (toolName: string) =>
+  MESSAGE_TOOL_PATTERN.test(toolName);
 
 /**
  * Runs one terminal write, logging and swallowing anything it fails with.
@@ -139,21 +141,21 @@ const ALREADY_CLOSED = "already-closed" as const;
 const orAbsent = <A>(value: A | null) => value ?? undefined;
 
 /** The crash text, as the thread shows it. Already sanitized by `describeFailure`. */
-const errorCommentBody = (terminus: RunTerminus) => {
+const errorMessageBody = (terminus: RunTerminus) => {
   const { errorClass, errorMessage } = errorFieldsOf(terminus);
   return `**Run failed — ${errorClass ?? "Unknown"}**\n\n${errorMessage ?? UNSTATED_FAILURE}`;
 };
 
 /** The final assistant message, clipped, with the cut stated rather than implied. */
-const fallbackCommentBody = (text: string) => {
+const fallbackMessageBody = (text: string) => {
   const clipped = clipToBytes(text, FALLBACK_BODY_BUDGET_BYTES);
   return clipped.length === text.length ? clipped : clipped + TRUNCATION_NOTE;
 };
 
 /**
- * Says the comment came out of a file rather than off the wire.
+ * Says the message came out of a file rather than off the wire.
  *
- * Worth a line because the two are not the same claim. A comment the agent
+ * Worth a line because the two are not the same claim. A message the agent
  * posted is the agent choosing to say that; a handoff is a file the loop found
  * and attached, and a reader deciding whether to trust it wants to know which
  * they are looking at. The path is named so the artifact is findable beside it.
@@ -162,47 +164,47 @@ const handoffNote = (path: string) =>
   `_Attached from \`${path}\` — this run could not post it itself._\n\n`;
 
 /** A handoff as the card shows it: the note, then the file, clipped as one body. */
-const handoffCommentBody = (input: {
+const handoffMessageBody = (input: {
   readonly body: string;
   readonly path: string;
-}) => handoffNote(input.path) + fallbackCommentBody(input.body);
+}) => handoffNote(input.path) + fallbackMessageBody(input.body);
 
 /** Where this run's marker file lives on the host. */
 const markerPathOf = (context: DispatchContext) =>
-  commentMarkerPathOf(context.layout);
+  messageMarkerPathOf(context.layout);
 
 /**
- * Records that this run has commented, in the one place the stop hook looks.
+ * Records that this run has posted, in the one place the stop hook looks.
  *
  * Existence is the whole protocol — the contents are never read — so an empty
  * file is a complete implementation and a half-written one cannot be misread.
  * A failure to write it costs the enforcement, not the run: the fallback
- * comment covers the same rule from the other side, which is why this is
+ * message covers the same rule from the other side, which is why this is
  * swallowed rather than raised.
  */
-export const markCommentPosted = Effect.fn("Run.markCommentPosted")(function* (
+export const markMessagePosted = Effect.fn("Run.markMessagePosted")(function* (
   context: DispatchContext
 ) {
   const fs = yield* FileSystem;
   const path = markerPathOf(context);
   yield* fs.writeFileString(path, "").pipe(
     Effect.tapError((cause) =>
-      Effect.logWarning("comment marker not written", { cause, path })
+      Effect.logWarning("message marker not written", { cause, path })
     ),
     Effect.ignore
   );
 });
 
 /**
- * Whether this run posted a comment, as the marker file reports it.
+ * Whether this run posted a message, as the marker file reports it.
  *
  * Read at close as well as tracked through the stream, because the marker has
  * two authors: the loop creates it on seeing the tool result, and a provider
- * that wires the comment tool in-process may create it directly. An unreadable
- * marker answers false — which costs a duplicate-looking fallback comment, and
+ * that wires the message tool in-process may create it directly. An unreadable
+ * marker answers false — which costs a duplicate-looking fallback message, and
  * never a task left silent.
  */
-export const commentMarkerSeen = Effect.fn("Run.commentMarkerSeen")(function* (
+export const messageMarkerSeen = Effect.fn("Run.messageMarkerSeen")(function* (
   context: DispatchContext
 ) {
   const fs = yield* FileSystem;
@@ -215,8 +217,6 @@ export const commentMarkerSeen = Effect.fn("Run.commentMarkerSeen")(function* (
 export interface RunClosure {
   /** The branch the checkout pushed, or null for a run with no repo. */
   readonly branch: string | null;
-  /** Whether the run posted a comment of its own. Decides the fallback. */
-  readonly commentPosted: boolean;
   readonly context: DispatchContext;
   /**
    * Where the artifacts tree lives, which is where a run that could not reach
@@ -225,6 +225,8 @@ export interface RunClosure {
    * of it rather than anything under it.
    */
   readonly dataRoot: string;
+  /** Whether the run posted a message of its own. Decides the fallback. */
+  readonly messagePosted: boolean;
   readonly terminus: RunTerminus;
 }
 
@@ -237,17 +239,17 @@ export interface RunClosure {
 export interface TerminalReport {
   /** Whether the manager's answer reached its conversation. False on every worker run. */
   readonly answerStored: boolean;
-  /** Whether the run had commented by the time it ended, marker included. */
-  readonly commentPosted: boolean;
-  readonly errorCommented: boolean;
-  readonly fallbackCommented: boolean;
+  readonly errorPosted: boolean;
+  readonly fallbackPosted: boolean;
   /**
-   * Whether the fallback comment came off disk rather than out of the stream.
+   * Whether the fallback message came off disk rather than out of the stream.
    * Counted separately because it is the one that says the board write path
    * failed and the recovery worked — the number an operator wants is how often
-   * that happens, not how often a comment was posted for a run.
+   * that happens, not how often a message was posted for a run.
    */
   readonly handoffAttached: boolean;
+  /** Whether the run had posted by the time it ended, marker included. */
+  readonly messagePosted: boolean;
   readonly outcome: RunOutcome;
   /**
    * The pull request the task's own column holds now that the run has closed,
@@ -266,14 +268,14 @@ export interface TerminalReport {
   readonly transitioned: boolean;
 }
 
-/** The two comment kinds this file writes, named where they are decided. */
-const ERROR_COMMENT: CommentKind = "run_error";
-const FALLBACK_COMMENT: CommentKind = "fallback";
+/** The two message kinds this file writes, named where they are decided. */
+const ERROR_MESSAGE_KIND: TaskMessageKind = "run_error";
+const FALLBACK_MESSAGE_KIND: TaskMessageKind = "fallback";
 
 /** What a worker run's ending wrote onto its task. */
 interface BoardWrites {
-  readonly errorCommented: boolean;
-  readonly fallbackCommented: boolean;
+  readonly errorPosted: boolean;
+  readonly fallbackPosted: boolean;
   readonly handoffAttached: boolean;
   readonly prUrl: string | null;
   readonly transitioned: boolean;
@@ -285,8 +287,8 @@ interface BoardWrites {
  * the column", and a run with no column is not.
  */
 const NO_BOARD_WRITES: BoardWrites = {
-  errorCommented: false,
-  fallbackCommented: false,
+  errorPosted: false,
+  fallbackPosted: false,
   handoffAttached: false,
   prUrl: null,
   transitioned: true,
@@ -304,7 +306,7 @@ const NO_BOARD_WRITES: BoardWrites = {
  * this link is every rerun after the first, and an `UPDATE` per rerun would be
  * an audit entry per rerun recording that nothing moved.
  *
- * Best-effort in both halves and deliberately after the comments: the link is in
+ * Best-effort in both halves and deliberately after the messages: the link is in
  * the thread already, posted by the agent or by the fallback, so a GitHub that
  * will not answer or a write the database refuses costs the structured field and
  * never the link itself.
@@ -342,9 +344,9 @@ const recordPullRequest = Effect.fnUntraced(function* (input: {
 });
 
 /**
- * The two comments and the board move, for a run that has a task.
+ * The two messages and the board move, for a run that has a task.
  *
- * The comments land before the transition, so a dashboard that reacts to the
+ * The messages land before the transition, so a dashboard that reacts to the
  * status change finds the thread already complete.
  */
 const closeOnTask = Effect.fnUntraced(function* (input: {
@@ -353,7 +355,7 @@ const closeOnTask = Effect.fnUntraced(function* (input: {
 }) {
   const { closure } = input;
   const { context, terminus } = closure;
-  const comments = yield* CommentRepo;
+  const messages = yield* TaskMessageRepo;
   const tasks = yield* TaskRepo;
 
   const asActor = withActor(context.actor);
@@ -361,18 +363,18 @@ const closeOnTask = Effect.fnUntraced(function* (input: {
   const workspaceId = workspaceIdOf(context);
   const sessionId = sessionIdOf(context);
 
-  // The crash comment. Authored by the orchestrator rather than by the agent,
+  // The crash message. Authored by the orchestrator rather than by the agent,
   // because the run that produced the error is the one that could not write it.
-  const errorComment = isFailure(terminus)
+  const errorMessage = isFailure(terminus)
     ? yield* asActor(
-        comments.append({
+        messages.post({
           author: { kind: "orchestrator", runId: context.runId },
-          body: errorCommentBody(terminus),
-          kind: ERROR_COMMENT,
+          body: errorMessageBody(terminus),
+          kind: ERROR_MESSAGE_KIND,
           taskId,
           workspaceId,
         })
-      ).pipe(bestEffort("posting the crash comment"))
+      ).pipe(bestEffort("posting the crash message"))
     : null;
 
   // The braces to the stop hook's belt, from whichever source still has the
@@ -387,43 +389,43 @@ const closeOnTask = Effect.fnUntraced(function* (input: {
   // Read even when there is nothing to fall back to otherwise — a run killed
   // mid-sentence has no final message at all, and its handoff is the only
   // thing left of it.
-  const handoff = closure.commentPosted
+  const handoff = closure.messagePosted
     ? null
     : yield* readHandoff({ dataRoot: closure.dataRoot, taskId }).pipe(
         bestEffort("reading the handoff off disk")
       );
 
-  // An empty final message is a run that had nothing to add, not a comment
+  // An empty final message is a run that had nothing to add, not a message
   // worth collapsing in the UI. A handoff is never empty — `readHandoff`
   // answers null for a blank file.
   const fallbackBody = (() => {
-    if (closure.commentPosted) {
+    if (closure.messagePosted) {
       return null;
     }
     if (handoff !== null) {
-      return handoffCommentBody(handoff);
+      return handoffMessageBody(handoff);
     }
     return terminus.finalText.trim().length > 0
-      ? fallbackCommentBody(terminus.finalText)
+      ? fallbackMessageBody(terminus.finalText)
       : null;
   })();
 
-  const fallbackComment =
+  const fallbackMessage =
     fallbackBody === null
       ? null
       : yield* asActor(
-          comments.append({
+          messages.post({
             author: { kind: "agent", runId: context.runId, sessionId },
             body: fallbackBody,
-            kind: FALLBACK_COMMENT,
+            kind: FALLBACK_MESSAGE_KIND,
             taskId,
             workspaceId,
           })
-        ).pipe(bestEffort("posting the fallback comment"));
+        ).pipe(bestEffort("posting the fallback message"));
 
   // Before the move, so a dashboard woken by the status change finds the card
   // already carrying its link — the same ordering, and the same reason, as the
-  // comments above.
+  // messages above.
   const prUrl = yield* recordPullRequest({
     closure,
     task: input.attached.task,
@@ -437,9 +439,9 @@ const closeOnTask = Effect.fnUntraced(function* (input: {
   ).pipe(bestEffort("moving the task to review"));
 
   return {
-    errorCommented: errorComment !== null,
-    fallbackCommented: fallbackComment !== null,
-    handoffAttached: handoff !== null && fallbackComment !== null,
+    errorPosted: errorMessage !== null,
+    fallbackPosted: fallbackMessage !== null,
+    handoffAttached: handoff !== null && fallbackMessage !== null,
     prUrl,
     transitioned: moved !== null,
   } satisfies BoardWrites;
@@ -453,9 +455,9 @@ const closeOnTask = Effect.fnUntraced(function* (input: {
  * first, because the interface reading it is woken by an event this path has
  * not caught up with yet and uses the closed run row as the signal that it has
  * — see `closeChatTurn`. The run row closes next, so the work stops looking
- * live the moment anything else is written at all, and a task's comments and
+ * live the moment anything else is written at all, and a task's messages and
  * board move follow it — see {@link closeOnTask}. The session ends last,
- * because a failed session's message is the same text the crash comment carries
+ * because a failed session's message is the same text the crash message carries
  * and writing it twice from two places is how the two come to differ.
  *
  * Total by construction: every failure is logged and reported as a flag. The
@@ -544,7 +546,7 @@ export const closeRun = Effect.fn("Run.close")(function* (closure: RunClosure) {
     bestEffort("closing the run row")
   );
 
-  // The other half of what the ending is written back to: a task's comments and
+  // The other half of what the ending is written back to: a task's messages and
   // its board move. After the close, so the card stops looking live the moment
   // anything at all is written, and before the session ends, so a dashboard
   // reacting to either finds the record already complete.
@@ -565,10 +567,10 @@ export const closeRun = Effect.fn("Run.close")(function* (closure: RunClosure) {
 
   return {
     answerStored,
-    commentPosted: closure.commentPosted,
-    errorCommented: board.errorCommented,
-    fallbackCommented: board.fallbackCommented,
+    errorPosted: board.errorPosted,
+    fallbackPosted: board.fallbackPosted,
     handoffAttached: board.handoffAttached,
+    messagePosted: closure.messagePosted,
     outcome,
     prUrl: board.prUrl,
     runClosed: closed !== null,

@@ -2,7 +2,7 @@
  * The board's write surface, through the HTTP layer and against a real
  * database.
  *
- * Projects, tasks and comments are tested together because they are one
+ * Projects, tasks and messages are tested together because they are one
  * surface: filing a task, moving it, ordering it and saying something on it are
  * the operations the dashboard drags and the manager agent calls, and the whole
  * design is that those are the same write. Testing them through the router
@@ -29,13 +29,13 @@ import {
   AdminAccess,
   Api,
   BoardColumn,
-  Comment,
   Principal,
   type PrincipalShape,
   Project,
   ReadAccess,
   Task,
   TaskDetail,
+  TaskMessage,
   TaskWriteAccess,
 } from "@workspace/api";
 import {
@@ -543,32 +543,32 @@ describe("tasks", () => {
   });
 });
 
-describe("comments", () => {
-  test("signs a comment with the credential, not with the body", async () => {
+describe("task messages", () => {
+  test("signs a message with the credential, not with the body", async () => {
     const filed = await fileTask({ title: "board test thread" });
 
     const posted = await bodyOf(
-      await call("POST", `/tasks/${filed.id}/comments`, {
+      await call("POST", `/tasks/${filed.id}/messages`, {
         authorKind: "agent",
         authorUserId: "somebody-else",
         body: "the first thing said",
       }),
-      Comment
+      TaskMessage
     );
     expect(posted.authorKind).toBe("human");
     expect(posted.authorUserId).toBe(human.userId);
     expect(posted.agentSessionId).toBeNull();
     expect(posted.kind).toBe("message");
 
-    await call("POST", `/tasks/${filed.id}/comments`, {
+    await call("POST", `/tasks/${filed.id}/messages`, {
       body: "the second thing said",
     });
 
     const thread = await bodyOf(
-      await call("GET", `/tasks/${filed.id}/comments`),
-      Schema.Array(Comment)
+      await call("GET", `/tasks/${filed.id}/messages`),
+      Schema.Array(TaskMessage)
     );
-    expect(thread.map((comment) => comment.body)).toEqual([
+    expect(thread.map((message) => message.body)).toEqual([
       "the first thing said",
       "the second thing said",
     ]);
@@ -577,10 +577,10 @@ describe("comments", () => {
   test("answers 404 on a thread whose task is not there", async () => {
     const missing = newTaskId();
 
-    const read = await call("GET", `/tasks/${missing}/comments`);
+    const read = await call("GET", `/tasks/${missing}/messages`);
     expect(read.status).toBe(404);
 
-    const posted = await call("POST", `/tasks/${missing}/comments`, {
+    const posted = await call("POST", `/tasks/${missing}/messages`, {
       body: "into the void",
     });
     expect(posted.status).toBe(404);
@@ -593,7 +593,7 @@ describe("the audit trail", () => {
     const filed = await fileTask({ title: "board test attribution" });
     await call("PATCH", `/tasks/${filed.id}`, { brief: "edited" });
     await call("POST", `/tasks/${filed.id}/status`, { to: "backlog" });
-    await call("POST", `/tasks/${filed.id}/comments`, { body: "said" });
+    await call("POST", `/tasks/${filed.id}/messages`, { body: "said" });
 
     const entries = await auditOf(filed.id);
 
@@ -610,6 +610,8 @@ describe("the audit trail", () => {
     const update = entries.find((entry) => entry.action === "update");
     expect(update?.changes.brief?.to).toBe("edited");
 
+    // `comment` is the table, and an audit row names tables. The message the
+    // call above posted is this row.
     expect(
       entries.filter((entry) => entry.entityType === "comment")
     ).toHaveLength(1);

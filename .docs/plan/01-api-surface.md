@@ -77,7 +77,7 @@ external consumer.
 
 ## The thread group
 
-Groups today: `artifacts`, `comments`, `health`, `projects`, `run-commands`, `runs`,
+Groups today: `artifacts`, `health`, `messages`, `projects`, `run-commands`, `runs`,
 `sessions`, `tasks` — the board, and nothing else. **A conversation is not a board card**, so
 it needs its own group, or a thread started in Telegram is unreachable from anywhere else and
 the manager cannot read its own history.

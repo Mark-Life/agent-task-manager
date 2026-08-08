@@ -6,13 +6,13 @@ import { HANDOFF_FILENAME, TaskId } from "@workspace/domain";
 import { spawn } from "bun";
 import {
   ALLOW_TURN_END,
-  COMMENT_MARKER_ENV_VAR,
-  COMMENT_MARKER_FILE,
-  commentMarkerPath,
-  commentMarkerPathOf,
-  commentRuleApplies,
   decideStop,
-  NO_COMMENT_REFUSAL,
+  MESSAGE_MARKER_ENV_VAR,
+  MESSAGE_MARKER_FILE,
+  messageMarkerPath,
+  messageMarkerPathOf,
+  messageRuleApplies,
+  NO_MESSAGE_REFUSAL,
   parseStopHookPayload,
   STOP_HOOK_COMMAND_ENV_VAR,
   type StopHookPayload,
@@ -44,8 +44,8 @@ const codexPayload = {
   turn_id: "turn_7",
 } as const;
 
-const decided = (payload: StopHookPayload | null, commentPosted: boolean) =>
-  decideStop({ commentPosted, payload });
+const decided = (payload: StopHookPayload | null, messagePosted: boolean) =>
+  decideStop({ messagePosted, payload });
 
 describe("parseStopHookPayload", () => {
   test("reads the claude payload", () => {
@@ -81,31 +81,31 @@ describe("parseStopHookPayload", () => {
 });
 
 describe("decideStop", () => {
-  test("refuses a first ending with no comment", () => {
+  test("refuses a first ending with no message", () => {
     expect(decided(claudePayload, false)).toEqual({
       kind: "refuse",
-      reason: NO_COMMENT_REFUSAL,
+      reason: NO_MESSAGE_REFUSAL,
     });
   });
 
-  test("allows once the run has commented", () => {
+  test("allows once the run has posted", () => {
     expect(decided(claudePayload, true)).toEqual({
       kind: "allow",
-      why: "comment_posted",
+      why: "message_posted",
     });
   });
 
-  test("allows a re-entered hook that still has no comment: the retry cap", () => {
+  test("allows a re-entered hook that still has no message: the retry cap", () => {
     expect(
       decided({ ...claudePayload, stop_hook_active: true }, false)
     ).toEqual({ kind: "allow", why: "retry_spent" });
   });
 
-  test("prefers the comment over the spent retry when both hold", () => {
+  test("prefers the message over the spent retry when both hold", () => {
     expect(decided({ ...claudePayload, stop_hook_active: true }, true)).toEqual(
       {
         kind: "allow",
-        why: "comment_posted",
+        why: "message_posted",
       }
     );
   });
@@ -122,21 +122,21 @@ describe("decideStop", () => {
   });
 
   test("gives an agent that cannot reach the board a way to comply", () => {
-    // The refusal is read by an agent that has just failed to post a comment,
+    // The refusal is read by an agent that has just failed to post a message,
     // and one reason for that is a board it can no longer reach. Without this
     // it is told to do the one thing it has already found it cannot do.
-    expect(NO_COMMENT_REFUSAL).toContain(HANDOFF_FILENAME);
-    expect(NO_COMMENT_REFUSAL).toContain(
+    expect(NO_MESSAGE_REFUSAL).toContain(HANDOFF_FILENAME);
+    expect(NO_MESSAGE_REFUSAL).toContain(
       "read off the disk and posted for you"
     );
   });
 
-  test("asks for a short comment rather than topics to cover at length", () => {
-    // This arrives as the prompt the comment is written from, so a refusal that
+  test("asks for a short message rather than topics to cover at length", () => {
+    // This arrives as the prompt the message is written from, so a refusal that
     // named what to cover and nothing about size would be the last word on it.
-    expect(NO_COMMENT_REFUSAL).toContain("the outcome in a sentence");
-    expect(NO_COMMENT_REFUSAL).toContain("a link to where the detail lives");
-    expect(NO_COMMENT_REFUSAL).toContain("Do not restate what you linked");
+    expect(NO_MESSAGE_REFUSAL).toContain("the outcome in a sentence");
+    expect(NO_MESSAGE_REFUSAL).toContain("a link to where the detail lives");
+    expect(NO_MESSAGE_REFUSAL).toContain("Do not restate what you linked");
   });
 });
 
@@ -145,7 +145,7 @@ describe("stopHookResponseOf", () => {
     const response = stopHookResponseOf(decided(claudePayload, false));
     expect(response.decision).toBe("block");
     expect(response.reason?.length).toBeGreaterThan(0);
-    expect(response.reason).toBe(NO_COMMENT_REFUSAL);
+    expect(response.reason).toBe(NO_MESSAGE_REFUSAL);
   });
 
   test("never aborts the run when it refuses a turn", () => {
@@ -162,44 +162,44 @@ describe("stopHookResponseOf", () => {
   });
 });
 
-describe("commentMarkerPath", () => {
+describe("messageMarkerPath", () => {
   test("defaults to the run directory inside the container", () => {
-    expect(commentMarkerPath({})).toBe("/run/comment-posted");
+    expect(messageMarkerPath({})).toBe("/run/message-posted");
   });
 
   test("takes the override when one is set", () => {
     expect(
-      commentMarkerPath({ [COMMENT_MARKER_ENV_VAR]: " /tmp/run-9/marker " })
+      messageMarkerPath({ [MESSAGE_MARKER_ENV_VAR]: " /tmp/run-9/marker " })
     ).toBe("/tmp/run-9/marker");
   });
 
   test("treats a blank override as unset", () => {
-    expect(commentMarkerPath({ [COMMENT_MARKER_ENV_VAR]: "  " })).toBe(
-      "/run/comment-posted"
+    expect(messageMarkerPath({ [MESSAGE_MARKER_ENV_VAR]: "  " })).toBe(
+      "/run/message-posted"
     );
   });
 
   test("sits beside the event log of whichever layout is asked", () => {
     expect(
-      commentMarkerPathOf({
+      messageMarkerPathOf({
         eventLogPath: "/data/runs/r1/events.jsonl",
         runDir: "/data/runs/r1",
       })
-    ).toBe("/data/runs/r1/comment-posted");
+    ).toBe("/data/runs/r1/message-posted");
   });
 });
 
-describe("commentRuleApplies", () => {
-  test("holds for a turn that has a task to comment on", () => {
+describe("messageRuleApplies", () => {
+  test("holds for a turn that has a task to post on", () => {
     expect(
-      commentRuleApplies({
+      messageRuleApplies({
         taskId: TaskId.make("019fbfd0-0000-7000-8000-0000000000bb"),
       })
     ).toBe(true);
   });
 
   test("does not hold for a manager turn, which has no card", () => {
-    expect(commentRuleApplies({ taskId: null })).toBe(false);
+    expect(messageRuleApplies({ taskId: null })).toBe(false);
   });
 });
 
@@ -242,7 +242,7 @@ describe("the hook as a process", () => {
     readonly payload: Readonly<Record<string, unknown>>;
   }) => {
     const child = spawn(["bun", script], {
-      env: { ...process.env, [COMMENT_MARKER_ENV_VAR]: options.markerPath },
+      env: { ...process.env, [MESSAGE_MARKER_ENV_VAR]: options.markerPath },
       stdin: new TextEncoder().encode(JSON.stringify(options.payload)),
       stdout: "pipe",
     });
@@ -252,21 +252,21 @@ describe("the hook as a process", () => {
   };
 
   /** A path nothing has created, so the marker is absent rather than stale. */
-  const absentMarker = join(tmpdir(), "atm-no-such-run", COMMENT_MARKER_FILE);
+  const absentMarker = join(tmpdir(), "atm-no-such-run", MESSAGE_MARKER_FILE);
 
-  test("refuses a first ending with no comment posted", async () => {
+  test("refuses a first ending with no message posted", async () => {
     const answer = await ask({
       markerPath: absentMarker,
       payload: claudePayload,
     });
     expect(answer.decision).toBe("block");
-    expect(answer.reason).toBe(NO_COMMENT_REFUSAL);
+    expect(answer.reason).toBe(NO_MESSAGE_REFUSAL);
   });
 
   test("allows the ending once the marker is there", async () => {
     const markerPath = join(
       mkdtempSync(join(tmpdir(), "atm-stop-hook-")),
-      COMMENT_MARKER_FILE
+      MESSAGE_MARKER_FILE
     );
     writeFileSync(markerPath, "");
     try {
@@ -297,7 +297,7 @@ describe("the hook as a process", () => {
       return;
     }
     const child = spawn(["bun", bundle, STOP_HOOK_FLAG], {
-      env: { ...process.env, [COMMENT_MARKER_ENV_VAR]: absentMarker },
+      env: { ...process.env, [MESSAGE_MARKER_ENV_VAR]: absentMarker },
       stdin: new TextEncoder().encode(JSON.stringify(claudePayload)),
       stdout: "pipe",
     });
@@ -310,7 +310,7 @@ describe("the hook as a process", () => {
 
   test("allows rather than wedges when stdin holds nothing it can read", async () => {
     const child = spawn(["bun", script], {
-      env: { ...process.env, [COMMENT_MARKER_ENV_VAR]: absentMarker },
+      env: { ...process.env, [MESSAGE_MARKER_ENV_VAR]: absentMarker },
       stdin: new TextEncoder().encode("not json"),
       stdout: "pipe",
     });

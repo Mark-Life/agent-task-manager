@@ -27,7 +27,7 @@ const STDIN_FD = 0;
  * hook that fails open on purpose — an unreadable payload must never be the
  * thing that wedges a run — so an empty read is not an error anywhere. It is a
  * refusal silently becoming an allow: nothing throws, nothing is logged, and the
- * only symptom is turns ending without the comment the hook exists to require.
+ * only symptom is turns ending without the message the hook exists to require.
  *
  * Blocking costs nothing here. The process was started to answer one question,
  * the payload is already in the pipe, and there is nothing else for it to do

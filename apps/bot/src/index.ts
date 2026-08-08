@@ -12,7 +12,7 @@
  * meant to open.
  *
  * **Three pieces of per-chat state are built here and shared by name.** The
- * queue notices, the armed comments and the compose buffers are each one map
+ * queue notices, the armed messages and the compose buffers are each one map
  * per process, created once and handed to whichever handlers need them —
  * compose to all three of the router, the commands and the taps, because the
  * mode is opened by a command, fed by the router and released by a button.
@@ -64,7 +64,7 @@ import { registerCallbacks } from "./telegram/callbacks";
 import { publishBotCommands, registerCommands } from "./telegram/commands";
 import { makeComposeBuffers } from "./telegram/compose";
 import type { BotContext } from "./telegram/context";
-import { makeDispatcher, makePendingComments } from "./telegram/dispatch";
+import { makeDispatcher, makePendingMessages } from "./telegram/dispatch";
 import { registerIntake } from "./telegram/intake";
 import { makeKeyboardRefresh } from "./telegram/keyboard";
 
@@ -173,7 +173,7 @@ export const registerHandlers = Effect.fnUntraced(function* (
   const compose = makeComposeBuffers();
   const keyboards = makeKeyboardRefresh();
   const notices = makeQueueNotices();
-  const pending = makePendingComments();
+  const pending = makePendingMessages();
   const dispatcher = yield* makeDispatcher({
     api: telegram.api,
     botToken: wiring.botToken,

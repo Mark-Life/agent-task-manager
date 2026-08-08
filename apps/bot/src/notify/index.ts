@@ -6,7 +6,7 @@
  * renderer writes it, and the sender claims it in the ledger before it goes
  * out.
  *
- * The way back is not here. A tapped *Start*, *Approve* or *Comment* on one of
+ * The way back is not here. A tapped *Start*, *Approve* or *Message* on one of
  * these messages is an ordinary callback, answered by `telegram/callbacks` over
  * `telegram/board` with a manager token carrying the chat's thread — which is
  * what makes the *next* notice about that task come back to this conversation.

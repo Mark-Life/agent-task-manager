@@ -4,8 +4,8 @@
  *
  * The check is about the loop and about the container, never about a model, so
  * the provider is scripted: three events, one artifact file, and a final
- * message that becomes the run's fallback comment. Everything downstream — the
- * event file, `run_events`, the terminus, the comment, the artifact index, the
+ * message that becomes the run's fallback message. Everything downstream — the
+ * event file, `run_events`, the terminus, the message, the artifact index, the
  * two `atm.run` rows — is driven by that stream, so a scripted one exercises
  * the whole lifecycle at no cost.
  *
@@ -38,9 +38,9 @@ export const ARTIFACT_FILE = "stub-run-output.md";
 export const STUB_TRANSCRIPT_TEXT =
   "Written into the run's own agent home, the way a provider writes its transcript.";
 
-/** The stub's answer, which becomes the run's fallback comment. */
+/** The stub's answer, which becomes the run's fallback message. */
 export const STUB_FINAL_TEXT =
-  "Stubbed turn: nothing was asked of a model, and this text is what the fallback comment carries.";
+  "Stubbed turn: nothing was asked of a model, and this text is what the fallback message carries.";
 
 /** The model the stub claims to be, so the run row carries one to assert on. */
 export const STUB_MODEL = "stub-1";

@@ -7,7 +7,7 @@ a `role: manager` run and writes the answer back as another row. The bot renders
 
 **The boundary.** The bot owns the conversation and the gateway owns the board. `chat_thread`,
 `chat_message` and `chat_notification` are read and written directly, on the bot's own pool.
-Every project, task, comment and run command a *tapped button* asks for goes over the gateway
+Every project, task, message and run command a *tapped button* asks for goes over the gateway
 with a freshly minted `manager` token carrying the conversation that caused it, so
 `actor_thread_id` lands on the audit row and a later notice about that task comes back to the
 same chat. There is no third path, and it is a compile error rather than a rule: the bot's
@@ -23,7 +23,7 @@ anyway and answered with one line saying how many are waiting, carrying a *Force
 a second one edits that line rather than sending another. The button files a `stop` run command
 naming the thread, so the turn closes as `interrupted` and everything said since it started is
 still unread — which is what the next turn reads. Nothing coalesces messages in the bot: a
-watermark does it, the same one that gives a resumed worker every comment since it last looked.
+watermark does it, the same one that gives a resumed worker every message since it last looked.
 A conversation opened over `POST /threads` from a dashboard behaves identically, because it is
 the same row and the same trigger.
 
@@ -46,7 +46,7 @@ had been sent alone, so `/compose` around a single message changes nothing.
 Order is Telegram's `message_id`, not the order this process finished with each
 one: a voice note takes seconds to transcribe and the sentence typed behind it
 does not. The buffer is per chat, in memory, and idle for thirty minutes ends
-it — the same reasoning as the armed *Comment* beside it, and the message that
+it — the same reasoning as the armed *Message* beside it, and the message that
 finds a session expired is told so and then handled on its own. A second
 `/compose` keeps the words and moves the buttons to the bottom of the chat,
 stripping the old message's, so there is never more than one live *Send*.
@@ -54,7 +54,7 @@ stripping the old message's, so there is never more than one live *Send*.
 **What it says without being asked.** A run that finishes, fails or lands in review wakes the
 listener on `atm_run_event` — the same channel the loop publishes on, not a second poller. A
 terminal event carrying a task is a notice into the conversation that asked for the work, with
-*Start* / *Approve* / *Comment* buttons; one carrying none is a manager turn ending, and its
+*Start* / *Approve* / *Message* buttons; one carrying none is a manager turn ending, and its
 answer goes into its thread. `chat_notification` is a claim ledger keyed on
 `${kind}:${taskId}:${runId}`, so a restart between claim and send re-sends rather than losing
 it, and a duplicate is the failure it chooses. Beside it, a scan looks at live runs every

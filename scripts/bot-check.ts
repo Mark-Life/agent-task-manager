@@ -353,10 +353,10 @@ const stubBoardLayer = (calls: BoardCall[]) => {
         return { rejectedReason: null } as A;
       });
   const board = {
-    addComment: record("addComment"),
     listTasks: record("listTasks"),
     moveTask: record("moveTask"),
     placeTask: record("placeTask"),
+    postMessage: record("postMessage"),
     rerunTask: record("rerunTask"),
     stopRun: record("stopRun"),
     stopThread: record("stopThread"),
@@ -638,7 +638,7 @@ const pureClaims = Effect.gen(function* () {
  * `open` with no chat — because that is the row whose absence from `/threads`
  * this claim is about. The list has to hold it while the chat's own list does
  * not, which is the difference between the two reads stated as a claim rather
- * than as a comment; and the tap has to bind it, because a conversation with no
+ * than as a task message; and the tap has to bind it, because a conversation with no
  * chat is one whose next answer `deliverAnswer` drops.
  */
 const dashboardThreadClaims = (options: {

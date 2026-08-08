@@ -38,7 +38,7 @@ import {
   showCompose,
 } from "./compose";
 import type { BotContext } from "./context";
-import type { Dispatcher, PendingComments } from "./dispatch";
+import type { Dispatcher, PendingMessages } from "./dispatch";
 import { italic } from "./format";
 import { escapeHtml } from "./helpers";
 import {
@@ -74,7 +74,7 @@ export interface CallbackOptions {
   readonly bot: Bot<BotContext>;
   /** The per-chat compose buffers the two compose buttons act on. */
   readonly compose: ComposeBuffers;
-  readonly pending: PendingComments;
+  readonly pending: PendingMessages;
   /** The router's own append, so a released batch takes the path a message takes. */
   readonly submitCompose: Dispatcher["submitCompose"];
 }
@@ -160,7 +160,7 @@ export const registerCallbacks = Effect.fnUntraced(function* (
 
     if (data.verb === "cadd") {
       pending.arm({ chatId: ctx.chat?.id ?? 0, taskId: data.taskId });
-      yield* answer(ctx, "Send the comment as your next message.");
+      yield* answer(ctx, "Send it as your next message.");
       return;
     }
 

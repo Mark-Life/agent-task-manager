@@ -11,14 +11,14 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  type Comment,
   HANDOFF_FILENAME,
   newAgentSessionId,
-  newCommentId,
   newProjectId,
   newTaskId,
+  newTaskMessageId,
   type Project,
   type Task,
+  type TaskMessage,
   UserId,
   WorkspaceId,
 } from "@workspace/domain";
@@ -30,7 +30,7 @@ import {
   SHARED_RULES,
   WRITING_RULES,
 } from "./rules";
-import { buildWorkerPrompt, commentLabelOf } from "./worker";
+import { buildWorkerPrompt, messageLabelOf } from "./worker";
 
 const at = DateTime.makeUnsafe("2026-08-02T10:00:00.000Z");
 const workspaceId = WorkspaceId.make("ws-1");
@@ -81,15 +81,15 @@ const placement: RunPlacement = {
   workspaceDir: "/workspace",
 };
 
-/** A comment on the fixture task, with only the fields a prompt reads spelled out. */
-const commentOf = (
-  input: Partial<Comment> & Pick<Comment, "body">
-): Comment => ({
+/** A message on the fixture task, with only the fields a prompt reads spelled out. */
+const messageOf = (
+  input: Partial<TaskMessage> & Pick<TaskMessage, "body">
+): TaskMessage => ({
   agentSessionId: null,
   authorKind: "human",
   authorUserId: userId,
   createdAt: at,
-  id: newCommentId(),
+  id: newTaskMessageId(),
   kind: "message",
   runId: null,
   taskId,
@@ -99,13 +99,13 @@ const commentOf = (
 });
 
 const promptOf = (input: {
-  readonly comments?: readonly Comment[];
+  readonly messages?: readonly TaskMessage[];
   readonly mode?: PromptMode;
   readonly project?: Project | null;
   readonly repoUrl?: string | null;
 }) =>
   buildWorkerPrompt({
-    comments: input.comments ?? [],
+    messages: input.messages ?? [],
     mode: input.mode ?? "fresh",
     placement,
     project: input.project === undefined ? project : input.project,
@@ -198,17 +198,17 @@ describe("a fresh session's prompt", () => {
   });
 
   test("teaches the rule the stop hook enforces", () => {
-    expect(text).toContain("post a comment on this task");
+    expect(text).toContain("post a message on this task");
     expect(text).toContain("sent back to write it");
   });
 
   /**
-   * What came out of the same spike was a comment that mirrored the committed
+   * What came out of the same spike was a message that mirrored the committed
    * document — headings, tables, four and a half thousand characters of a file
    * it had already linked. The one thing the document did not say, a bug found
    * and left unfixed, was buried in the middle of it.
    */
-  test("asks for a closing comment that points at the write-up instead of repeating it", () => {
+  test("asks for a closing message that points at the write-up instead of repeating it", () => {
     expect(text).toContain(
       "the shortest thing that lets a person decide what to do next"
     );
@@ -225,11 +225,11 @@ describe("a fresh session's prompt", () => {
   test("states the length as a target, because a run with no write-up carries more", () => {
     expect(text).toContain("A few short paragraphs");
     expect(text).toContain(
-      "a target and not a cap: a run with nothing to link has to carry its whole result in the comment"
+      "a target and not a cap: a run with nothing to link has to carry its whole result in the message"
     );
   });
 
-  test("tells a worker that loses the board where to leave its comment instead", () => {
+  test("tells a worker that loses the board where to leave its message instead", () => {
     // The name has to be the one `readHandoff` in `@workspace/orchestrator`
     // looks for. A worker told to write some other file writes a file nobody
     // collects, which is the bug this replaced.
@@ -252,7 +252,7 @@ describe("a fresh session's prompt", () => {
 
   test("passes on what was said before the first run ever started", () => {
     const text_ = textOf({
-      comments: [commentOf({ body: "also delete the audit rows" })],
+      messages: [messageOf({ body: "also delete the audit rows" })],
     });
     expect(text_).toContain("## The conversation on this task so far");
     expect(text_).toContain("the human said:");
@@ -266,25 +266,25 @@ describe("a fresh session's prompt", () => {
 });
 
 describe("a resumed session's prompt", () => {
-  const comments = [
-    commentOf({ body: "the delete is not idempotent" }),
-    commentOf({
+  const messages = [
+    messageOf({ body: "the delete is not idempotent" }),
+    messageOf({
       agentSessionId: sessionId,
       authorKind: "agent",
       authorUserId: null,
       body: "opened the PR",
       kind: "fallback",
     }),
-    commentOf({
+    messageOf({
       agentSessionId: otherSessionId,
       authorKind: "agent",
       authorUserId: null,
       body: "the handler swallows the 404",
     }),
   ];
-  const text = textOf({ comments, mode: "resumed" });
+  const text = textOf({ messages, mode: "resumed" });
 
-  test("carries every comment since the watermark, labelled with its author", () => {
+  test("carries every message since the watermark, labelled with its author", () => {
     expect(text).toContain("the human said:\nthe delete is not idempotent");
     expect(text).toContain("you said (auto-appended final message):");
     expect(text).toContain(
@@ -301,9 +301,9 @@ describe("a resumed session's prompt", () => {
   });
 
   test("still states the rule the stop hook enforces per turn", () => {
-    expect(text).toContain("post a comment on this task");
+    expect(text).toContain("post a message on this task");
     // Including how long it should be. Every turn of a resumed session ends
-    // with a comment too, and this is the only place that rule is stated.
+    // with a message too, and this is the only place that rule is stated.
     expect(text).toContain(
       "the shortest thing that lets a person decide what to do next"
     );
@@ -315,19 +315,19 @@ describe("a resumed session's prompt", () => {
   });
 });
 
-describe("comment labels", () => {
-  const label = (comment: Comment) =>
-    commentLabelOf({ comment, readerSessionId: sessionId });
+describe("message labels", () => {
+  const label = (message: TaskMessage) =>
+    messageLabelOf({ message, readerSessionId: sessionId });
 
-  const crash = commentOf({
+  const crash = messageOf({
     authorKind: "orchestrator",
     authorUserId: null,
     body: "x",
   });
 
   test("names each kind of author, and flags a crash as the epitaph it is", () => {
-    expect(label(commentOf({ body: "x" }))).toBe("the human said:");
-    expect(label(commentOf({ authorKind: "manager", body: "x" }))).toBe(
+    expect(label(messageOf({ body: "x" }))).toBe("the human said:");
+    expect(label(messageOf({ authorKind: "manager", body: "x" }))).toBe(
       "the manager agent said:"
     );
     expect(label(crash)).toBe("the orchestrator said:");
@@ -337,7 +337,7 @@ describe("comment labels", () => {
   });
 
   test("tells the reader's own voice from another session's", () => {
-    const mine = commentOf({
+    const mine = messageOf({
       agentSessionId: sessionId,
       authorKind: "agent",
       authorUserId: null,

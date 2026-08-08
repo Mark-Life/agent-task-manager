@@ -18,7 +18,7 @@
  *
  * Stop and rerun are both available on a live run, because they are the two
  * halves of interrupting one. Stop kills the process; rerun resumes the same
- * session with everything said since as its next prompt, which is how a comment
+ * session with everything said since as its next prompt, which is how a message
  * becomes an instruction. Neither needs the run to be in any particular state
  * for the row to be worth writing.
  *

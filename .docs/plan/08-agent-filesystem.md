@@ -171,7 +171,7 @@ is given, with no author. The restriction is about the run, not about the person
 
 Test: **does the text describe a mechanism this build implements?**
 
-- **Stays in code.** The comment rule (a stop hook enforces it), `artifactRulesOf`, `CREDENTIAL_RULES`,
+- **Stays in code.** The message rule (a stop hook enforces it), `artifactRulesOf`, `CREDENTIAL_RULES`,
   board policy, anything naming a tool. Text that disagrees with its mechanism is a bug.
 - **Moves to the tree.** `WRITING_RULES`, the size guidance inside `WORKER_RULES` and `MANAGER_RULES`,
   coding rules, per-project conventions.

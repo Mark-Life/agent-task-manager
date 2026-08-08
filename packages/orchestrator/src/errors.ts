@@ -101,7 +101,7 @@ export class AlreadyLive extends Schema.TaggedErrorClass<AlreadyLive>()(
 ) {}
 
 /**
- * The prompt could not be assembled: the task, its comments since the session's
+ * The prompt could not be assembled: the task, its messages since the session's
  * watermark, its acceptance criteria and its artifacts. Its own class because
  * it happens before a container exists, so the run cost nothing and the fix is
  * always data rather than capacity.
@@ -366,7 +366,7 @@ const outputClause = (stderr: string) => {
  * limit the kernel enforced. None of it used to reach anybody: sandbox tags are
  * not in {@link CLASS_OF_TAG}, so a failure fell through to
  * {@link textOfUnknown}, which reads `message` off an `Error` that never had
- * one — and every sandbox failure arrived on the run row, the crash comment and
+ * one — and every sandbox failure arrived on the run row, the crash message and
  * the wide event as a bare tag and a colon. `Sandbox.CloneFailed:` cannot be
  * told from a network outage, a missing branch, or a private repository with no
  * credential, which are three different things to go and do.
@@ -428,7 +428,7 @@ const textOf = (input: {
 };
 
 /**
- * The three fields a failure puts on the run row, the crash comment and the
+ * The three fields a failure puts on the run row, the crash message and the
  * wide event, from the one place that holds the tag.
  *
  * The message is sanitized here rather than at each emit site, because most of

@@ -31,7 +31,7 @@
  * **Content is measured, never carried.** The prompt is a character count, the
  * repo is `owner/name` parsed out of a URL that may hold a token, the final
  * assistant message is the boolean saying whether it became the fallback
- * comment.
+ * message.
  *
  * This runs on the host, in a loop that outlives its export interval, which is
  * what makes the metrics at the bottom legal.
@@ -134,10 +134,10 @@ export interface RunProgress {
   readonly artifactsWritten: number;
   /** The branch this run pushed. Null with no repo, or where it never got that far. */
   readonly branch: string | null;
-  /** True when the loop appended the final assistant message because the run posted no comment of its own. */
-  readonly commentFallback: boolean;
   /** Normalized events ingested into `run_events` — what tells a container that died early from one that died late. */
   readonly eventsSeen: number;
+  /** True when the loop appended the final assistant message because the run posted no message of its own. */
+  readonly messageFallback: boolean;
   readonly parked: boolean;
   readonly promptChars: number | null;
   /** The pull request the task carries once the run has closed, or null for the many runs that produce none. */
@@ -151,8 +151,8 @@ export interface RunProgress {
 export const emptyRunProgress: RunProgress = {
   artifactsWritten: 0,
   branch: null,
-  commentFallback: false,
   eventsSeen: 0,
+  messageFallback: false,
   parked: false,
   promptChars: null,
   prUrl: null,
@@ -186,8 +186,6 @@ export const RunEvent = defineEvent(RUN_EVENT_MARKER, {
   /** 1-based, against {@link maxAttempts}: together they say how much rope is left. */
   attempt: Schema.Natural,
   branch: Schema.NullOr(SanitizedText),
-  /** True when the run said nothing of its own and the loop appended its last message. */
-  commentFallback: Schema.Boolean,
   /** Normalized events ingested. A `lost` run with two of these died at startup; one with two hundred died at work. */
   eventsSeen: Schema.Natural,
   exitCode: Schema.NullOr(Schema.Int),
@@ -201,6 +199,8 @@ export const RunEvent = defineEvent(RUN_EVENT_MARKER, {
   maxAttempts: Schema.Natural,
   /** The lane's cap, without which {@link poolDepth} does not say whether it was full. */
   maxConcurrency: Schema.Natural,
+  /** True when the run said nothing of its own and the loop appended its last message. */
+  messageFallback: Schema.Boolean,
   outcome: outcomeField(RUN_EVENT_EXTRA_OUTCOMES),
   /** Slots held in this run's lane at the instant it took one. */
   poolDepth: Schema.Natural,
@@ -456,7 +456,6 @@ const runRow = (
       : economicsFor(progress, ending)),
     artifactsWritten: progress.artifactsWritten,
     branch: progress.branch,
-    commentFallback: progress.commentFallback,
     errorClass: ending?.errorClass ?? null,
     errorMessage: ending?.errorMessage ?? null,
     eventsSeen: progress.eventsSeen,
@@ -465,6 +464,7 @@ const runRow = (
     // not: a run killed at four minutes genuinely held its slot for four
     // minutes, and that is the number the pool is sized against.
     leaseDurationMs: wide === null ? null : wide.durationMs,
+    messageFallback: progress.messageFallback,
     outcome: ending?.outcome ?? null,
     phase: wide === null ? "start" : "end",
     promptChars: progress.promptChars,

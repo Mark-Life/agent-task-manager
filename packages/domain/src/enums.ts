@@ -152,24 +152,24 @@ export const RUN_COMMAND_STATUSES = [
 export const RunCommandStatus = Schema.Literals(RUN_COMMAND_STATUSES);
 export type RunCommandStatus = typeof RunCommandStatus.Type;
 
-/** The orchestrator authors the crash comment, because the process that died cannot. */
-export const COMMENT_AUTHOR_KINDS = [
+/** The orchestrator authors the crash message, because the process that died cannot. */
+export const TASK_MESSAGE_AUTHOR_KINDS = [
   "human",
   "manager",
   "agent",
   "orchestrator",
 ] as const;
 
-/** Who wrote a comment. Attribution is what makes several sessions on one task readable. */
-export const CommentAuthorKind = Schema.Literals(COMMENT_AUTHOR_KINDS);
-export type CommentAuthorKind = typeof CommentAuthorKind.Type;
+/** Who wrote a task message. Attribution is what makes several sessions on one task readable. */
+export const TaskMessageAuthorKind = Schema.Literals(TASK_MESSAGE_AUTHOR_KINDS);
+export type TaskMessageAuthorKind = typeof TaskMessageAuthorKind.Type;
 
 /** Orthogonal to the author: only `fallback` collapses in the UI. */
-export const COMMENT_KINDS = ["message", "fallback", "run_error"] as const;
+export const TASK_MESSAGE_KINDS = ["message", "fallback", "run_error"] as const;
 
-/** What a comment is. `fallback` is the auto-appended final message; `run_error` is a crash, and never collapsed. */
-export const CommentKind = Schema.Literals(COMMENT_KINDS);
-export type CommentKind = typeof CommentKind.Type;
+/** What a task message is. `fallback` is the auto-appended final message; `run_error` is a crash, and never collapsed. */
+export const TaskMessageKind = Schema.Literals(TASK_MESSAGE_KINDS);
+export type TaskMessageKind = typeof TaskMessageKind.Type;
 
 /** A thread is never deleted: the audit log points at it, and an erased conversation orphans every row that named it. */
 export const THREAD_STATUSES = ["active", "archived"] as const;
@@ -232,7 +232,15 @@ export const AUDIT_ACTIONS = [
 export const AuditAction = Schema.Literals(AUDIT_ACTIONS);
 export type AuditAction = typeof AuditAction.Type;
 
-/** The aggregates a repository can mutate, and therefore the ones an audit row can name. */
+/**
+ * The aggregates a repository can mutate, and therefore the ones an audit row
+ * can name.
+ *
+ * These are table names, which is why `comment` is still here: a task message
+ * lives in the `comment` table, and every audit row already written names it
+ * that way. Renaming the literal would make history fail to decode and buy
+ * nothing — see {@link TaskMessage}.
+ */
 export const AUDIT_ENTITY_TYPES = [
   "project",
   "project_env_file",

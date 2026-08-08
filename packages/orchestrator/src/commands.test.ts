@@ -172,7 +172,7 @@ afterAll(async () => {
     Effect.gen(function* () {
       const tasks = yield* TaskRepo;
       for (const id of createdTaskIds.splice(0)) {
-        // Comments, sessions, runs, run events and commands all hang off the
+        // Messages, sessions, runs, run events and commands all hang off the
         // task by a cascading key, so one delete takes the whole fixture.
         yield* tasks
           .delete({ id, workspaceId })
