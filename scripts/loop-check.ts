@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 /**
- * Proves the two claims Phase 4 exits on: a task moved into *in progress* is
+ * Proves the two claims the loop stands on: a task moved into *in progress* is
  * picked up, run and landed in *review* without anybody touching anything, and
  * a loop killed mid-run recovers on restart with the killed run showing up as
  * `lost` — never as a green row and never as nothing.
@@ -165,6 +165,7 @@ import {
 import { Orchestrator } from "@workspace/orchestrator";
 import {
   DEFAULT_SANDBOX_IMAGE,
+  ScopeHistory,
   sandboxLayer,
   taskArtifactsDirOf,
   workspaceLayer,
@@ -291,6 +292,7 @@ const appLayer = (registry: RegistryMode) =>
         ),
         registryLayer(registry),
         sandboxLayer,
+        ScopeHistory.layer,
         storeLayer({ applicationName: SERVICE }),
         workspaceLayer
       )

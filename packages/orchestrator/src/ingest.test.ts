@@ -31,6 +31,7 @@ import {
   AgentSessionUsageRepo,
   ArtifactRepo,
   CurrentActor,
+  ProjectRepo,
   RunEventRepo,
   RunRepo,
   storeLayer,
@@ -40,6 +41,7 @@ import {
 } from "@workspace/db";
 import type {
   AgentSession,
+  Project,
   Run,
   RunSubject,
   Task,
@@ -53,9 +55,9 @@ import {
   TURN_EVENT_MARKER,
   TurnEvent,
 } from "@workspace/harness";
-import { taskArtifactsDirOf } from "@workspace/sandbox";
+import { projectArtifactsDirOf, taskArtifactsDirOf } from "@workspace/sandbox";
 import { DateTime, Effect, Layer, ManagedRuntime, Schema } from "effect";
-import { rescanTaskArtifacts } from "./artifacts";
+import { rescanRunArtifacts, rescanTaskArtifacts } from "./artifacts";
 import type { DispatchContext } from "./dispatch-context";
 import { lostTerminus } from "./dispatch-context";
 import { ingestRunEvents, ingestTurnLedger } from "./ingest";
@@ -229,6 +231,7 @@ const writeAt = (path: string, body: string) => {
 /** One dispatch context over an already-written run row. */
 const contextOf = (input: {
   readonly dataRoot: string;
+  readonly project?: Project;
   readonly run: Run;
   readonly session: AgentSession;
   readonly task: Task;
@@ -238,7 +241,7 @@ const contextOf = (input: {
   attempt: 1,
   image: SANDBOX_IMAGE,
   layout: hostRunLayout({ dataRoot: input.dataRoot, runId: input.run.id }),
-  project: null,
+  project: input.project ?? null,
   provider: "claude",
   queueWaitMs: 0,
   repoUrl: null,
@@ -252,6 +255,7 @@ const contextOf = (input: {
 
 /** A task with a fresh session and a queued run on it. */
 const fixture = Effect.fnUntraced(function* (input: {
+  readonly projectId?: Project["id"];
   readonly title: string;
   readonly workspaceId: WorkspaceId;
 }) {
@@ -260,7 +264,11 @@ const fixture = Effect.fnUntraced(function* (input: {
   const runs = yield* RunRepo;
 
   const task = yield* withActor(seeder)(
-    tasks.create({ title: input.title, workspaceId: input.workspaceId })
+    tasks.create({
+      projectId: input.projectId,
+      title: input.title,
+      workspaceId: input.workspaceId,
+    })
   );
   const subject: RunSubject = { id: task.id, kind: "task" };
   const session = yield* sessions.open({
@@ -283,6 +291,8 @@ let agentHomeDir: string;
 let workspaceId: WorkspaceId;
 let streamed: DispatchContext;
 let restored: DispatchContext;
+let onProject: DispatchContext;
+let project: Project;
 
 /**
  * The task a fixture context is attached to. The union makes the narrowing
@@ -321,13 +331,27 @@ beforeAll(async () => {
         title: "ingest: a run whose events never came back",
         workspaceId: first.id,
       });
-      return { one, two, workspaceId: first.id };
+      const projects = yield* ProjectRepo;
+      const made = yield* withActor(seeder)(
+        projects.create({
+          name: "ingest: the project a run writes into",
+          workspaceId: first.id,
+        })
+      );
+      const three = yield* fixture({
+        projectId: made.id,
+        title: "ingest: a run that left a document for the next task",
+        workspaceId: first.id,
+      });
+      return { made, one, three, two, workspaceId: first.id };
     })
   );
 
   ({ workspaceId } = built);
+  project = built.made;
   streamed = contextOf({ dataRoot, ...built.one });
   restored = contextOf({ dataRoot, ...built.two });
+  onProject = contextOf({ dataRoot, project, ...built.three });
 
   writeAt(
     streamed.layout.eventLogPath,
@@ -412,17 +436,39 @@ beforeAll(async () => {
   });
   writeAt(join(artifacts, "notes.md"), "# notes\n");
   writeAt(join(artifacts, "out", "report.txt"), "report\n");
+
+  // What the writable project scope is for: a document the next task on the
+  // project reads, sitting beside the run's own output.
+  writeAt(
+    join(
+      projectArtifactsDirOf({ dataRoot, projectId: project.id }),
+      "research.md"
+    ),
+    "# research\n"
+  );
+  writeAt(
+    join(
+      taskArtifactsDirOf({ dataRoot, taskId: taskOf(onProject).id }),
+      "plan.md"
+    ),
+    "# plan\n"
+  );
 });
 
 afterAll(async () => {
   await runtime.runPromise(
     Effect.gen(function* () {
       const tasks = yield* TaskRepo;
+      const projects = yield* ProjectRepo;
       yield* withActor(remover)(
         Effect.all([
           tasks.delete({ id: taskOf(streamed).id, workspaceId }),
           tasks.delete({ id: taskOf(restored).id, workspaceId }),
+          tasks.delete({ id: taskOf(onProject).id, workspaceId }),
         ])
+      );
+      yield* withActor(remover)(
+        projects.delete({ id: project.id, workspaceId })
       );
     })
   );
@@ -508,6 +554,33 @@ test("a rescan indexes what is in the task's folder", async () => {
   );
 
   expect(report.indexed).toBe(2);
+});
+
+/**
+ * The project folder became writable so that a research task could leave a
+ * document a later task references, and a document with no artifact row is one
+ * the dashboard and `artifacts_list` cannot see — which is most of the point of
+ * having left it there.
+ */
+test("a run's teardown indexes what it left in the project folder too", async () => {
+  const report = await runtime.runPromise(
+    rescanRunArtifacts({ context: onProject, dataRoot })
+  );
+
+  expect(report.task?.indexed).toBe(1);
+  expect(report.project?.indexed).toBe(1);
+  expect(report.project?.directory).toBe(
+    projectArtifactsDirOf({ dataRoot, projectId: project.id })
+  );
+});
+
+test("a run whose task belongs to no project rescans its own folder and nothing else", async () => {
+  const report = await runtime.runPromise(
+    rescanRunArtifacts({ context: streamed, dataRoot })
+  );
+
+  expect(report.task?.indexed).toBe(2);
+  expect(report.project).toBeNull();
 });
 
 test("a rescan after a file is deleted removes its index row", async () => {

@@ -29,6 +29,7 @@ import type {
   TaskMessage,
   TaskMessageKind,
 } from "@workspace/domain";
+import { WORKSPACE_RULES } from "./instructions";
 import {
   conversation,
   joinSections,
@@ -44,7 +45,6 @@ import {
   CREDENTIAL_RULES,
   SHARED_RULES,
   WORKER_RULES,
-  WRITING_RULES,
 } from "./rules";
 
 /**
@@ -132,11 +132,12 @@ const projectSection = (project: WorkerPromptInput["project"]) => {
 /** What the assembly needs: the task, where it runs, and the messages it has not seen. */
 export interface WorkerPromptInput {
   /**
-   * Whether this run's directories carry the house style as `CLAUDE.md` and
-   * `AGENTS.md` files it reads on its own. When they do, {@link WRITING_RULES}
-   * is left out and the files are the single copy; when they do not — a local
-   * run is a host process with no tree above its working directory — the prompt
-   * states it. Defaults to false, so a caller that says nothing gets the rules.
+   * Whether this run's directories carry the seeded rules as `CLAUDE.md` and
+   * `AGENTS.md` files it reads on its own. When they do,
+   * {@link WORKSPACE_RULES} is left out and the files are the single copy; when
+   * they do not — a local run is a host process with no tree above its working
+   * directory — the prompt states it. Defaults to false, so a caller that says
+   * nothing gets the rules.
    */
   readonly instructionsOnDisk?: boolean;
   /**
@@ -181,7 +182,10 @@ const freshPrompt = (input: WorkerPromptInput) => {
       hasProject: placement.projectArtifactsDir !== null,
       hasRepo: repoUrl !== null,
     }),
-    instructionsOnDisk ? null : WRITING_RULES,
+    // The workspace document, stated exactly when the run cannot read it. A
+    // container has already collected it from the top of its tree before this
+    // prompt is delivered; a local run's parents hold nothing at all.
+    instructionsOnDisk ? null : WORKSPACE_RULES,
     SHARED_RULES,
     section(
       "The conversation on this task so far",

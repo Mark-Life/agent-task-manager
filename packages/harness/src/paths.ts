@@ -58,6 +58,36 @@ export const CONTAINER_RUN_DIR = "/run";
 export const ATM_ROOT_MARKER = ".atm-root";
 
 /**
+ * What Codex calls an instruction file at any level of the tree.
+ *
+ * This is the name that carries the text. Codex reads it and Claude does not,
+ * which is the whole reason there are two names for one document — see
+ * {@link CLAUDE_INSTRUCTIONS_FILE}.
+ */
+export const AGENTS_INSTRUCTIONS_FILE = "AGENTS.md";
+
+/**
+ * What Claude calls an instruction file, and the second name of the same
+ * document.
+ *
+ * Claude does not read `AGENTS.md` at all, so a directory holding only that file
+ * is a directory whose rules reach one provider. The file written under this
+ * name is one import line rather than a copy of the text, because two copies of
+ * a rule are two rules the day somebody edits one.
+ */
+export const CLAUDE_INSTRUCTIONS_FILE = "CLAUDE.md";
+
+/**
+ * The whole body of a `CLAUDE.md` that defers to the `AGENTS.md` beside it.
+ *
+ * `@path` is Claude's own import, resolved relative to the importing file — so
+ * this line works wherever the pair is written and names no absolute path a
+ * container would not recognise. This repository's own `.claude/CLAUDE.md` is
+ * the same one-line file, which is where the form was verified.
+ */
+export const CLAUDE_INSTRUCTIONS_IMPORT = `@${AGENTS_INSTRUCTIONS_FILE}\n`;
+
+/**
  * The environment variable that relocates a provider's config directory. This
  * is the whole session-identity mechanism: without it both providers write to
  * `~/.claude` or `~/.codex`, which is the operator's own tooling and every

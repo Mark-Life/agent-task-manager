@@ -13,8 +13,9 @@
  * Exported: the one {@link Sandbox} service and the two layers behind it, the
  * spec a run is described by, the mount set and the container-side paths the
  * harness agrees with, the confinement, the image names, the typed failures, the
- * workspace and repo materialization, the artifact folders, and the event marker
- * a query starts from.
+ * workspace and repo materialization, the artifact folders with the history the
+ * shared ones keep and the instruction budget a tree adds up to, and the event
+ * marker a query starts from.
  *
  * **Both implementations sit behind the one service, and the choice is config.**
  * {@link sandboxLayer} reads `SANDBOX_MODE` and builds the docker layer or the
@@ -49,9 +50,10 @@
  *
  * **`Git`.** A service that runs `git` and `gh` on the host, with the host's
  * credentials, is one refactor away from being an `exec` that takes its command
- * from a database row. It stays inside, and the two operations an owner outside
- * actually needs — clone a workspace, refresh a mirror — are exported already
- * wired, with no runner left in their requirements.
+ * from a database row. It stays inside, and the operations an owner outside
+ * actually needs are exported with the runner already provided: clone a
+ * workspace, refresh a mirror, and — behind {@link ScopeHistory} — snapshot a
+ * shared scope.
  *
  * **The local mode's honesty list.** `unhonouredBy` names every confinement a
  * host process drops, and the local implementation logs it once per run.
@@ -60,6 +62,7 @@
  */
 
 export {
+  ARTIFACT_DIR_MODE,
   ARTIFACT_OPERATIONS,
   ARTIFACTS_SEGMENT,
   type ArtifactCopy,
@@ -155,6 +158,22 @@ export {
   sandboxMemoryMbConfig,
   type TmpfsMount,
 } from "./hardening";
+// The history of the two folders more than one run can write. A service rather
+// than a function, because the identity its commits carry is resolved once for
+// the process and the git runner behind it stays inside this package.
+export {
+  HISTORY_BRANCH,
+  HISTORY_PHASES,
+  type HistoryPhase,
+  historyMessageOf,
+  makeScopeHistory,
+  ScopeHistory,
+  type ScopeHistoryInput,
+  type ScopeHistoryInterface,
+  type ScopeHistoryOptions,
+  type ScopeHistoryReport,
+  type SharedScope,
+} from "./history";
 export {
   buildTag,
   DEFAULT_IMAGE_KIND,
@@ -168,6 +187,14 @@ export {
   RECIPE_DIGEST_CHARS,
   sandboxImageFor,
 } from "./images";
+export {
+  INSTRUCTION_BUDGET_WARN_BYTES,
+  INSTRUCTION_FILES,
+  type InstructionBudget,
+  type InstructionFile,
+  instructionDirsOf,
+  measureInstructionBudget,
+} from "./instruction-budget";
 export { localSandbox, localSandboxLayer } from "./local";
 export {
   DEFAULT_SANDBOX_KIND,

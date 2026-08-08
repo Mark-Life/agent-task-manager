@@ -7,7 +7,7 @@
  * order those questions are asked in, and the order is the whole design:
  *
  *   signal → drain commands → read the column → plan → quota → pool → lease →
- *   open → turn → close → ingest → rescan → retry
+ *   open → snapshot → turn → close → ingest → snapshot → rescan → retry
  *
  * Four properties are load-bearing, and each is here rather than in the file it
  * is about, because each is a statement about the sequence.
@@ -83,6 +83,7 @@ import {
   readGithubToken,
   readManagerGithubToken,
   Sandbox,
+  ScopeHistory,
   sandboxImageFor,
 } from "@workspace/sandbox";
 import { DEFAULT_AGENT_TOKEN_TTL_MS } from "@workspace/token";
@@ -111,6 +112,7 @@ import { Dispatch, type Planned } from "./dispatch";
 import {
   type DispatchContext,
   lostTerminus,
+  projectIdOf,
   type RunTerminus,
 } from "./dispatch-context";
 import { describeFailure } from "./errors";
@@ -128,6 +130,7 @@ import {
   type RunEventSettings,
   withRunEvent,
 } from "./run-telemetry";
+import { seedInstructionFiles } from "./seed";
 import {
   managerAttachment,
   type RunAttachment,
@@ -303,6 +306,7 @@ const make = Effect.gen(function* () {
   const actor = yield* CurrentActor;
   const dispatch = yield* Dispatch;
   const gate = yield* QuotaGate;
+  const history = yield* ScopeHistory;
   const threads = yield* ChatThreadRepo;
   const leases = yield* LeaseStore;
   const pool = yield* WorkerPool;
@@ -383,6 +387,17 @@ const make = Effect.gen(function* () {
       const context = yield* openRun(planned.claim);
       const progress = yield* makeRunProgress;
 
+      // What the shared folders held before this run could write them. The pair
+      // of snapshots is what makes an overwrite recoverable: the project scope
+      // is read-write to every run on the project, so two runs reaching for one
+      // filename would otherwise leave the first one's bytes nowhere.
+      yield* history.record({
+        dataRoot: planned.claim.dataRoot,
+        phase: "before",
+        projectId: projectIdOf(context),
+        runId: context.runId,
+      });
+
       /** Reads the run's directory back, now that nothing is writing to it. */
       const collect = (closed: RunClosed) =>
         Effect.gen(function* () {
@@ -405,6 +420,16 @@ const make = Effect.gen(function* () {
             bestEffort("turn ledger ingest failed", null)
           );
 
+          // Before the rescan, so the snapshot is of what the run left rather
+          // than of a folder something else has since touched. The scan walks
+          // past the repository it creates.
+          yield* history.record({
+            dataRoot: planned.claim.dataRoot,
+            phase: "after",
+            projectId: projectIdOf(context),
+            runId: context.runId,
+          });
+
           const artifacts = yield* rescanRunArtifacts({
             context,
             dataRoot: planned.claim.dataRoot,
@@ -416,7 +441,7 @@ const make = Effect.gen(function* () {
           });
 
           yield* observeRunProgress(progress, {
-            artifactsWritten: artifacts?.indexed ?? 0,
+            artifactsWritten: artifacts?.task?.indexed ?? 0,
             branch: turn.branch,
             eventsSeen: events?.lines ?? turn.eventsSeen,
             messageFallback: report.fallbackPosted,
@@ -1110,9 +1135,33 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /**
+   * Puts the editable rules on disk if nobody has yet, and says which files it
+   * made.
+   *
+   * At boot rather than per run, because the workspace scope is one directory
+   * for the whole install and a run is the wrong moment to be writing the rules
+   * it is about to read. Silent when there was nothing to do, which is every
+   * boot after the first: a line per boot saying four files already existed is
+   * a line an operator learns to skip.
+   *
+   * Best-effort like the announcements beside it. A loop that refused to take
+   * work because it could not write a `CLAUDE.md` would be a factory stopped by
+   * a document.
+   */
+  const seedHouseRules = Effect.gen(function* () {
+    const written = yield* seedInstructionFiles({
+      dataRoot: config.dataRoot,
+    }).pipe(bestEffort("the house rules could not be seeded", []));
+    yield* written.length === 0
+      ? Effect.void
+      : Effect.logInfo(`seeded editable rules at ${written.join(", ")}`);
+  });
+
   const run = Effect.gen(function* () {
     yield* announceSandbox;
     yield* announceTurnEnv;
+    yield* seedHouseRules;
     yield* Effect.logInfo(
       `loop listening on ${config.maxConcurrency} work slots and ${config.maxChatConcurrency} chat slots, polling every ${config.pollIntervalMs}ms`
     );

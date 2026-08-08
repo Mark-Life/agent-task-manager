@@ -14,11 +14,17 @@ pointing at the text. Whole files that are themselves the prompt (`AGENTS.md`, a
 linked on `main`. A pinned range can go stale after an edit; the un-pinned file link beside each
 section is the one to follow if it does.
 
-**Nothing here is stored in a database or read off an operator's disk.** Every prompt constant in
-this system is versioned with the code, deliberately — the reasoning is in the module header of
-[`packages/prompts/src/rules.ts`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/rules.ts#L1-L71).
-The exceptions are all outside this repository and are listed in §7 and §8: the vendor's own
-system prompt, the operator's shared skills directory, and whatever sits in the agent home.
+**Nothing here is stored in a database, and the text has two homes.** One question decides which:
+does the text describe a mechanism this build implements? If it does it is a constant versioned
+with the code, in
+[`packages/prompts/src/rules.ts`](https://github.com/Mark-Life/agent-task-manager/blob/main/packages/prompts/src/rules.ts),
+whose module header argues the split. If it can be wrong without anything breaking it is content,
+it lives in
+[`packages/prompts/src/instructions.ts`](https://github.com/Mark-Life/agent-task-manager/blob/main/packages/prompts/src/instructions.ts),
+and the loop seeds it onto the operator's disk on first boot so that a rule can be edited without a
+redeploy (§2a). The remaining exceptions are outside this repository and are listed in §7 and §8:
+the vendor's own system prompt, the operator's shared skills directory, and whatever sits in the
+agent home.
 
 ---
 
@@ -27,12 +33,12 @@ system prompt, the operator's shared skills directory, and whatever sits in the 
 | # | What | Worker | Manager |
 |---|------|--------|---------|
 | 1 | Provider system prompt (vendor preset) | ✅ | ✅ |
-| 2 | Instructions loaded by the CLI from the working directory upwards (`CLAUDE.md` / `AGENTS.md` at every scope of the run's tree, plus the checkout's own) | ✅ | the shared scope and `manager/`, so whatever a person put there |
+| 2 | Instructions loaded by the CLI from the working directory upwards (`CLAUDE.md` / `AGENTS.md` at every scope of the run's tree, plus the checkout's own), starting with the seeded documents of §2a | ✅ | ✅ — the shared scope, then `manager/` |
 | 3 | MCP tool descriptions (`atm`, `executor`) | ✅ | ✅ |
 | 4 | Task title, brief, acceptance / conversation so far | ✅ | ✅ |
 | 5 | `artifactRulesOf` | ✅ | ❌ |
 | 6 | `CREDENTIAL_RULES` | only with a repo | ❌ |
-| 7 | `WRITING_RULES` | only in local mode | only in local mode |
+| 7 | `WORKSPACE_RULES`, and `MANAGER_ANSWER_RULES` for a manager — the seeded text, inlined | only in local mode | only in local mode |
 | 8 | `SHARED_RULES` | ✅ | ✅ |
 | 9 | `WORKER_RULES` / `MANAGER_RULES` | worker, last | manager, first |
 | 10 | `NO_MESSAGE_REFUSAL`, mid-turn, at most once | ✅ | ❌ (hook not registered) |
@@ -63,9 +69,9 @@ File: [`packages/prompts/`](https://github.com/Mark-Life/agent-task-manager/tree
 | [`buildRunPrompt`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/orchestrator/src/prompt.ts#L148-L251) | **The dispatch-time entry point.** Fetches the rows the session has not read, picks worker or manager by `attached.role`, renders, then advances the session's watermark in the same operation. Called once per run from [`run.ts#L353-L360`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/orchestrator/src/run.ts#L353-L360), after the directories exist, because the prompt names them. |
 | [`placementOf`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/orchestrator/src/prompt.ts#L76-L102) | Decides which spelling of the paths goes in the prompt: the run's own tree under `/workspace`, computed from the same labels the mount set is, or the host paths a `local` run actually sees. |
 | [`unreadOf`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/unread.ts#L59-L65) / [`nextWatermarkOf`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/unread.ts#L81-L86) | What "has not been read yet" means, over task messages and chat messages alike. A null watermark yields the conversation from the beginning, which is how a fresh session gets it with no special case. |
-| [`freshPrompt` (worker)](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/worker.ts#L149-L171) | **The concatenation for a first worker turn, through `joinSections`.** Title, brief, acceptance, project, placement, `CREDENTIAL_RULES` (only when there is a repo), `artifactRulesOf`, `WRITING_RULES` (only when the instructions are not on disk), `SHARED_RULES`, the message thread, then `WORKER_RULES` under a `## Before you finish` heading. |
+| [`freshPrompt` (worker)](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/worker.ts#L149-L171) | **The concatenation for a first worker turn, through `joinSections`.** Title, brief, acceptance, project, placement, `CREDENTIAL_RULES` (only when there is a repo), `artifactRulesOf`, `WORKSPACE_RULES` (only when the seeded documents are not on disk), `SHARED_RULES`, the message thread, then `WORKER_RULES` under a `## Before you finish` heading. |
 | [`resumedPrompt` (worker)](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/worker.ts#L183-L195) | A resumed worker turn: a `— continued` heading, one sentence, the new messages, and `WORKER_RULES` again. The rules are *not* restated — they are in the session's own history. The message rule is the one exception, because the hook that enforces it has no memory of the session either. |
-| [`freshPrompt` (manager)](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/manager.ts#L112-L126) | The concatenation for a first manager turn: `MANAGER_RULES`, `WRITING_RULES` (only when the instructions are not on disk), `SHARED_RULES`, the placement section with no repo, the last 40 messages, and the answer instruction. |
+| [`freshPrompt` (manager)](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/manager.ts#L112-L126) | The concatenation for a first manager turn: `MANAGER_RULES`, then `WORKSPACE_RULES` and `MANAGER_ANSWER_RULES` (only when the seeded documents are not on disk, in the order the tree would have handed them over), `SHARED_RULES`, the placement section with no repo, the last 40 messages, and the answer instruction. |
 | [`resumedPrompt` (manager)](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/manager.ts#L136-L149) | A resumed manager turn: heading, one sentence, what has been said since, the answer instruction. |
 | [`joinSections`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/render.ts#L16-L17), [`section`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/render.ts#L20-L21), [`speech`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/render.ts#L37-L38), [`conversation`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/render.ts#L41) | The four primitives every fragment above is glued with. `joinSections` drops nulls, which is how a fragment a run did not earn disappears rather than rendering empty. |
 | [`promptOf`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/render.ts#L119-L122) | Wraps the finished text with its own character count. `promptChars` on a run's telemetry is measured here; the text itself never reaches an event. |
@@ -81,17 +87,6 @@ The exported surface, if you want the whole list of what `@workspace/prompts` ca
 
 File: [`packages/prompts/src/rules.ts`](https://github.com/Mark-Life/agent-task-manager/blob/main/packages/prompts/src/rules.ts).
 Each of these is one exported constant, dropped into the prompt whole.
-
-### [`WRITING_RULES`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/rules.ts#L89-L97) — "How you write"
-
-Every fresh run whose instructions are **not** on disk, which today means a local-mode turn. A
-container starts inside the run's tree and both CLIs collect a `CLAUDE.md` or `AGENTS.md` from
-every scope above the working directory before the prompt is read, so house style belongs in
-those files: one place to edit, no redeploy. A local turn is a host process with no mounts,
-walking parents that hold nothing, so the same rules are stated in the text instead —
-`instructionsOnDisk` on each builder is that switch, and the rule is that the prompt carries
-house style exactly when the filesystem cannot. It says nothing about length: what is short
-depends on what the turn produced, so each role's own block sets its own size.
 
 ### [`SHARED_RULES`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/rules.ts#L107-L111) — "What counts as finishing"
 
@@ -115,20 +110,68 @@ scratch-directory run with no checkout is not told about a token it will not rea
 
 ---
 
+## 2a. Standing rules, on disk
+
+File: [`packages/prompts/src/instructions.ts`](https://github.com/Mark-Life/agent-task-manager/blob/main/packages/prompts/src/instructions.ts).
+Everything here can be wrong without anything breaking, which is why it is on a disk an operator
+can edit rather than in a build they would have to ship.
+
+**One source, two deliveries.** The same constants are written into the tree by the seeder and
+inlined into the prompt when `instructionsOnDisk` is false, which today means a local-mode turn: a
+host process with no mounts, walking parents that hold nothing. The rule is that the prompt carries
+this text exactly when the filesystem cannot.
+
+| Constant | Seeded into | Reaches |
+|----------|-------------|---------|
+| `WRITING_RULES` — "How you write" | the workspace document | every run of both roles |
+| `MESSAGE_SHAPE_RULES` — "How long a message on a card is" | the workspace document | every run of both roles |
+| `MANAGER_ANSWER_RULES` — "How you answer" | the manager document | a manager turn only |
+
+`WORKSPACE_RULES` is the first two joined, which is the whole of what the workspace document says
+to a model; the rest of that document — what each directory level is for, and where per-project
+conventions belong — addresses the person who opens the file. No convention about a language or a
+test runner is seeded: a guess read by every run as though somebody had decided it is worse than an
+empty heading.
+
+**Where they land.** Written by
+[`packages/orchestrator/src/seed.ts`](https://github.com/Mark-Life/agent-task-manager/blob/main/packages/orchestrator/src/seed.ts)
+at boot, into the global artifacts folder, which is the workspace scope of every run's tree:
+
+```
+<dataRoot>/artifacts/global/AGENTS.md          the text
+<dataRoot>/artifacts/global/CLAUDE.md          one line: @AGENTS.md
+<dataRoot>/artifacts/global/manager/AGENTS.md  the manager's own rules
+<dataRoot>/artifacts/global/manager/CLAUDE.md  one line: @AGENTS.md
+```
+
+Two names because Claude does not read `AGENTS.md` and Codex does not read `CLAUDE.md`; one text,
+because the `CLAUDE.md` is an import rather than a copy. **Write if absent, never overwrite** — a
+person's edit has to survive the next boot, which is the whole point of the move, so a later
+release's improved wording reaches no install that has already booted.
+
+---
+
 ## 3. Per-role rules
 
 ### [`WORKER_RULES`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/rules.ts#L255-L265)
 
 Every worker turn, fresh or resumed, as the last section of the prompt under
 `## Before you finish`. It is the positive form of the rule the stop hook enforces in §5, and its
-second paragraph names the handoff file the orchestrator reads back off disk (§4).
+second paragraph names the handoff file the orchestrator reads back off disk (§4). It says that
+there must be a message and what has to be in it; how long that message runs to is the editable
+half and is `MESSAGE_SHAPE_RULES` in §2a.
 
 ### [`MANAGER_RULES`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/prompts/src/rules.ts#L281-L325)
 
 Every fresh manager turn, as the first section of the prompt. Not repeated on a resumed turn.
 Still the longest single piece of prompt text in the system. Its sections are its own headings, and
-**"How you answer" is first**: it is the only one that applies to every turn, and the rest are
-situational.
+what is left of it is board policy, how a run is steered, what the shell is for, and how a turn
+ends — each enforced or guaranteed somewhere else as well as stated here.
+
+**"How you answer" is no longer in it.** Nothing enforced a word of it, so it is seeded to
+`manager/AGENTS.md` (§2a), which a manager turn reads before its prompt and a worker never walks
+into. One line of that section was board policy rather than phrasing and stayed: an answer that has
+grown into a task brief is filed as one.
 
 **It does not list the tools.** It used to open with all nineteen grouped in a bullet list, which
 was one more spelling of names the model already reads off the tool table with a description
@@ -249,7 +292,7 @@ The mounts, however, decide what other text a run can be given:
 | [`CONTAINER_AGENT_HOME_DIR`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/sandbox/src/mounts.ts#L205) and [`AGENT_HOME_ENV_VAR`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/harness/src/paths.ts#L48-L51) | The provider's config directory is a host directory mounted at `/agent-home` and pointed at through `CLAUDE_CONFIG_DIR` / `CODEX_HOME`. **The `user` setting source resolves inside it**, so anything an operator left there — a user-level `CLAUDE.md`, a user `settings.json` — is loaded into every run. It is seeded from a logged-in account by [`scripts/agent-home-login.ts`](https://github.com/Mark-Life/agent-task-manager/blob/main/scripts/agent-home-login.ts) and is not in this repository; [`.docs/agent-homes.md`](./agent-homes.md) describes it. |
 | [`CONTAINER_SKILLS_DIR`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/sandbox/src/mounts.ts#L205-L214) and [`skillsMounts`](https://github.com/Mark-Life/agent-task-manager/blob/01d8728c27ccb8e72769c5b809eee29f420bdc2d/packages/sandbox/src/mounts.ts#L316-L327) | The operator's own skills directory (`ATM_SKILLS_DIR`) mounted read-only at `/agent-home/skills` — the one bind inside another bind, because a provider reads personal skills from a fixed name under its config directory. Every run of both roles is given whatever is in it. Read-only, so no run can edit the instructions later runs get. |
 | [`mounts.ts` header](https://github.com/Mark-Life/agent-task-manager/blob/main/packages/sandbox/src/mounts.ts) | The full argument for the mount set, including which directories are read-only and why. |
-| [`runTreeOf`](https://github.com/Mark-Life/agent-task-manager/blob/main/packages/sandbox/src/mounts.ts) and [`ATM_ROOT_MARKER`](https://github.com/Mark-Life/agent-task-manager/blob/main/packages/harness/src/paths.ts) | The four scopes nest under `/workspace`, so a `CLAUDE.md` or `AGENTS.md` a person leaves at any level is loaded root-down at launch — see [sandbox](./sandbox.md). Claude walks up on its own; Codex stops at the nearest `project_root_markers` entry, which the turn entrypoint points at the empty `.atm-root` at the top of the tree. Nothing composes those files: they are whatever is in the folders. |
+| [`runTreeOf`](https://github.com/Mark-Life/agent-task-manager/blob/main/packages/sandbox/src/mounts.ts) and [`ATM_ROOT_MARKER`](https://github.com/Mark-Life/agent-task-manager/blob/main/packages/harness/src/paths.ts) | The four scopes nest under `/workspace`, so a `CLAUDE.md` or `AGENTS.md` a person leaves at any level is loaded root-down at launch — see [sandbox](./sandbox.md). Claude walks up on its own; Codex stops at the nearest `project_root_markers` entry, which the turn entrypoint points at the empty `.atm-root` at the top of the tree. Nothing composes those files: the two at the top of the tree are seeded once (§2a) and every one below them is whatever is in the folder. |
 
 ---
 
@@ -327,8 +370,10 @@ Checked and excluded, so a later reader does not re-derive them:
   what one is given.
 - **There are no subagent definitions** (`.claude/agents/`) and no slash commands (`.claude/commands/`)
   in this repository, so nothing is contributed from either.
-- **No prompt text is stored in the database or read off an operator's disk at dispatch.** Task briefs,
-  task messages and chat messages are content written by people and agents; the rules are code.
+- **No prompt text is stored in the database.** Task briefs, task messages and chat messages are
+  content written by people and agents; the rules a mechanism enforces are code, and the rest is the
+  seeded text of §2a — read off the operator's disk by the CLI, not by the dispatch, and never
+  assembled into the prompt string.
 
 ### Re-deriving this list
 
@@ -338,6 +383,6 @@ Every prompt constant in the repo is a template literal assigned to a `SCREAMING
 grep -rnE 'const [A-Z_]+ = .?`' --include='*.ts' packages apps | grep -v '\.test\.'
 ```
 
-returns the constants in §2, §3 and §5, plus a handful of non-prompt strings (a cookie name, a git
+returns the constants in §2, §2a, §3 and §5, plus a handful of non-prompt strings (a cookie name, a git
 credential helper, two MCP prefixes). Everything else on this page is assembled rather than
 declared, and §1 is where the assembly is.

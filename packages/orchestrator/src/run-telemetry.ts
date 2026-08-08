@@ -136,6 +136,12 @@ export interface RunProgress {
   readonly branch: string | null;
   /** Normalized events ingested into `run_events` — what tells a container that died early from one that died late. */
   readonly eventsSeen: number;
+  /**
+   * The instruction files the run's tree was about to hand it, in bytes. Null
+   * for a host turn, which walks no tree, and on a row written before the
+   * directories existed.
+   */
+  readonly instructionBytes: number | null;
   /** True when the loop appended the final assistant message because the run posted no message of its own. */
   readonly messageFallback: boolean;
   readonly parked: boolean;
@@ -152,6 +158,7 @@ export const emptyRunProgress: RunProgress = {
   artifactsWritten: 0,
   branch: null,
   eventsSeen: 0,
+  instructionBytes: null,
   messageFallback: false,
   parked: false,
   promptChars: null,
@@ -190,6 +197,14 @@ export const RunEvent = defineEvent(RUN_EVENT_MARKER, {
   eventsSeen: Schema.Natural,
   exitCode: Schema.NullOr(Schema.Int),
   image: SanitizedText,
+  /**
+   * How many bytes of instruction files the run's tree held when it was given
+   * its directories, so "which runs were near the cliff" is a query rather than
+   * a grep of the logs. Codex spends one budget across the whole tree root
+   * first, and what it drops past that budget is the deepest and most specific
+   * document. Null on a start row and on a host turn, which reads no tree.
+   */
+  instructionBytes: Schema.NullOr(Schema.Natural),
   /** Which sandbox implementation served the run, so a host run cannot be mistaken for a contained one. */
   kind: SandboxKind,
   /** Which lane's slot this run held: board work, or a conversation. */
@@ -460,6 +475,7 @@ const runRow = (
     errorMessage: ending?.errorMessage ?? null,
     eventsSeen: progress.eventsSeen,
     exitCode: terminus?.exitCode ?? null,
+    instructionBytes: progress.instructionBytes,
     // Measured across every exit path, so it is real where the economics are
     // not: a run killed at four minutes genuinely held its slot for four
     // minutes, and that is the number the pool is sized against.

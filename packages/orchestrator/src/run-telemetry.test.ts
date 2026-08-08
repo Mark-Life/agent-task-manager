@@ -703,6 +703,7 @@ describe("observeRunProgress", () => {
       artifactsWritten: 0,
       branch: "atm/task-1",
       eventsSeen: 84,
+      instructionBytes: null,
       messageFallback: false,
       parked: false,
       promptChars: 1200,

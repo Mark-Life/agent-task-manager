@@ -113,13 +113,59 @@ interface RescanInput {
   readonly workspaceId: WorkspaceId;
 }
 
+/**
+ * What a rescan of one project's artifacts directory found. Shaped like
+ * {@link RescanInput} with the owner swapped, because that is the only thing
+ * that differs: a project's folder is keyed by `(project_id, path)` where a
+ * task's is keyed by `(task_id, path)`.
+ */
+interface ProjectRescanInput extends Omit<RescanInput, "taskId"> {
+  readonly projectId: ProjectId;
+}
+
+/** Which folder a rescan rebuilt the index of. */
+type RescanScope =
+  | { readonly projectId: ProjectId; readonly scope: "project" }
+  | { readonly scope: "task"; readonly taskId: TaskId };
+
+/**
+ * What an upsert overwrites when a rescan finds a path the index already holds.
+ *
+ * Only what a `stat` can answer. `promotedAt`, `contentHash` and
+ * `sourceArtifactId` are deliberately absent: a promotion is a decision with an
+ * audit row behind it, and a rescan that cleared its stamp would let the same
+ * file be promoted a second time and would lose the digest that says whether the
+ * two copies have parted company.
+ */
+const SCANNED_COLUMNS = {
+  bytes: sql`excluded.bytes`,
+  ext: sql`excluded.ext`,
+  lastRunId: sql`excluded.last_run_id`,
+  modifiedAt: sql`excluded.modified_at`,
+} as const;
+
+/** The rows in one folder, as the delete that clears what a scan did not find names them. */
+const ownedBy = (scope: RescanScope) =>
+  scope.scope === "task"
+    ? and(eq(artifact.taskId, scope.taskId), eq(artifact.scope, "task"))
+    : and(
+        eq(artifact.projectId, scope.projectId),
+        eq(artifact.scope, "project")
+      );
+
+/** The partial unique index a rescan of that folder upserts on. */
+const scanConflictOf = (scope: RescanScope) =>
+  scope.scope === "task"
+    ? { target: [artifact.taskId, artifact.path], where: taskScoped }
+    : { target: [artifact.projectId, artifact.path], where: projectScoped };
+
 const make = Effect.gen(function* () {
   const db = yield* Database;
   const write = writer(db);
   const inTransaction = unauditedTransaction(db);
 
   /**
-   * Replaces a task's artifact index with what is actually in its directory.
+   * Replaces one folder's artifact index with what is actually in its directory.
    *
    * The index is derivable from disk, which makes it a cache and not a source of
    * truth: an upsert on the path plus a delete of everything the scan did not see
@@ -130,83 +176,132 @@ const make = Effect.gen(function* () {
    * It writes no audit rows and needs no actor for the same reason — refreshing a
    * cache is not a decision anyone made, and auditing every rescan would bury the
    * mutations the log exists for.
+   *
+   * One implementation for both scopes, because everything that differs between
+   * them is the owning column: two copies would be two places for the upsert's
+   * `set` clause to be widened, and widening it is what would silently clear a
+   * promotion's stamp.
    */
+  const replaceIndex = Effect.fnUntraced(function* (input: {
+    readonly lastRunId: RunId | null;
+    readonly operation: string;
+    readonly scope: RescanScope;
+    readonly stats: readonly ArtifactStat[];
+    readonly workspaceId: WorkspaceId;
+  }) {
+    const { scope } = input;
+    const values = yield* Effect.forEach(input.stats, (stat) =>
+      encodeWrite({
+        entity: ENTITY,
+        schema: ArtifactInsert,
+        value: {
+          bytes: stat.bytes,
+          // Never hashed here: a rescan only has to know the file changed, and
+          // size plus modified time say that without reading a byte of it.
+          contentHash: null,
+          ext: stat.ext,
+          id: newArtifactId(),
+          lastRunId: input.lastRunId,
+          modifiedAt: stat.modifiedAt,
+          path: stat.path,
+          projectId: scope.scope === "project" ? scope.projectId : null,
+          promotedAt: null,
+          scope: scope.scope,
+          sourceArtifactId: null,
+          taskId: scope.scope === "task" ? scope.taskId : null,
+          workspaceId: input.workspaceId,
+        },
+      })
+    );
+    const conflict = scanConflictOf(scope);
+    return yield* inTransaction(
+      { operation: input.operation, table: ENTITY },
+      (tx) =>
+        Effect.gen(function* () {
+          yield* execute(
+            input.operation,
+            tx.delete(artifact).where(
+              and(
+                eq(artifact.workspaceId, input.workspaceId),
+                ownedBy(scope),
+                values.length === 0
+                  ? undefined
+                  : notInArray(
+                      artifact.path,
+                      values.map((value) => value.path)
+                    )
+              )
+            )
+          );
+          if (values.length === 0) {
+            return [];
+          }
+          const written = yield* execute(
+            input.operation,
+            tx
+              .insert(artifact)
+              .values(values)
+              .onConflictDoUpdate({
+                set: SCANNED_COLUMNS,
+                target: conflict.target,
+                targetWhere: conflict.where,
+              })
+              .returning()
+          );
+          return yield* decodeMany({
+            decode: decodeArtifact,
+            entity: ENTITY,
+            rows: written,
+          });
+        })
+    );
+  });
+
+  /** A task's own folder, rebuilt from disk after the run that wrote it. */
   const replaceTaskIndex = Effect.fn("ArtifactRepo.replaceTaskIndex")(
     function* (input: RescanInput) {
       yield* Effect.annotateCurrentSpan({
         taskId: input.taskId,
         workspaceId: input.workspaceId,
       });
-      const values = yield* Effect.forEach(input.stats, (stat) =>
-        encodeWrite({
-          entity: ENTITY,
-          schema: ArtifactInsert,
-          value: {
-            bytes: stat.bytes,
-            // Never hashed here: a rescan only has to know the file changed, and
-            // size plus modified time say that without reading a byte of it.
-            contentHash: null,
-            ext: stat.ext,
-            id: newArtifactId(),
-            lastRunId: input.lastRunId,
-            modifiedAt: stat.modifiedAt,
-            path: stat.path,
-            projectId: null,
-            promotedAt: null,
-            scope: "task",
-            sourceArtifactId: null,
-            taskId: input.taskId,
-            workspaceId: input.workspaceId,
-          },
-        })
-      );
-      return yield* inTransaction(
-        { operation: "ArtifactRepo.replaceTaskIndex", table: ENTITY },
-        (tx) =>
-          Effect.gen(function* () {
-            yield* execute(
-              "ArtifactRepo.replaceTaskIndex",
-              tx.delete(artifact).where(
-                and(
-                  eq(artifact.workspaceId, input.workspaceId),
-                  eq(artifact.taskId, input.taskId),
-                  eq(artifact.scope, "task"),
-                  values.length === 0
-                    ? undefined
-                    : notInArray(
-                        artifact.path,
-                        values.map((value) => value.path)
-                      )
-                )
-              )
-            );
-            if (values.length === 0) {
-              return [];
-            }
-            const written = yield* execute(
-              "ArtifactRepo.replaceTaskIndex",
-              tx
-                .insert(artifact)
-                .values(values)
-                .onConflictDoUpdate({
-                  set: {
-                    bytes: sql`excluded.bytes`,
-                    ext: sql`excluded.ext`,
-                    lastRunId: sql`excluded.last_run_id`,
-                    modifiedAt: sql`excluded.modified_at`,
-                  },
-                  target: [artifact.taskId, artifact.path],
-                  targetWhere: taskScoped,
-                })
-                .returning()
-            );
-            return yield* decodeMany({
-              decode: decodeArtifact,
-              entity: ENTITY,
-              rows: written,
-            });
-          })
-      );
+      return yield* replaceIndex({
+        lastRunId: input.lastRunId,
+        operation: "ArtifactRepo.replaceTaskIndex",
+        scope: { scope: "task", taskId: input.taskId },
+        stats: input.stats,
+        workspaceId: input.workspaceId,
+      });
+    }
+  );
+
+  /**
+   * A project's folder, rebuilt from disk after a run that could write it.
+   *
+   * It exists because that folder stopped being reachable only through a
+   * promotion: a run's project scope is mounted read-write so that a research
+   * task can leave a document the next task in the same project reads, and a
+   * file with no row is a file the dashboard and the artifact tools cannot see —
+   * which is exactly the use case the writable mount was for.
+   *
+   * A promoted row keeps its stamp across this, because the upsert overwrites
+   * only what a `stat` produced. A promoted row whose file is gone from disk does
+   * not: the delete is what stops the folder listing files that 404 on click,
+   * and an index that outlived its bytes reads as a broken server rather than as
+   * a deleted file.
+   */
+  const replaceProjectIndex = Effect.fn("ArtifactRepo.replaceProjectIndex")(
+    function* (input: ProjectRescanInput) {
+      yield* Effect.annotateCurrentSpan({
+        projectId: input.projectId,
+        workspaceId: input.workspaceId,
+      });
+      return yield* replaceIndex({
+        lastRunId: input.lastRunId,
+        operation: "ArtifactRepo.replaceProjectIndex",
+        scope: { projectId: input.projectId, scope: "project" },
+        stats: input.stats,
+        workspaceId: input.workspaceId,
+      });
     }
   );
 
@@ -390,7 +485,13 @@ const make = Effect.gen(function* () {
     });
   });
 
-  return { byId, listByTask, promote, replaceTaskIndex } as const;
+  return {
+    byId,
+    listByTask,
+    promote,
+    replaceProjectIndex,
+    replaceTaskIndex,
+  } as const;
 });
 
 /**

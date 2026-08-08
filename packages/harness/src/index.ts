@@ -110,9 +110,12 @@ export {
 export {
   AGENT_HOME_DIR_ENV_VAR,
   AGENT_HOME_ENV_VAR,
+  AGENTS_INSTRUCTIONS_FILE,
   ATM_ROOT_MARKER,
   agentHomeEnvAt,
   agentHomeLoginHint,
+  CLAUDE_INSTRUCTIONS_FILE,
+  CLAUDE_INSTRUCTIONS_IMPORT,
   CONTAINER_RUN_DIR,
   containerRunLayout,
   defaultAgentHomeDirOf,

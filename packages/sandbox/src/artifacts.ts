@@ -37,12 +37,13 @@
  * that task saw is worth more than deduplication. `contentHash` on the copy is
  * what lets the two rows be compared later.
  *
- * **No versioning.** A folder of current files. What a previous draft said is in
- * the run transcript. If real history ever matters the answer is `git init` in
- * the artifacts directory and a commit after each run — free history, free diff,
- * tooling everyone knows, and no schema — which is exactly why there is no
- * version table here to migrate away from. {@link SCAN_SKIP_DIRS} keeps that
- * option free by leaving `.git` out of the index in advance.
+ * **No version table, and history anyway.** A folder holds the current files.
+ * What a previous draft said is in the run transcript — and, for the two scopes
+ * more than one run can write, in a git repository this module's own directories
+ * carry: `./history` initialises one on demand and commits around each run. That
+ * was always the answer this file named for versioning, which is why there is no
+ * version table to migrate away from, and {@link SCAN_SKIP_DIRS} is what keeps
+ * the object store out of the index now that the option has been taken.
  */
 
 import { createHash } from "node:crypto";
@@ -77,12 +78,18 @@ export const TASKS_SEGMENT = "tasks";
 export const ARTIFACT_DIR_MODE = 0o755;
 
 /**
- * Directories the index skips. `.git` because the versioning story is "run
- * `git init` here if you ever want history" — indexing an object store would
- * turn that free option into thousands of meaningless rows the day someone took
- * it.
+ * What git calls its object store, named here because two modules have to agree
+ * about it: `./history` creates one inside a shared scope, and the scan below
+ * has to walk past it.
  */
-export const SCAN_SKIP_DIRS = [".git"] as const;
+export const GIT_DIR = ".git";
+
+/**
+ * Directories the index skips. {@link GIT_DIR} because the versioning story is a
+ * repository inside the scope directory, and indexing an object store would turn
+ * a run's two commits into thousands of rows describing nothing anyone can open.
+ */
+export const SCAN_SKIP_DIRS = [GIT_DIR] as const;
 
 /**
  * The hash a copy records, prefixed with the algorithm that produced it. The

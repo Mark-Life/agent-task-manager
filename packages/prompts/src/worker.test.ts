@@ -23,13 +23,13 @@ import {
   WorkspaceId,
 } from "@workspace/domain";
 import { DateTime } from "effect";
-import type { PromptMode, RunPlacement } from "./render";
 import {
-  artifactRulesOf,
-  CREDENTIAL_RULES,
-  SHARED_RULES,
+  MESSAGE_SHAPE_RULES,
+  WORKSPACE_RULES,
   WRITING_RULES,
-} from "./rules";
+} from "./instructions";
+import type { PromptMode, RunPlacement } from "./render";
+import { artifactRulesOf, CREDENTIAL_RULES, SHARED_RULES } from "./rules";
 import { buildWorkerPrompt, messageLabelOf } from "./worker";
 
 const at = DateTime.makeUnsafe("2026-08-02T10:00:00.000Z");
@@ -184,9 +184,9 @@ describe("a fresh session's prompt", () => {
       artifactRulesOf({ hasProject: true, hasRepo: true })
     );
     expect(text).toContain(SHARED_RULES);
-    // The house style reaches both roles from the prompt whenever the run has
-    // no tree to read it from, which is what `instructionsOnDisk` decides.
-    expect(text).toContain(WRITING_RULES);
+    // The seeded rules reach both roles from the prompt whenever the run has no
+    // tree to read them from, which is what `instructionsOnDisk` decides.
+    expect(text).toContain(WORKSPACE_RULES);
   });
 
   /**
@@ -317,6 +317,11 @@ describe("a fresh session's prompt", () => {
     expect(text).toContain("no headings and no tables");
   });
 
+  /**
+   * The length is the editable half of the message rule and arrives from the
+   * workspace document, so this run — which has no tree to read it from — has to
+   * be handed the same words in its prompt.
+   */
   test("states the length as a target, because a run with no write-up carries more", () => {
     expect(text).toContain("A few short paragraphs");
     expect(text).toContain(
@@ -372,26 +377,35 @@ describe("a fresh session's prompt", () => {
 });
 
 /**
- * The prompt carries house style exactly when the filesystem cannot. A run
- * whose directories nest reads the same rules out of a `CLAUDE.md` above its
- * working directory, and stating them twice is two copies to keep in step; a
+ * The prompt carries the seeded rules exactly when the filesystem cannot. A run
+ * whose directories nest reads the same text out of the workspace document above
+ * its working directory, and stating it twice is two copies to keep in step; a
  * local run is a host process with nothing above its working directory, so
- * dropping them there would lose them silently.
+ * dropping it there would lose it silently.
  */
-describe("house style, on disk or in the prompt", () => {
-  test("states the writing rules when the run has no tree to read them from", () => {
-    expect(textOf({ instructionsOnDisk: false })).toContain(WRITING_RULES);
+describe("the seeded rules, on disk or in the prompt", () => {
+  test("states the workspace document when the run has no tree to read it from", () => {
+    expect(textOf({ instructionsOnDisk: false })).toContain(WORKSPACE_RULES);
     // A caller that has not been updated is that case, so silence means stated.
-    expect(textOf({})).toContain(WRITING_RULES);
+    expect(textOf({})).toContain(WORKSPACE_RULES);
+  });
+
+  test("hands over the same constant the seeder writes, not a second copy of it", () => {
+    const text = textOf({});
+    expect(text).toContain(WRITING_RULES);
+    expect(text).toContain(MESSAGE_SHAPE_RULES);
   });
 
   test("leaves them out when the directories carry them", () => {
     const text = textOf({ instructionsOnDisk: true });
-    expect(text).not.toContain(WRITING_RULES);
+    expect(text).not.toContain(WORKSPACE_RULES);
     expect(text).not.toContain("## How you write");
-    // Only that block. Everything a file on disk cannot say still has to be here.
+    expect(text).not.toContain("A few short paragraphs");
+    // Only that block. Everything a file on disk cannot say still has to be here,
+    // including the rule the stop hook enforces.
     expect(text).toContain(SHARED_RULES);
     expect(text).toContain(CREDENTIAL_RULES);
+    expect(text).toContain("post a message on this task");
     expect(text).toContain(
       artifactRulesOf({ hasProject: true, hasRepo: true })
     );

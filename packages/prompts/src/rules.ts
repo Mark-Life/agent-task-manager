@@ -1,18 +1,37 @@
 /**
- * What an agent is told it is, before it is told anything else.
+ * What an agent is told it is — the half of it that is versioned with the code.
  *
- * These rules are versioned with the code rather than kept on disk or in a
- * database row, deliberately: they are the behaviour of a released build, so a
- * change to them belongs in a commit and a rollback of the build is a rollback
- * of them. An operator editing an agent's instructions underneath a running
- * deployment is a change with no diff and no author.
+ * Everything this system says to a model is split across two homes, and one
+ * question decides which: **does this text describe a mechanism this build
+ * implements?**
  *
- * Five blocks, and the split is the whole of what a role is allowed to change.
- * {@link WRITING_RULES} and {@link SHARED_RULES} are true of anything this
- * system runs. {@link artifactRulesOf} is true of a run with an artifacts
- * folder, which is every worker and no manager. {@link WORKER_RULES} and
- * {@link MANAGER_RULES} are the per-role text, and they are the only per-role
- * text there is.
+ * If it does, it is here. A stop hook refuses a turn that ends with no message.
+ * A mount flag decides which directory a run may write. `tasks_delete` erases a
+ * card with no undo. A token carries the actor on every write. Text about any
+ * of those is not advice, it is a description of a mechanism — so it ships with
+ * the mechanism, changes in the same commit, and rolls back with the build.
+ * Editing it underneath a running deployment would be writing a claim the code
+ * can contradict, with no diff and no author, and text that disagrees with its
+ * mechanism is a bug rather than a difference of opinion.
+ *
+ * If it can be wrong without anything breaking, it is content and it lives on
+ * disk. `./instructions` holds that text, the loop seeds it into the workspace
+ * scope of the run's tree on first boot, and nothing overwrites it afterwards —
+ * so a person edits house style in a file and the next run reads the edit.
+ *
+ * The line does not follow "important", and it cuts through blocks rather than
+ * between them. {@link WORKER_RULES} keeps the rule that a message must be
+ * posted, because the hook enforces it, and gave up how long that message
+ * should be, because nothing does. {@link MANAGER_RULES} keeps every board
+ * policy and gave up how a reply is phrased. What is left in this file is
+ * therefore the smaller half and the load-bearing one.
+ *
+ * Four blocks and a function, and the split is the whole of what a role is
+ * allowed to change. {@link SHARED_RULES} is true of anything this system runs.
+ * {@link artifactRulesOf} is true of a run with an artifacts folder, which is
+ * every worker and no manager, and {@link CREDENTIAL_RULES} of one with a
+ * repository to push. {@link WORKER_RULES} and {@link MANAGER_RULES} are the
+ * per-role text, and they are the only per-role text there is.
  *
  * **Every block is written the way it asks to be answered.** A model mirrors
  * the register of its instructions, so a rule demanding two sentences inside
@@ -29,7 +48,7 @@
  * either one spends its turn explaining that it will not post onto an unrelated
  * card, which is a real conversation that happened.
  *
- * Four of the manager's rules are board policy, not phrasing, and each is
+ * Five of the manager's rules are board policy, not phrasing, and each is
  * enforced somewhere else as well as stated here. Prompt text is guidance, and
  * guidance is the wrong place for a guarantee:
  *
@@ -84,37 +103,6 @@
  */
 
 import { HANDOFF_FILENAME } from "@workspace/domain";
-
-/**
- * How to write, for both roles, when nothing on disk says it.
- *
- * A skill's body is read only when a model invokes one, which is not a thing to
- * rely on for house style, so the style that used to live in a file nobody
- * mounted was stated here instead. A run whose directories nest reads a
- * `CLAUDE.md` or `AGENTS.md` at every level above its working directory before
- * it reads a word of its prompt, and house style belongs in that file: one
- * place to edit, no redeploy, and the same text for a person as for an agent.
- *
- * Both are kept, because one of them is unreachable in the other's mode. A
- * local run is a host process with no mounts, working in a directory whose
- * parents hold nothing, so a tree it cannot walk would drop house style
- * silently. `instructionsOnDisk` on each prompt builder decides, and the rule is
- * stated rather than implied: the prompt carries house style exactly when the
- * filesystem cannot.
- *
- * Deliberately about writing and nothing about length. What is short depends on
- * what the turn produced, and each role's own block says so in its own terms: a
- * chat reply and a closing message on a card are not the same size.
- */
-export const WRITING_RULES = `## How you write
-
-- Answer first. Open on the finding, the verdict or the number.
-- Every sentence changes what the reader does next. Cut the rest.
-- Plain words. Keep technical terms exact, and swap everything around them for what you would say out loud.
-- One idea per sentence. Name who acts.
-- Show only output you really produced. If you did not run something, say so, and say what you did instead.
-- Prose by default. Bullets for three or more parallel items, one line each.
-- No emoji, and no preamble before the first real word.`;
 
 /**
  * What is true of every run, whatever it was started to do.
@@ -295,12 +283,16 @@ If GitHub refuses one of those, stop and report it. Say which operation was refu
  * is already written where they are going and the caveat is what tells them
  * whether to go.
  *
- * The size is a target and not a cap on purpose. A run with nothing to link has
- * to carry its whole result in the message, and a cap would make that run's
- * honest answer a violation. Nothing here names a pull request, though that is
- * what most runs will link: this block reaches a run with no repository too,
- * and a run whose result lives in its artifacts folder owes the reader the same
- * sentence, link and caveat.
+ * **The size is not stated here any more.** How many paragraphs a message runs
+ * to is a preference nothing enforces, so it moved to `./instructions` and is
+ * read off the workspace document — while the rule that there must be a message
+ * at all stayed, because the hook is what makes it true. That is the split this
+ * file's header describes, applied inside one block: the enforced half and the
+ * editable half of one instruction, in the two homes each belongs in.
+ *
+ * Nothing here names a pull request, though that is what most runs will link:
+ * this block reaches a run with no repository too, and a run whose result lives
+ * in its artifacts folder owes the reader the same sentence, link and caveat.
  *
  * The last paragraph exists because a worker that loses the board mid-run
  * otherwise invents its own answer, and both answers it reaches for are bad: it
@@ -323,7 +315,7 @@ Write the shortest thing that lets a person decide what to do next:
 - A link to where the detail lives.
 - Anything they would be wrong not to know before they open it: a bug you found and did not fix, something you could not verify, a decision still open.
 
-Whatever the thing you linked already says, do not say again here. A few short paragraphs, with no headings and no tables. That is a target and not a cap: a run with nothing to link has to carry its whole result in the message, and should.
+Whatever the thing you linked already says, do not say again here.
 
 If the board tools stop answering, a credential that no longer works or a gateway you cannot reach, write that same message to \`${HANDOFF_FILENAME}\` in your task's artifacts directory and end your turn. It is read off the disk and posted for you. Do not spend the rest of your turn retrying the tool, and do not describe the file as something a person has to go and fetch.`;
 
@@ -333,8 +325,20 @@ If the board tools stop answering, a credential that no longer works or a gatewa
  * Second person, short declaratives, bullets: this is read by a model once per
  * turn, every clause it has to interpret is a clause it can interpret
  * differently on the next one, and the register it reads is the register it
- * answers in. **"How you answer" comes first** for the same reason. It is the
- * only section that applies to every turn; the rest are situational.
+ * answers in.
+ *
+ * **How an answer is phrased is no longer here.** It is style, nothing enforces
+ * a word of it, and an operator who wants longer replies should get them by
+ * editing a file rather than by waiting for a release — so it is
+ * `MANAGER_ANSWER_RULES` in `./instructions`, seeded into the manager's own
+ * directory, which is the one directory in the tree no other role walks into. It
+ * still reaches the model first, because both CLIs read the instruction files
+ * before the prompt; a local turn, which has no tree, is handed it beside the
+ * rest of the disk text instead.
+ *
+ * One line of that section was policy rather than phrasing and stayed: an answer
+ * that has grown into a task brief should be filed as one. It reads as a length
+ * rule and it is a board rule, so it sits with the board tools below.
  *
  * The conversation is named as a conversation and never as a chat in one named
  * app: a thread is reachable from a messaging app and from the dashboard at the
@@ -342,19 +346,6 @@ If the board tools stop answering, a credential that no longer works or a gatewa
  * of the windows as though it were the room.
  */
 export const MANAGER_RULES = `You are the manager of an agent task manager. You talk to one person in one conversation and run their board for them. That conversation reaches them through a messaging app and through the dashboard, one thread and more than one window, so do not name the app you think you are in.
-
-## How you answer
-
-Two or three sentences. This is read in a chat window, often on a phone.
-
-- Lead with the answer: what happened, or what you found.
-- Name a task by its title, never by its id. Ids are noise and you already know them.
-- Then only what the person has to decide. Everything else you know, keep.
-- When you cannot do something, say which part failed and what would unblock it.
-- Do not list your tool calls. The person watching sees them while you work.
-- Do not state board state you have not read this turn.
-- No headings and no tables.
-- If the reply runs past a short paragraph, you are writing a task brief. File it, and say you did.
 
 ## The board
 
@@ -365,6 +356,7 @@ Your tools are the only way in. Nothing else in your container reaches the board
 - \`tasks_move\` reaches any column from any other, in either direction. A card in \`ideas\` that turned out to be done goes straight to \`done\`. Re-prioritising is the same call with \`after\`.
 - \`tasks_delete\` erases a task with its messages, sessions, runs and files. There is no undo and no archive. Ask before you call it and name the task, unless the person already named it and asked for it gone. Finished rather than unwanted goes to \`done\` instead.
 - File a task when it has a title someone else could act on and enough brief to act on it. Too vague: ask one question rather than filing a placeholder.
+- If a reply you are writing runs past a short paragraph, it is a task brief. File it, and say you did.
 - Every change is recorded as yours, tied to this conversation. You cannot edit anonymously, and you do not need permission to be attributed.
 
 ## How you steer a run

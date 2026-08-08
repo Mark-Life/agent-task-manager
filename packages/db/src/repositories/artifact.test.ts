@@ -1,6 +1,7 @@
 /**
- * Promotion, against a real database, because the claim is that two writes land
- * together and a third never lands twice.
+ * Promotion and the project folder's rescan, against a real database, because
+ * the claims are that two writes land together, that a third never lands twice,
+ * and that rebuilding the index from a directory leaves a decision alone.
  *
  * The half nobody sees is the one worth testing. Stamping the task's own row is
  * visible to whoever asked for it; the row in the shared folder is what every
@@ -73,6 +74,7 @@ const globalPath = `db-artifact-test/${randomUUID()}.md`;
 
 let workspaceId: WorkspaceId;
 let project: Project;
+let scanned: Project;
 let taskA: Task;
 let taskB: Task;
 
@@ -164,8 +166,16 @@ beforeAll(async () => {
         title: "artifacts: the file that replaces it",
         workspaceId: first.id,
       });
+      // A project of its own for the rescans. A rescan deletes every row in the
+      // folder its scan did not find, so pointing one at the project the
+      // promotion tests share would have them delete each other's fixtures.
+      const rescanned = yield* projects.create({
+        name: "artifacts: the folder a run writes",
+        workspaceId: first.id,
+      });
       return {
         project: made,
+        scanned: rescanned,
         taskA: producer,
         taskB: successor,
         workspaceId: first.id,
@@ -173,7 +183,7 @@ beforeAll(async () => {
     }).pipe(withActor(caller))
   );
 
-  ({ project, taskA, taskB, workspaceId } = built);
+  ({ project, scanned, taskA, taskB, workspaceId } = built);
 });
 
 afterAll(async () => {
@@ -188,6 +198,7 @@ afterAll(async () => {
       yield* tasks.delete({ id: taskA.id, workspaceId });
       yield* tasks.delete({ id: taskB.id, workspaceId });
       yield* projects.delete({ id: project.id, workspaceId });
+      yield* projects.delete({ id: scanned.id, workspaceId });
     }).pipe(withActor(remover))
   );
   await runtime.dispose();
@@ -311,4 +322,108 @@ test("a global promotion is keyed on the workspace and carries no project", asyn
   expect(destination.taskId).toBeNull();
   expect(destination.path).toBe(globalPath);
   expect(await runtime.runPromise(rowsAt(globalPath))).toBe(1);
+});
+
+/**
+ * A run's own writes into the project folder, indexed the way its teardown
+ * does it. The folder stopped being reachable only through a promotion when the
+ * project scope became read-write, and a file with no row is a file the
+ * dashboard cannot see.
+ */
+const rescanProject = (
+  files: readonly { readonly bytes: number; readonly path: string }[]
+) =>
+  Effect.gen(function* () {
+    const artifacts = yield* ArtifactRepo;
+    const stats = yield* Effect.forEach(files, statOf);
+    return yield* artifacts.replaceProjectIndex({
+      lastRunId: null,
+      projectId: scanned.id,
+      stats,
+      workspaceId,
+    });
+  });
+
+/** What the project's folder holds in the index, by path. */
+const projectRows = Effect.fnUntraced(function* () {
+  const sql = yield* PgClient.PgClient;
+  return yield* sql`
+    select id, path, bytes, promoted_at, content_hash from artifact
+    where project_id = ${scanned.id} and scope = 'project'
+    order by path
+  `;
+});
+
+test("a rescan of a project's folder indexes what a run left there", async () => {
+  const rows = await runtime.runPromise(
+    rescanProject([
+      { bytes: 12, path: "research/august.md" },
+      { bytes: 34, path: "research/notes.md" },
+    ])
+  );
+
+  expect(rows.map((row) => row.path)).toEqual([
+    "research/august.md",
+    "research/notes.md",
+  ]);
+  for (const row of rows) {
+    expect(row.scope).toBe("project");
+    expect(row.projectId).toBe(scanned.id);
+    // A shared row names no task: it outlives whichever run wrote it.
+    expect(row.taskId).toBeNull();
+    // Nobody decided anything, so nothing claims they did.
+    expect(row.promotedAt).toBeNull();
+  }
+});
+
+/**
+ * A promotion is a decision with an audit row behind it. A rescan that cleared
+ * its stamp would let the same file be promoted a second time and would lose
+ * the digest that says whether the two copies have parted company — so the
+ * upsert writes only what a `stat` can answer.
+ */
+test("a rescan keeps the stamp on a file somebody promoted", async () => {
+  const path = "research/promoted.md";
+  const promoted = await runtime.runPromise(
+    Effect.gen(function* () {
+      const artifacts = yield* ArtifactRepo;
+      const row = yield* indexFile({ bytes: 5, path, task: taskB });
+      const { destination } = yield* artifacts.promote({
+        copy: yield* copyOf({ bytes: 5, path }),
+        id: row.id,
+        to: { projectId: scanned.id, scope: "project" },
+        workspaceId,
+      });
+      return destination;
+    })
+  );
+
+  const rows = await runtime.runPromise(
+    rescanProject([
+      { bytes: 5, path: "research/august.md" },
+      // The same file, a byte longer, as a later run left it.
+      { bytes: 6, path },
+    ])
+  );
+
+  const after = rows.find((row) => row.path === path);
+  expect(after?.id).toBe(promoted.id);
+  expect(after?.bytes).toBe(6);
+  expect(after?.promotedAt).not.toBeNull();
+  expect(after?.contentHash).toBe(promoted.contentHash);
+});
+
+/**
+ * The delete is what stops the folder listing files that 404 on click, and it
+ * applies to a promoted row too: an index that outlived its bytes reads as a
+ * broken server rather than as a deleted file.
+ */
+test("a rescan drops the row of a file that is no longer in the folder", async () => {
+  await runtime.runPromise(
+    rescanProject([{ bytes: 1, path: "research/last.md" }])
+  );
+
+  const rows = await runtime.runPromise(projectRows());
+
+  expect(rows.map((row) => row.path)).toEqual(["research/last.md"]);
 });

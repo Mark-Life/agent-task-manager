@@ -86,7 +86,9 @@
  * an indexed column with a relation back to the run, and `copyArtifact` already
  * records a sha256. What is genuinely lost is overwrite: two runs writing
  * different names never collide, and a run replacing an existing path is guarded
- * on the host, where the old bytes can be kept, rather than by the mount.
+ * on the host rather than by the mount — `./history` commits both shared scopes
+ * around every run, so the replaced bytes are still in the folder's own `git
+ * log`.
  *
  * A manager turn gets the workspace scope read-write. It is the role a human is
  * talking to, its own rules live under it, and it reads no untrusted repository.
@@ -776,8 +778,16 @@ export interface NestedMountPoint {
   readonly purpose: MountPurpose;
 }
 
-/** True when `child` sits below `parent`, counted in segments rather than characters. */
-const isUnder = (child: string, parent: string) =>
+/**
+ * True when `child` sits below `parent`, counted in segments rather than
+ * characters — `/workspace-scratch` is not under `/workspace`, and a raw string
+ * prefix would say it was.
+ *
+ * Exported for `./instruction-budget`, which walks the same tree in the other
+ * direction: this file asks which host directory a nested destination belongs
+ * in, and that one asks which host directory each level of a run's tree is.
+ */
+export const isUnder = (child: string, parent: string) =>
   child.startsWith(`${parent}/`);
 
 /**
@@ -794,9 +804,6 @@ const isUnder = (child: string, parent: string) =>
  * The parent is the *deepest* other mount that covers the path, because that is
  * the bind the destination will actually be looked up in: the task scope's
  * directory belongs inside the project's host folder, not inside the global one.
- *
- * Matching is on segment boundaries: `/workspace-scratch` is not under
- * `/workspace`, and a raw string prefix would say it was.
  *
  * Every entry is a directory. The one bind of a file — the entrypoint bundle —
  * is at a top-level path under no other mount, so it never appears here.

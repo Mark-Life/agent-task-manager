@@ -57,6 +57,7 @@ import {
   identityEnv,
   type Mount,
   managerMountsFor,
+  measureInstructionBudget,
   mountsFor,
   packageCacheEnv,
   repoLabelOf,
@@ -392,6 +393,18 @@ export const executeRun = (input: ExecuteRunInput) =>
       ...current,
       branch: made.branch,
     }));
+
+    // What the tree costs this run, measured once the directories exist and
+    // before anything reads them. Only for a contained turn: a host process
+    // works in a checkout whose parents hold none of these files, so summing the
+    // tree would report bytes that turn was never handed.
+    if (contained) {
+      const budget = yield* measureInstructionBudget(made.mounts);
+      yield* Ref.update(progress, (current) => ({
+        ...current,
+        instructionBytes: budget.totalBytes,
+      }));
+    }
 
     // The prompt is built after the directories exist, because it names them:
     // where to write an artifact worth keeping, and which branch the checkout

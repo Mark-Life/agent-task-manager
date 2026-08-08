@@ -18,6 +18,11 @@ import {
 } from "@workspace/domain";
 import { DateTime } from "effect";
 import {
+  MANAGER_ANSWER_RULES,
+  WORKSPACE_RULES,
+  WRITING_RULES,
+} from "./instructions";
+import {
   buildManagerPrompt,
   FRESH_HISTORY_MESSAGES,
   renderChatMessage,
@@ -28,7 +33,6 @@ import {
   MANAGER_RULES,
   SHARED_RULES,
   WORKER_RULES,
-  WRITING_RULES,
 } from "./rules";
 
 const threadId = newThreadId();
@@ -89,10 +93,12 @@ describe("a first turn's prompt", () => {
 
     expect(text.startsWith(MANAGER_RULES)).toBe(true);
     expect(text).toContain(SHARED_RULES);
-    // The house style reaches both roles from here. A run never sees the
-    // operator's own `AGENTS.md`, and a mounted skill's body is read only if
-    // the model invokes it, so neither is a place to keep it.
+    // The seeded rules reach a turn from here whenever it has no tree to read
+    // them from. A run never sees the operator's own `AGENTS.md`, and a mounted
+    // skill's body is read only if the model invokes it, so neither is a place
+    // to keep them.
     expect(text).toContain(WRITING_RULES);
+    expect(text).toContain(MANAGER_ANSWER_RULES);
     expect(text.indexOf("## The conversation so far")).toBeLessThan(
       text.indexOf("Person: what is on the board?")
     );
@@ -223,7 +229,8 @@ describe("a resumed turn's prompt", () => {
   test("repeats nothing the session already has in its own history", () => {
     expect(text).not.toContain(MANAGER_RULES);
     expect(text).not.toContain(SHARED_RULES);
-    expect(text).not.toContain(WRITING_RULES);
+    expect(text).not.toContain(WORKSPACE_RULES);
+    expect(text).not.toContain(MANAGER_ANSWER_RULES);
     expect(text).not.toContain(placement.workspaceDir);
   });
 
@@ -333,6 +340,17 @@ describe("the rules", () => {
     expect(MANAGER_RULES).toContain("asks that run to stop");
   });
 
+  /**
+   * How an answer is phrased is seeded on disk and editable there. The one line
+   * of it that was board policy rather than phrasing — an answer that has grown
+   * into a brief belongs on a card — is enforced by nothing else, so it stays
+   * where the tool that files it is named.
+   */
+  test("keep the rule that an answer grown into a brief is filed as one", () => {
+    expect(MANAGER_RULES).not.toContain("## How you answer");
+    expect(MANAGER_RULES).toContain("it is a task brief. File it");
+  });
+
   test("name no single window the conversation arrives through", () => {
     expect(MANAGER_RULES).not.toContain("Telegram");
   });
@@ -392,27 +410,40 @@ describe("the rules", () => {
 });
 
 /**
- * The prompt carries house style exactly when the filesystem cannot. A
- * container turn reads the same rules out of a `CLAUDE.md` above its working
- * directory; a local turn is a host process with nothing above it, so dropping
- * them there would lose them silently.
+ * The prompt carries the seeded rules exactly when the filesystem cannot. A
+ * container turn reads the same text out of the workspace document and its own
+ * `manager/AGENTS.md`; a local turn is a host process with nothing above it, so
+ * dropping them there would lose them silently.
  */
-describe("house style, on disk or in the prompt", () => {
+describe("the seeded rules, on disk or in the prompt", () => {
   const messages = [message({ body: "hi", role: "user" })];
 
-  test("states the writing rules when the turn has no tree to read them from", () => {
-    expect(textOf({ instructionsOnDisk: false, messages })).toContain(
-      WRITING_RULES
-    );
+  test("states both documents when the turn has no tree to read them from", () => {
+    const text = textOf({ instructionsOnDisk: false, messages });
+    expect(text).toContain(WORKSPACE_RULES);
+    expect(text).toContain(MANAGER_ANSWER_RULES);
     // A caller that has not been updated is that case, so silence means stated.
-    expect(textOf({ messages })).toContain(WRITING_RULES);
+    expect(textOf({ messages })).toContain(WORKSPACE_RULES);
+  });
+
+  /**
+   * Root-down, deepest last, which is how both CLIs concatenate the files
+   * themselves — so the manager's own answering rules still win by position
+   * over the house style every role reads.
+   */
+  test("states them in the order the tree would have handed them over", () => {
+    const text = textOf({ messages });
+    expect(text.indexOf(WORKSPACE_RULES)).toBeLessThan(
+      text.indexOf(MANAGER_ANSWER_RULES)
+    );
   });
 
   test("leaves them out when the directories carry them", () => {
     const text = textOf({ instructionsOnDisk: true, messages });
-    expect(text).not.toContain(WRITING_RULES);
+    expect(text).not.toContain(WORKSPACE_RULES);
     expect(text).not.toContain("## How you write");
-    // Only that block. Board policy is not a thing a file on disk can promise.
+    expect(text).not.toContain("## How you answer");
+    // Only those blocks. Board policy is not a thing a file on disk can promise.
     expect(text).toContain(MANAGER_RULES);
     expect(text).toContain(SHARED_RULES);
   });
