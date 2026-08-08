@@ -23,6 +23,17 @@ describe("parseWhamUsage", () => {
     // `reset_at` is unix seconds on this endpoint; everything else is millis.
     expect(usage.primary?.resetsAtMs).toBe(1_781_287_930_000);
     expect(usage.reachedWindow).toBeNull();
+    // What the plan pages leave unclear and the body settles: five hours and
+    // seven days, the same pair Claude reports, and no daily window.
+    expect(usage.primary?.windowSeconds).toBe(18_000);
+    expect(usage.secondary?.windowSeconds).toBe(604_800);
+  });
+
+  test("a window that states no length is labelled by role rather than guessed at", () => {
+    const usage = parseWhamUsage({
+      rate_limit: { primary_window: { used_percent: 4 } },
+    });
+    expect(usage.primary?.windowSeconds).toBeNull();
   });
 
   test("either spelling of the reached flag is a drain", () => {
@@ -86,17 +97,20 @@ const withTempAuth = (contents: string | null) => {
     writeFileSync(authPath, contents);
   }
   return {
-    authPath,
+    agentHomeDir: dir,
     cleanup: () => rmSync(dir, { force: true, recursive: true }),
   };
 };
 
-const readUsage = (options: CodexUsageOptions) =>
+const readUsage = (input: {
+  readonly agentHomeDir: string;
+  readonly options: CodexUsageOptions;
+}) =>
   Effect.runPromise(
     Effect.gen(function* () {
       const fs = yield* FileSystem;
       const http = yield* HttpClient.HttpClient;
-      return yield* fetchCodexUsage({ fs, http, options });
+      return yield* fetchCodexUsage({ ...input, fs, http });
     }).pipe(
       Effect.provide(BunFileSystem.layer),
       Effect.provide(FetchHttpClient.layer)
@@ -105,9 +119,12 @@ const readUsage = (options: CodexUsageOptions) =>
 
 describe("fetchCodexUsage", () => {
   test("a missing credentials file fails open rather than failing the dispatch", async () => {
-    const { authPath, cleanup } = withTempAuth(null);
+    const { agentHomeDir, cleanup } = withTempAuth(null);
     try {
-      const usage = await readUsage({ authPath, url: "http://127.0.0.1:1/" });
+      const usage = await readUsage({
+        agentHomeDir,
+        options: { url: "http://127.0.0.1:1/" },
+      });
       expect(usage.available).toBe(false);
       expect(usage.limitReached).toBe(false);
     } finally {
@@ -116,9 +133,12 @@ describe("fetchCodexUsage", () => {
   });
 
   test("malformed credentials fail open too", async () => {
-    const { authPath, cleanup } = withTempAuth("{not json");
+    const { agentHomeDir, cleanup } = withTempAuth("{not json");
     try {
-      const usage = await readUsage({ authPath, url: "http://127.0.0.1:1/" });
+      const usage = await readUsage({
+        agentHomeDir,
+        options: { url: "http://127.0.0.1:1/" },
+      });
       expect(usage.available).toBe(false);
     } finally {
       cleanup();
@@ -126,13 +146,13 @@ describe("fetchCodexUsage", () => {
   });
 
   test("an unreachable endpoint fails open with a token in hand", async () => {
-    const { authPath, cleanup } = withTempAuth(
+    const { agentHomeDir, cleanup } = withTempAuth(
       JSON.stringify({ tokens: { access_token: "test-token" } })
     );
     try {
       const usage = await readUsage({
-        authPath,
-        url: "http://127.0.0.1:1/usage",
+        agentHomeDir,
+        options: { url: "http://127.0.0.1:1/usage" },
       });
       expect(usage.available).toBe(false);
     } finally {

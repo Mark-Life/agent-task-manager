@@ -27,10 +27,17 @@ export type QuotaWindow = (typeof QUOTA_WINDOWS)[number];
  * reader, so nothing downstream has to remember which source reports a fraction.
  * `resetsAtMs` is null where the source omitted it — an invented reset would
  * hold the pool closed past the real one.
+ *
+ * `windowSeconds` is how long the window is, as the provider stated it. It is
+ * carried rather than assumed because it is what labels the figure for whoever
+ * reads it, and a label the provider did not say is a label that goes stale
+ * silently: Codex names the length on every window it reports, and Claude names
+ * it in the key. Null where a source states neither.
  */
 export interface WindowUsage {
   readonly resetsAtMs: number | null;
   readonly utilizationPercent: number;
+  readonly windowSeconds: number | null;
 }
 
 /** One read of a provider's allowance. */

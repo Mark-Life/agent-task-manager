@@ -63,6 +63,20 @@
  */
 
 export { type OrchestratorConfig, orchestratorConfig } from "./config";
+/**
+ * The two usage readers and the shape they publish, for the one caller outside
+ * this package that legitimately wants them: `bun run quota:check`, which
+ * proves a host's provider credentials are readable before the gate has to find
+ * out during a dispatch. Nothing else should reach for them — the gate caches,
+ * counts and publishes each read, and a second reader in the same process is a
+ * second answer to how much is left.
+ */
+export {
+  fetchClaudeUsage,
+  fetchCodexUsage,
+  type ProviderUsage,
+  providerReport,
+} from "./quota";
 export {
   RUN_EVENT_MARKER,
   RUN_EVENT_OUTCOMES,

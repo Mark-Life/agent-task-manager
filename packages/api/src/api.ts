@@ -8,6 +8,7 @@ import { RunsGroup } from "./groups/runs";
 import { SessionsGroup } from "./groups/sessions";
 import { TasksGroup } from "./groups/tasks";
 import { ThreadsGroup } from "./groups/threads";
+import { UsageGroup } from "./groups/usage";
 
 /**
  * The whole HTTP surface of the system, as a contract.
@@ -50,7 +51,8 @@ export class Api extends HttpApi.make("atm")
     RunsGroup,
     RunCommandsGroup,
     ArtifactsGroup,
-    ThreadsGroup
+    ThreadsGroup,
+    UsageGroup
   )
   .annotate(OpenApi.Title, "Agent Task Manager")
   .annotate(OpenApi.Version, "0.0.1")

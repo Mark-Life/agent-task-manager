@@ -11,13 +11,18 @@
  * rotates it on its own cadence, and a cached one simply 401s after expiry —
  * which lands as unavailable, distinct from a drain.
  *
+ * It is read out of the *agent home* — the system-owned login directory every
+ * container is handed — and never out of `~/.claude`. Those are two different
+ * subscriptions on any host where a person also uses the CLI, and on a server
+ * the operator's one does not exist at all. The allowance worth reporting is the
+ * one the runs spend.
+ *
  * Field spellings are pinned to a captured live response in
  * `fixtures/claude-oauth-usage.json`, and the tests read that file rather than a
  * hand-written object: the endpoint's shape is the load-bearing assumption here,
  * so the fixture is the assumption written down.
  */
 
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
 import type { FileSystem } from "effect/FileSystem";
@@ -40,14 +45,23 @@ const OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
  */
 export const OAUTH_BETA_HEADER = "oauth-2025-04-20";
 
-/** Where the Claude CLI keeps the credentials it refreshes. */
-const CLAUDE_AUTH_PATH = join(homedir(), ".claude", ".credentials.json");
+/** What the Claude CLI names the credentials it refreshes, inside its config directory. */
+const CLAUDE_CREDENTIALS_FILE = ".credentials.json";
 
 /** A window is drained at 100%; the provider reports no explicit flag of its own. */
 const FULL_UTILIZATION = 100;
 
 /** Every weekly window key carries this prefix: account-wide, per-model, per-feature. */
 const WEEKLY_PREFIX = "seven_day";
+
+/**
+ * How long each window is, in seconds, taken from the key that names it. This
+ * body states the span in its field names rather than in a value — `five_hour`,
+ * `seven_day` — so this is that name read as a number, and it moves when the
+ * spelling does rather than drifting quietly behind it.
+ */
+const FIVE_HOUR_SECONDS = 18_000;
+const SEVEN_DAY_SECONDS = 604_800;
 
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
@@ -64,7 +78,10 @@ const asRecord = (value: unknown) =>
  * reads as "this window is not limiting", which is the steady state — most of
  * the per-model windows are `null` unless that bucket itself is limited.
  */
-const parseWindow = (raw: unknown): WindowUsage | null => {
+const parseWindow = (
+  raw: unknown,
+  windowSeconds: number
+): WindowUsage | null => {
   const window = asRecord(raw);
   if (window === null || !isFiniteNumber(window.utilization)) {
     return null;
@@ -76,6 +93,7 @@ const parseWindow = (raw: unknown): WindowUsage | null => {
   return {
     resetsAtMs: Number.isNaN(resetsAt) ? null : resetsAt,
     utilizationPercent: window.utilization,
+    windowSeconds,
   };
 };
 
@@ -92,7 +110,7 @@ const parseWeekly = (root: Readonly<Record<string, unknown>>) => {
     if (!key.startsWith(WEEKLY_PREFIX)) {
       continue;
     }
-    const window = parseWindow(root[key]);
+    const window = parseWindow(root[key], SEVEN_DAY_SECONDS);
     if (
       window !== null &&
       (worst === null || window.utilizationPercent > worst.utilizationPercent)
@@ -134,7 +152,7 @@ export const parseOauthUsage = (raw: unknown): ProviderUsage => {
   if (root === null) {
     return UNAVAILABLE_USAGE;
   }
-  const primary = parseWindow(root.five_hour);
+  const primary = parseWindow(root.five_hour, FIVE_HOUR_SECONDS);
   const secondary = parseWeekly(root);
   const primaryFull =
     primary !== null && primary.utilizationPercent >= FULL_UTILIZATION;
@@ -198,15 +216,16 @@ const readToken = (fs: FileSystem, authPath: string) =>
     })
   );
 
-/** Overrides, all of them for a test or for a rotated beta tag. */
+/** Overrides: a test's endpoint, or a rotated beta tag. */
 export interface ClaudeUsageOptions {
-  readonly authPath?: string;
   readonly betaHeader?: string;
   readonly url?: string;
 }
 
 /** What the reader is handed once, at gate construction. */
 export interface ClaudeUsageInput {
+  /** The provider's system-owned login directory — the one mounted into every container. */
+  readonly agentHomeDir: string;
   readonly fs: FileSystem;
   readonly http: HttpClient.HttpClient;
   readonly options?: ClaudeUsageOptions;
@@ -219,11 +238,12 @@ export interface ClaudeUsageInput {
  * body can produce a drain.
  */
 export const fetchClaudeUsage = ({
+  agentHomeDir,
   fs,
   http,
   options,
 }: ClaudeUsageInput): Effect.Effect<ProviderUsage> =>
-  readToken(fs, options?.authPath ?? CLAUDE_AUTH_PATH).pipe(
+  readToken(fs, join(agentHomeDir, CLAUDE_CREDENTIALS_FILE)).pipe(
     Effect.flatMap((token) =>
       http.execute(
         HttpClientRequest.get(options?.url ?? OAUTH_USAGE_URL).pipe(
