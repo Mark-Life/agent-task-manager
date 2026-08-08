@@ -1,10 +1,16 @@
-import { PencilEdit01Icon } from "@hugeicons/core-free-icons";
+import {
+  Cancel01Icon,
+  PencilEdit01Icon,
+  Tick02Icon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Markdown } from "@workspace/ui/components/markdown";
 import { cn } from "@workspace/ui/lib/utils";
 import {
   type ChangeEvent,
+  type ComponentProps,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
   useCallback,
   useState,
@@ -292,9 +298,9 @@ export const InlineText = ({
  * click it and the page opens, middle-click it and it opens in a tab, copy the
  * address from the context menu — and click-to-edit takes all of that away to
  * buy an edit that is wanted far less often. So a filled URL stays a link, and
- * changing it is a pencil that appears when the row is hovered or focused. An
- * empty one has no link to protect, so the whole row is the invitation to type
- * one, exactly like every other empty property.
+ * changing it is a pencil beside it. An empty one has no link to protect, so
+ * the whole row is the invitation to type one, exactly like every other empty
+ * property.
  *
  * Text that is not a URL — half-typed, or a field somebody used for a note —
  * behaves as plain inline text rather than as a link that would go nowhere.
@@ -347,7 +353,7 @@ export const InlineLink = ({
   return (
     <span
       className={cn(
-        "group -mx-1 flex w-full items-center gap-1 rounded-sm px-1 hover:bg-muted/60",
+        "-mx-1 flex w-full items-center gap-1 rounded-sm px-1 hover:bg-muted/60",
         className
       )}
     >
@@ -367,8 +373,9 @@ export const InlineLink = ({
 
 /**
  * The way into an edit when the value itself has to keep its own clicks: a link
- * that should follow, a document whose links should follow. Quiet until the row
- * is hovered, and always reachable by keyboard.
+ * that should follow. It used to fade in on hover, which put it out of reach of
+ * every touch screen — there is no hover to give — so it is simply always
+ * there, quiet in the muted colour until it is pointed at.
  */
 const EditPencil = ({
   label,
@@ -379,7 +386,7 @@ const EditPencil = ({
 }) => (
   <button
     aria-label={label}
-    className="shrink-0 rounded-sm p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 group-hover:opacity-100"
+    className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
     onClick={onClick}
     type="button"
   >
@@ -458,28 +465,83 @@ export const InlineArea = ({
 };
 
 /**
- * A document of the record, read as a document and edited as its source.
+ * Leave the focus where it is. The box these buttons drive commits on blur, so
+ * a cross that took focus would commit the draft on the way down and then have
+ * nothing left to cancel.
+ */
+const keepFocus = (event: MouseEvent<HTMLButtonElement>) =>
+  event.preventDefault();
+
+/**
+ * A control in a section header: an icon, a name for it, and nothing that has
+ * to be discovered. Bigger than the pencil that sits inside a line of body
+ * text, because up here it is next to a small label rather than competing with
+ * the words it would interrupt.
+ */
+const HeaderButton = ({
+  icon,
+  label,
+  onClick,
+}: {
+  readonly icon: ComponentProps<typeof HugeiconsIcon>["icon"];
+  readonly label: string;
+  readonly onClick: () => void;
+}) => (
+  <button
+    aria-label={label}
+    className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+    onClick={onClick}
+    onMouseDown={keepFocus}
+    type="button"
+  >
+    <HugeiconsIcon className="size-4.5" icon={icon} strokeWidth={2} />
+  </button>
+);
+
+interface DocumentFieldProps {
+  /** Extra classes on the read and edit faces of the document itself. */
+  readonly className?: string;
+  /** What an unset document renders as — the invitation to write one. */
+  readonly emptyText: string;
+  /** The heading over the document. */
+  readonly label: string;
+  /** What the controls call this field to assistive technology, lower case. */
+  readonly name: string;
+  readonly onCommit: (next: string) => void;
+  /** Where the source box starts while editing; it grows with the text. */
+  readonly rows?: number;
+  readonly value: string;
+}
+
+/**
+ * A document of the record under its own heading, read as a document and
+ * edited as its source: the brief, the acceptance criteria.
  *
- * The brief and the acceptance criteria are written by agents in markdown, so
- * shown verbatim they read as punctuation around the sentences. Rendered, they
- * gain links and lists — and a rendered document cannot also be a click-to-edit
- * target, because clicking one of its links would open an edit instead of the
- * page. So this follows the link field's answer: the document keeps its own
- * clicks and the pencil starts the edit. An empty one has no document to
- * protect, so the whole row is the invitation to write one.
+ * Agents write these in markdown, so shown verbatim they read as punctuation
+ * around the sentences. Rendered, they gain links and lists — and a rendered
+ * document cannot also be a click-to-edit target, because clicking one of its
+ * links would open an edit instead of the page. So the way in is a button, and
+ * it lives in the heading rather than in the prose: hidden until hover, as it
+ * was, it did not exist at all on a phone, and a heading has room for a control
+ * that a line of body text does not.
+ *
+ * The one button becomes two for as long as the edit lasts, a tick and a cross,
+ * so the two ways out are named and reachable by the same finger that opened
+ * it. Blur and the keys still commit and abandon for anyone already typing.
  *
  * Editing is the source, not a rich editor. What is stored is markdown, agents
  * write it directly, and a box showing exactly what they will read next is the
  * one that cannot silently rewrite it.
  */
-export const InlineMarkdown = ({
+export const DocumentField = ({
   className,
-  editLabel,
   emptyText,
+  label,
+  name,
   onCommit,
   rows = 6,
   value,
-}: InlineAreaProps) => {
+}: DocumentFieldProps) => {
   const { abandon, begin, change, commit, draft, editing } = useInlineEdit({
     onCommit,
     value,
@@ -490,7 +552,71 @@ export const InlineMarkdown = ({
     [change]
   );
 
-  if (editing) {
+  return (
+    <div className="flex flex-1 flex-col gap-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium text-muted-foreground text-xs">
+          {label}
+        </span>
+        {editing ? (
+          <span className="flex items-center gap-0.5">
+            <HeaderButton
+              icon={Tick02Icon}
+              label={`Save ${name}`}
+              onClick={commit}
+            />
+            <HeaderButton
+              icon={Cancel01Icon}
+              label={`Cancel editing ${name}`}
+              onClick={abandon}
+            />
+          </span>
+        ) : (
+          <HeaderButton
+            icon={PencilEdit01Icon}
+            label={`Edit ${name}`}
+            onClick={begin}
+          />
+        )}
+      </div>
+      <DocumentFace
+        className={className}
+        draft={draft}
+        emptyText={emptyText}
+        onAbandon={abandon}
+        onBegin={begin}
+        onChange={onChange}
+        onCommit={commit}
+        rows={rows}
+        value={value}
+      />
+    </div>
+  );
+};
+
+/** The document itself: its source while editing, otherwise what it renders as. */
+const DocumentFace = ({
+  className,
+  draft,
+  emptyText,
+  onAbandon,
+  onBegin,
+  onChange,
+  onCommit,
+  rows,
+  value,
+}: {
+  readonly className?: string;
+  readonly draft: string | null;
+  readonly emptyText: string;
+  readonly onAbandon: () => void;
+  readonly onBegin: () => void;
+  readonly onChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
+  readonly onCommit: () => void;
+  readonly rows: number;
+  readonly value: string;
+}) => {
+  if (draft !== null) {
     return (
       <textarea
         // oxlint-disable-next-line jsx-a11y/no-autofocus
@@ -499,11 +625,11 @@ export const InlineMarkdown = ({
           "field-sizing-content -mx-1 min-h-0 w-full resize-none whitespace-pre-wrap rounded-sm bg-muted/40 px-1 py-0 font-mono text-xs leading-relaxed outline-none ring-2 ring-ring/30",
           className
         )}
-        onBlur={commit}
+        onBlur={onCommit}
         onChange={onChange}
-        onKeyDown={editKeyHandler(abandon, commit, true)}
+        onKeyDown={editKeyHandler(onAbandon, onCommit, true)}
         rows={rows}
-        value={draft ?? ""}
+        value={draft}
       />
     );
   }
@@ -511,12 +637,11 @@ export const InlineMarkdown = ({
   if (value === "") {
     return (
       <button
-        aria-label={editLabel}
         className={cn(
           "-mx-1 w-full rounded-sm px-1 py-0 text-left text-muted-foreground hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
           className
         )}
-        onClick={begin}
+        onClick={onBegin}
         type="button"
       >
         {emptyText}
@@ -524,17 +649,7 @@ export const InlineMarkdown = ({
     );
   }
 
-  return (
-    <div
-      className={cn(
-        "group -mx-1 flex items-start gap-1 rounded-sm px-1 hover:bg-muted/60",
-        className
-      )}
-    >
-      <Markdown className="min-w-0 flex-1">{value}</Markdown>
-      <EditPencil label={editLabel} onClick={begin} />
-    </div>
-  );
+  return <Markdown className={cn("min-w-0", className)}>{value}</Markdown>;
 };
 
 interface PropertyRowProps {

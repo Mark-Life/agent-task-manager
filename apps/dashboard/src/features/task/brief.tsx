@@ -7,7 +7,7 @@ import { Label } from "@workspace/ui/components/label";
 import { Textarea } from "@workspace/ui/components/textarea";
 import { type ChangeEvent, type ReactNode, useCallback, useState } from "react";
 import { usePatchTask } from "@/api/tasks";
-import { InlineMarkdown } from "@/features/task/inline";
+import { DocumentField } from "@/features/task/inline";
 import { failureText } from "@/lib/failure";
 
 /** How the metadata blob is written when a person is about to edit it. */
@@ -48,12 +48,12 @@ interface ParsedMetadata {
  *
  * Both are markdown, written by agents and read by the next one, so they are
  * drawn as documents and edited as their source — in place like the rest of the
- * body, behind a pencil rather than a click on the text, because a rendered
- * document has links of its own that clicking should follow. The metadata blob
- * is the exception: it is raw JSON on purpose, since agents put arbitrary keys there
- * and a form that only knew the keys we thought of would quietly drop the
- * rest, and JSON needs a parse with a verdict, which is what its explicit
- * save is.
+ * body, from a button in the heading rather than a click on the text, because a
+ * rendered document has links of its own that clicking should follow. The
+ * metadata blob is the exception: it is raw JSON on purpose, since agents put
+ * arbitrary keys there and a form that only knew the keys we thought of would
+ * quietly drop the rest, and JSON needs a parse with a verdict, which is what
+ * its explicit save is.
  */
 export const TaskBrief = ({ task }: { readonly task: Task }) => {
   const patch = usePatchTask();
@@ -77,26 +77,24 @@ export const TaskBrief = ({ task }: { readonly task: Task }) => {
 
   return (
     <section className="flex flex-col gap-4">
-      <Field label="Brief">
-        <InlineMarkdown
-          className="text-[0.8125rem] text-foreground"
-          editLabel="Edit brief"
-          emptyText="Add a brief"
-          onCommit={saveBrief}
-          rows={10}
-          value={task.brief}
-        />
-      </Field>
-      <Field label="Acceptance">
-        <InlineMarkdown
-          className="text-[0.8125rem]"
-          editLabel="Edit acceptance criteria"
-          emptyText="Add acceptance criteria"
-          onCommit={saveAcceptance}
-          rows={5}
-          value={task.acceptance ?? ""}
-        />
-      </Field>
+      <DocumentField
+        className="text-[0.8125rem] text-foreground"
+        emptyText="Add a brief"
+        label="Brief"
+        name="brief"
+        onCommit={saveBrief}
+        rows={10}
+        value={task.brief}
+      />
+      <DocumentField
+        className="text-[0.8125rem]"
+        emptyText="Add acceptance criteria"
+        label="Acceptance"
+        name="acceptance criteria"
+        onCommit={saveAcceptance}
+        rows={5}
+        value={task.acceptance ?? ""}
+      />
       <MetadataField task={task} />
       {failed === null ? null : (
         <p className="text-destructive text-xs">{failed}</p>
@@ -203,7 +201,7 @@ const MetadataField = ({ task }: { readonly task: Task }) => {
   );
 };
 
-/** One labelled block of prose, so the two paragraphs read as one column. */
+/** A heading over a block, matching the one the documents above carry. */
 const Field = ({
   children,
   label,
