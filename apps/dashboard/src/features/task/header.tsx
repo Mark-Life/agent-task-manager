@@ -6,10 +6,12 @@ import { Button } from "@workspace/ui/components/button";
 import { Spinner } from "@workspace/ui/components/spinner";
 import { useCallback } from "react";
 import { usePatchTask } from "@/api/tasks";
+import { CopyButton } from "@/components/copy-button";
 import { InlineText } from "@/features/task/inline";
 import { StatusSelect } from "@/features/task/status-select";
 import { failureText } from "@/lib/failure";
 import { formatRelative } from "@/lib/format";
+import { taskUrl } from "@/lib/url";
 
 interface TaskHeaderProps {
   readonly detail: TaskDetail;
@@ -35,6 +37,10 @@ interface TaskHeaderProps {
  * sharing its row squeezes it into a column of two-word lines; on the status
  * row it has the whole width to the right of a fixed-width control.
  *
+ * What stays beside the title is the action group: the ways out of the panel
+ * and the one way to take the task somewhere else — a copy of its address,
+ * which is how a person hands this exact task to the manager agent in chat.
+ *
  * Deletion is not in this row. It used to sit a few pixels from the close
  * button, where a missed tap on a phone deleted the task instead of shutting
  * the panel; it lives at the foot of the Details panel now, which costs a
@@ -54,20 +60,33 @@ export const TaskHeader = ({ detail, onClose }: TaskHeaderProps) => {
         <h1 className="min-w-0 flex-1 font-heading font-medium text-lg leading-snug">
           <TaskTitle task={task} />
         </h1>
-        {onClose === undefined ? null : (
-          // The one target on this panel every reader hits, and on a phone it
-          // is hit with a thumb: sized up now that nothing destructive sits
-          // beside it to be caught by a miss.
-          <Button
-            aria-label="Close panel"
-            className="shrink-0"
-            onClick={onClose}
+        <div className="flex shrink-0 items-center gap-1">
+          {/*
+            The address of this task, for pasting into a message to the manager
+            agent: a title drifts when it is edited and reads the same as the
+            next card, an id resolves to exactly one task. Icon-only and ghost
+            so it stays quiet next to the close button, and sized to match it
+            because both are hit with a thumb.
+          */}
+          <CopyButton
+            label="Copy link to this task"
             size="icon-lg"
-            variant="ghost"
-          >
-            <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
-          </Button>
-        )}
+            value={taskUrl(task.id)}
+          />
+          {onClose === undefined ? null : (
+            // The one target on this panel every reader hits, and on a phone it
+            // is hit with a thumb: sized up now that nothing destructive sits
+            // beside it to be caught by a miss.
+            <Button
+              aria-label="Close panel"
+              onClick={onClose}
+              size="icon-lg"
+              variant="ghost"
+            >
+              <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-muted-foreground text-xs">
