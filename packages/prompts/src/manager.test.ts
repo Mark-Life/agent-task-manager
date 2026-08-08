@@ -24,10 +24,11 @@ import {
 } from "./manager";
 import type { PromptMode, RunPlacement } from "./render";
 import {
-  ARTIFACT_RULES,
+  artifactRulesOf,
   MANAGER_RULES,
   SHARED_RULES,
   WORKER_RULES,
+  WRITING_RULES,
 } from "./rules";
 
 const threadId = newThreadId();
@@ -84,6 +85,10 @@ describe("a first turn's prompt", () => {
 
     expect(text.startsWith(MANAGER_RULES)).toBe(true);
     expect(text).toContain(SHARED_RULES);
+    // The house style reaches both roles from here. A run never sees the
+    // operator's own `AGENTS.md`, and a mounted skill's body is read only if
+    // the model invokes it, so neither is a place to keep it.
+    expect(text).toContain(WRITING_RULES);
     expect(text.indexOf("## The conversation so far")).toBeLessThan(
       text.indexOf("Person: what is on the board?")
     );
@@ -126,7 +131,8 @@ describe("a first turn's prompt", () => {
    */
   test("is told nothing about an artifacts folder it does not have", () => {
     const text = textOf({ messages: [message({ body: "hi", role: "user" })] });
-    expect(text).not.toContain(ARTIFACT_RULES);
+    expect(text).not.toContain(artifactRulesOf({ hasRepo: true }));
+    expect(text).not.toContain(artifactRulesOf({ hasRepo: false }));
     expect(text).not.toContain("What survives this run");
   });
 
@@ -191,6 +197,7 @@ describe("a resumed turn's prompt", () => {
   test("repeats nothing the session already has in its own history", () => {
     expect(text).not.toContain(MANAGER_RULES);
     expect(text).not.toContain(SHARED_RULES);
+    expect(text).not.toContain(WRITING_RULES);
     expect(text).not.toContain("/artifacts/task");
   });
 
@@ -260,29 +267,29 @@ describe("one row, rendered", () => {
 
 describe("the rules", () => {
   /**
-   * The bullet list the rules introduce the tools with, and nothing else.
-   *
-   * It ends where the sentence about the container's other tools begins, which
-   * is also where names that are not board tools start appearing — `gh` is the
-   * first of them, and a slice that ran to the next heading would read it as a
-   * tool the server ought to have registered.
+   * The tool table is the only list of tools, and this is what keeps it that
+   * way. The rules used to open with all of them grouped in a bullet list, one
+   * more spelling of names the model already reads off the table with a
+   * description attached. What is quoted now is only a name carrying a policy,
+   * so every one that appears has to be real.
    */
-  const toolSection = MANAGER_RULES.slice(
-    MANAGER_RULES.indexOf("The tools are:"),
-    MANAGER_RULES.indexOf("Other tools may be in your container")
+  const TOOL_PREFIXES = new Set(
+    AGENT_TOOLS.map((tool) => tool.name.split("_")[0])
   );
 
-  const named = [...toolSection.matchAll(/`(\w+)`/g)].map(
-    (match) => match[1] ?? ""
+  const named = new Set(
+    [...MANAGER_RULES.matchAll(/`(\w+_\w+)`/g)]
+      .map((match) => match[1] ?? "")
+      // `in_progress` and `backlog` are columns, not tools, and they are quoted
+      // here for the same reason a tool name is: the rule is about that exact
+      // spelling.
+      .filter((name) => TOOL_PREFIXES.has(name.split("_")[0] ?? ""))
   );
 
-  const alphabetically = (names: readonly string[]) =>
-    [...names].sort((left, right) => left.localeCompare(right));
-
-  test("introduce every tool the manager actually has, and no other", () => {
-    expect(alphabetically(named)).toEqual(
-      alphabetically(AGENT_TOOLS.map((tool) => tool.name))
-    );
+  test("name only tools that exist, and do not re-list the whole table", () => {
+    const real = new Set(AGENT_TOOLS.map((tool) => tool.name));
+    expect([...named].filter((name) => !real.has(name))).toEqual([]);
+    expect(named.size).toBeLessThan(real.size);
   });
 
   test("say to file into backlog and never straight into in_progress", () => {

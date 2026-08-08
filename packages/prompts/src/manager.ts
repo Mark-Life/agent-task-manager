@@ -29,7 +29,7 @@ import {
   section,
   speech,
 } from "./render";
-import { MANAGER_RULES, SHARED_RULES } from "./rules";
+import { MANAGER_RULES, SHARED_RULES, WRITING_RULES } from "./rules";
 
 /**
  * How many rows of a thread a first turn is given.
@@ -114,6 +114,7 @@ const freshPrompt = (input: ManagerPromptInput) => {
   const kept = limit <= 0 ? [] : input.messages.slice(-limit);
   return joinSections([
     MANAGER_RULES,
+    WRITING_RULES,
     SHARED_RULES,
     section(
       "Where you are working",

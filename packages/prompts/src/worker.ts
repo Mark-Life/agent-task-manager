@@ -40,10 +40,11 @@ import {
   speech,
 } from "./render";
 import {
-  ARTIFACT_RULES,
+  artifactRulesOf,
   CREDENTIAL_RULES,
   SHARED_RULES,
   WORKER_RULES,
+  WRITING_RULES,
 } from "./rules";
 
 /**
@@ -157,7 +158,10 @@ const freshPrompt = (input: WorkerPromptInput) => {
     // it: a scratch-directory run has nothing to push and telling it about a
     // token is telling it about a tool it will not reach for.
     repoUrl === null ? null : CREDENTIAL_RULES,
-    ARTIFACT_RULES,
+    // Same split, one line down: what belongs in a pull request instead of the
+    // artifacts folder is not a question a run without a repository has.
+    artifactRulesOf({ hasRepo: repoUrl !== null }),
+    WRITING_RULES,
     SHARED_RULES,
     section(
       "The conversation on this task so far",
