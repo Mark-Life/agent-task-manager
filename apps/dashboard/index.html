@@ -29,14 +29,20 @@
       light and the app flashes on every load. The key and the class are the
       ones the theme provider owns; change them together or this silently stops
       agreeing with it.
+
+      Only the two literals are an override. Everything else — no key at all on
+      a first visit, and the string "system" the provider writes when somebody
+      hands control back — means follow the machine, which is also what a value
+      from some future version of this app would fall back to.
     */
     (() => {
       try {
         const stored = localStorage.getItem("theme");
-        const prefersDark = window.matchMedia(
-          "(prefers-color-scheme: dark)"
-        ).matches;
-        const dark = stored === "dark" || (stored !== "light" && prefersDark);
+        const override = stored === "dark" || stored === "light" ? stored : null;
+        const dark =
+          override === null
+            ? window.matchMedia("(prefers-color-scheme: dark)").matches
+            : override === "dark";
         document.documentElement.classList.toggle("dark", dark);
         document.documentElement.style.colorScheme = dark ? "dark" : "light";
       } catch {
