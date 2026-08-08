@@ -16,10 +16,12 @@ import { isHttpUrl, prettyUrl } from "@/lib/url";
  * page is the control that changes it.
  *
  * Read and edit are two renderings of the same value: the read one is a
- * button so a keyboard can reach it, the edit one is an input that arrives
- * already holding the value. The committed value always comes from props —
- * the server is the record and the cache writes back into the read face —
- * while the draft exists only for as long as editing does. Commit fires on
+ * button so a keyboard can reach it, the edit one is a box that arrives
+ * already holding the value. Both wrap, both carry the same padding and line
+ * box, so a value that reads as three lines is edited as three lines and
+ * starting an edit moves nothing on the page. The committed value always comes
+ * from props — the server is the record and the cache writes back into the read
+ * face — while the draft exists only for as long as editing does. Commit fires on
  * blur and on Enter (Cmd+Enter in an area, where Enter is a newline), and
  * Escape throws the draft away; both keys stop at the element, so editing a
  * value never reads as "close the panel this text sits in".
@@ -38,6 +40,10 @@ interface InlineEditProps {
   readonly emptyText: string;
   /** Called with the next value when the edit is committed. */
   readonly onCommit: (next: string) => void;
+  /** The shape an empty box wants, shown while it is being typed into. */
+  readonly placeholder?: string;
+  /** What is wrong with a value, or null. Absent means every value is fine. */
+  readonly problemOf?: (next: string) => string | null;
   /** The value as the record holds it. */
   readonly value: string;
 }
@@ -46,6 +52,7 @@ interface UseInlineEditOptions {
   /** Whether an emptied box is a real value (clears the field) or a mistake (reverts). */
   readonly allowEmpty?: boolean;
   readonly onCommit: (next: string) => void;
+  readonly problemOf?: (next: string) => string | null;
   /** Whitespace policy for committing; single-line text trims, prose does not. */
   readonly trimmed?: boolean;
   readonly value: string;
@@ -55,36 +62,57 @@ interface UseInlineEditOptions {
  * The draft lifecycle both primitives share: begin seeds it from the value,
  * escape abandons it, and commit hands it over only when it says something
  * new — an untouched or reverted box is not worth a request.
+ *
+ * A caller that hands over `problemOf` gets one more state: a value the field
+ * refuses keeps the box open and says why, rather than being sent and becoming
+ * a record nothing downstream can use. Typing clears the message — the box is
+ * unfinished, not wrong — and Escape still abandons the whole edit.
  */
 const useInlineEdit = ({
   allowEmpty = true,
   onCommit,
+  problemOf,
   trimmed = false,
   value,
 }: UseInlineEditOptions) => {
   const [draft, setDraft] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
 
   const begin = useCallback(() => setDraft(value), [value]);
-  const abandon = useCallback(() => setDraft(null), []);
+  const abandon = useCallback(() => {
+    setProblem(null);
+    setDraft(null);
+  }, []);
+
+  const change = useCallback((next: string) => {
+    setProblem(null);
+    setDraft(next);
+  }, []);
 
   const commit = useCallback(() => {
     if (draft === null) {
       return;
     }
     const next = trimmed ? draft.trim() : draft;
+    const refused = problemOf?.(next) ?? null;
+    if (refused !== null) {
+      setProblem(refused);
+      return;
+    }
     setDraft(null);
     if (next !== value && (allowEmpty || next !== "")) {
       onCommit(next);
     }
-  }, [allowEmpty, draft, onCommit, trimmed, value]);
+  }, [allowEmpty, draft, onCommit, problemOf, trimmed, value]);
 
   return {
     abandon,
     begin,
-    change: setDraft,
+    change,
     commit,
     draft,
     editing: draft !== null,
+    problem,
   };
 };
 
@@ -116,6 +144,9 @@ interface EditBoxProps {
   readonly onAbandon: () => void;
   readonly onChange: (next: string) => void;
   readonly onCommit: () => void;
+  readonly placeholder?: string;
+  /** Why the last commit was refused, shown under the box until it is answered. */
+  readonly problem?: string | null;
   readonly value: string;
 }
 
@@ -124,32 +155,68 @@ interface EditBoxProps {
  * face turned out to be. It keeps the read face's padding and line box so the
  * swap moves nothing, and it arrives focused because mounting means somebody
  * just asked to change this value.
+ *
+ * It is a textarea, not an input, because the read faces it stands in for wrap.
+ * A title long enough to read as three lines was being edited through a
+ * one-line slot: the header collapsed, the panel below it jumped up, and the
+ * words being changed were off the right edge behind a horizontal scroll. A
+ * textarea sized to its content wraps to the same lines the read face does, so
+ * opening and closing an edit moves nothing and the whole value stays visible.
+ *
+ * One line is still what it holds. Enter commits rather than breaking the line
+ * — the handler takes it before the textarea sees it — and a newline arriving
+ * by paste is folded into a space on the way into the draft, so the value can
+ * never grow a second line the read face would not show.
  */
 const EditBox = ({
   className,
   onAbandon,
   onChange,
   onCommit,
+  placeholder,
+  problem = null,
   value,
 }: EditBoxProps) => {
   const change = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value),
+    (event: ChangeEvent<HTMLTextAreaElement>) =>
+      onChange(event.target.value.replace(/[\n\r]+/g, " ")),
     [onChange]
   );
 
-  return (
-    <input
+  const box = (
+    <textarea
+      aria-invalid={problem !== null}
       // oxlint-disable-next-line jsx-a11y/no-autofocus
       autoFocus
       className={cn(
-        "-mx-1 h-auto w-full rounded-sm bg-muted/40 px-1 py-0 leading-[inherit] outline-none ring-2 ring-ring/30",
+        // `block` on both faces rather than the inline-block a button and a
+        // textarea default to: their baselines are taken from different lines
+        // once the value wraps, and a line box built around them would sit the
+        // two faces at different heights.
+        "field-sizing-content -mx-1 block min-h-0 w-full resize-none whitespace-pre-wrap break-words rounded-sm bg-muted/40 px-1 py-0 leading-[inherit] outline-none ring-2 ring-ring/30",
+        problem === null ? undefined : "ring-destructive/40",
         className
       )}
       onBlur={onCommit}
       onChange={change}
       onKeyDown={editKeyHandler(onAbandon, onCommit, false)}
+      placeholder={placeholder}
+      rows={1}
       value={value}
     />
+  );
+
+  if (problem === null) {
+    return box;
+  }
+
+  return (
+    <span className="flex w-full flex-col gap-1">
+      {box}
+      <span className="text-destructive text-xs" role="alert">
+        {problem}
+      </span>
+    </span>
   );
 };
 
@@ -165,8 +232,9 @@ interface InlineTextProps extends InlineEditProps {
  * only hint that pressing it does something, because a permanent border would
  * read as a form on a page that is not one.
  *
- * Both faces carry the same padding and line box, so the swap never shifts
- * the text vertically.
+ * One line of the record, not one line on the screen: a title long enough
+ * wraps, and both faces carry the same padding, line box and wrapping, so the
+ * swap never shifts the text vertically or sideways.
  */
 export const InlineText = ({
   allowEmpty = true,
@@ -174,21 +242,25 @@ export const InlineText = ({
   editLabel,
   emptyText,
   onCommit,
+  placeholder,
+  problemOf,
   value,
 }: InlineTextProps) => {
-  const { abandon, begin, change, commit, draft, editing } = useInlineEdit({
-    allowEmpty,
-    onCommit,
-    trimmed: true,
-    value,
-  });
+  const { abandon, begin, change, commit, draft, editing, problem } =
+    useInlineEdit({
+      allowEmpty,
+      onCommit,
+      problemOf,
+      trimmed: true,
+      value,
+    });
 
   if (!editing) {
     return (
       <button
         aria-label={editLabel}
         className={cn(
-          "-mx-1 w-full rounded-sm px-1 py-0 text-left hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+          "-mx-1 block w-full whitespace-pre-wrap break-words rounded-sm px-1 py-0 text-left hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
           value === "" && "text-muted-foreground",
           className
         )}
@@ -206,6 +278,8 @@ export const InlineText = ({
       onAbandon={abandon}
       onChange={change}
       onCommit={commit}
+      placeholder={placeholder}
+      problem={problem}
       value={draft ?? ""}
     />
   );
@@ -230,13 +304,17 @@ export const InlineLink = ({
   editLabel,
   emptyText,
   onCommit,
+  placeholder,
+  problemOf,
   value,
 }: InlineEditProps) => {
-  const { abandon, begin, change, commit, draft, editing } = useInlineEdit({
-    onCommit,
-    trimmed: true,
-    value,
-  });
+  const { abandon, begin, change, commit, draft, editing, problem } =
+    useInlineEdit({
+      onCommit,
+      problemOf,
+      trimmed: true,
+      value,
+    });
 
   if (editing) {
     return (
@@ -245,6 +323,8 @@ export const InlineLink = ({
         onAbandon={abandon}
         onChange={change}
         onCommit={commit}
+        placeholder={placeholder}
+        problem={problem}
         value={draft ?? ""}
       />
     );
@@ -257,6 +337,8 @@ export const InlineLink = ({
         editLabel={editLabel}
         emptyText={emptyText}
         onCommit={onCommit}
+        placeholder={placeholder}
+        problemOf={problemOf}
         value={value}
       />
     );

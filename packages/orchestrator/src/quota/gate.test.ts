@@ -3,9 +3,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunFileSystem } from "@effect/platform-bun";
-import type { SessionProvider } from "@workspace/domain";
-import { Effect, type Layer } from "effect";
-import type { FileSystem } from "effect/FileSystem";
+import { ProviderUsageSnapshot, type SessionProvider } from "@workspace/domain";
+import { Effect, type Layer, Schema } from "effect";
+import { FileSystem } from "effect/FileSystem";
 import { TestClock } from "effect/testing";
 import { QuotaGate, type QuotaGateOptions } from "./gate";
 import type { ProviderUsage } from "./types";
@@ -27,19 +27,30 @@ const stateDir = () => {
 const usage = (over: Partial<ProviderUsage> = {}): ProviderUsage => ({
   available: true,
   limitReached: false,
-  primary: { resetsAtMs: 1000, utilizationPercent: 0 },
+  primary: { resetsAtMs: 1000, utilizationPercent: 0, windowSeconds: 18_000 },
   reachedWindow: null,
-  secondary: { resetsAtMs: 2000, utilizationPercent: 0 },
+  secondary: {
+    resetsAtMs: 2000,
+    utilizationPercent: 0,
+    windowSeconds: 604_800,
+  },
   ...over,
 });
 
 const BASE = {
+  // Somewhere that does not exist, deliberately: a test whose real reader is not
+  // injected must fail to find a login rather than read the host's own.
+  agentHomeDirs: {
+    claude: join(tmpdir(), "quota-gate-absent-claude"),
+    codex: join(tmpdir(), "quota-gate-absent-codex"),
+  },
   cooldownMs: 900_000,
   enabled: true,
   headroomPercent: 5,
   pollIntervalMs: 180_000,
   proactive: true,
   providers: ["claude", "codex"] as readonly SessionProvider[],
+  read: true,
   thresholdPercent: 80,
 } satisfies Omit<QuotaGateOptions, "readers" | "stateDir">;
 
@@ -86,7 +97,13 @@ describe("QuotaGate.admit", () => {
       gateLayer({
         readers: {
           codex: fixedReader(
-            usage({ primary: { resetsAtMs: 1, utilizationPercent: 10 } })
+            usage({
+              primary: {
+                resetsAtMs: 1,
+                utilizationPercent: 10,
+                windowSeconds: null,
+              },
+            })
           ),
         },
       }),
@@ -104,7 +121,13 @@ describe("QuotaGate.admit", () => {
       gateLayer({
         readers: {
           codex: fixedReader(
-            usage({ primary: { resetsAtMs: 1234, utilizationPercent: 85 } })
+            usage({
+              primary: {
+                resetsAtMs: 1234,
+                utilizationPercent: 85,
+                windowSeconds: null,
+              },
+            })
           ),
         },
       }),
@@ -126,7 +149,13 @@ describe("QuotaGate.admit", () => {
       gateLayer({
         readers: {
           codex: fixedReader(
-            usage({ secondary: { resetsAtMs: 9999, utilizationPercent: 90 } })
+            usage({
+              secondary: {
+                resetsAtMs: 9999,
+                utilizationPercent: 90,
+                windowSeconds: null,
+              },
+            })
           ),
         },
       }),
@@ -181,7 +210,13 @@ describe("QuotaGate.admit", () => {
       gateLayer({
         readers: {
           codex: fixedReader(
-            usage({ primary: { resetsAtMs: 1, utilizationPercent: 72 } })
+            usage({
+              primary: {
+                resetsAtMs: 1,
+                utilizationPercent: 72,
+                windowSeconds: null,
+              },
+            })
           ),
         },
       }),
@@ -230,7 +265,13 @@ describe("QuotaGate caching", () => {
           codex: () => {
             reads += 1;
             return Effect.succeed(
-              usage({ secondary: { resetsAtMs: 7, utilizationPercent: 95 } })
+              usage({
+                secondary: {
+                  resetsAtMs: 7,
+                  utilizationPercent: 95,
+                  windowSeconds: null,
+                },
+              })
             );
           },
         },
@@ -448,6 +489,174 @@ describe("QuotaGate isolation", () => {
         expect(
           (yield* gate.admit({ inflight: 0, provider: "codex" })).defer
         ).toBe(true);
+      })
+    );
+  });
+});
+
+describe("QuotaGate observing without enforcing", () => {
+  test("a drained provider dispatches when the reading is not enforced", async () => {
+    await run(
+      gateLayer({
+        proactive: false,
+        readers: {
+          claude: fixedReader(usage()),
+          codex: fixedReader(usage({ limitReached: true })),
+        },
+      }),
+      Effect.gen(function* () {
+        const gate = yield* QuotaGate;
+        expect(
+          (yield* gate.admit({ inflight: 0, provider: "codex" })).defer
+        ).toBe(false);
+      })
+    );
+  });
+
+  test("the numbers are still read and still published", async () => {
+    const directory = stateDir();
+    await run(
+      QuotaGate.layer({
+        ...BASE,
+        proactive: false,
+        readers: {
+          claude: fixedReader(usage()),
+          codex: fixedReader(
+            usage({
+              primary: {
+                resetsAtMs: 5000,
+                utilizationPercent: 96,
+                windowSeconds: 18_000,
+              },
+            })
+          ),
+        },
+        stateDir: directory,
+      }),
+      Effect.gen(function* () {
+        const gate = yield* QuotaGate;
+        yield* gate.refresh();
+        const snapshot = yield* gate.snapshot;
+        const codex = snapshot.providers.find(
+          (entry) => entry.provider === "codex"
+        );
+        expect(codex?.state).toBe("ok");
+        expect(codex?.enforced).toBe(false);
+        expect(codex?.windows[0]?.remainingPercent).toBe(4);
+      })
+    );
+  });
+
+  test("a reactive pause still holds, whatever the proactive switch says", async () => {
+    await run(
+      gateLayer({
+        proactive: false,
+        readers: {
+          claude: fixedReader(usage()),
+          codex: fixedReader(usage()),
+        },
+      }),
+      Effect.gen(function* () {
+        const gate = yield* QuotaGate;
+        yield* gate.noteRateLimit({ provider: "codex", status: "rejected" });
+        expect(
+          (yield* gate.admit({ inflight: 0, provider: "codex" })).defer
+        ).toBe(true);
+      })
+    );
+  });
+
+  test("reads switched off leave nothing to publish but say why", async () => {
+    await run(
+      gateLayer({ read: false }),
+      Effect.gen(function* () {
+        const gate = yield* QuotaGate;
+        yield* gate.refresh();
+        const snapshot = yield* gate.snapshot;
+        for (const report of snapshot.providers) {
+          expect(report.state).toBe("unavailable");
+          expect(report.note).toBe("usage reads are switched off");
+          expect(report.windows).toHaveLength(0);
+        }
+      })
+    );
+  });
+});
+
+describe("QuotaGate.refresh", () => {
+  test("leaves a reading on disk for the gateway, on an idle board", async () => {
+    const directory = stateDir();
+    await run(
+      QuotaGate.layer({
+        ...BASE,
+        readers: {
+          claude: fixedReader(usage()),
+          codex: fixedReader(usage()),
+        },
+        stateDir: directory,
+      }),
+      Effect.gen(function* () {
+        const gate = yield* QuotaGate;
+        yield* gate.refresh();
+        const fs = yield* FileSystem;
+        const decoded = yield* Schema.decodeUnknownEffect(
+          ProviderUsageSnapshot
+        )(JSON.parse(yield* fs.readFileString(join(directory, "usage.json"))));
+        expect(decoded.providers.map((entry) => entry.provider)).toEqual([
+          "claude",
+          "codex",
+        ]);
+        expect(decoded.providers[0]?.windows[0]?.label).toBe("5h");
+        expect(decoded.providers[0]?.windows[1]?.label).toBe("7d");
+      }).pipe(Effect.provide(BunFileSystem.layer))
+    );
+  });
+
+  test("polls no more often than a dispatch would", async () => {
+    let reads = 0;
+    await run(
+      gateLayer({
+        readers: {
+          claude: fixedReader(usage()),
+          codex: () => {
+            reads += 1;
+            return Effect.succeed(usage());
+          },
+        },
+      }),
+      Effect.gen(function* () {
+        const gate = yield* QuotaGate;
+        yield* gate.refresh();
+        yield* gate.refresh();
+        yield* gate.admit({ inflight: 0, provider: "codex" });
+        expect(reads).toBe(1);
+      })
+    );
+  });
+
+  test("a paused provider is not polled while the cooldown runs", async () => {
+    let reads = 0;
+    await run(
+      gateLayer({
+        readers: {
+          claude: fixedReader(usage()),
+          codex: () => {
+            reads += 1;
+            return Effect.succeed(usage());
+          },
+        },
+      }),
+      Effect.gen(function* () {
+        const gate = yield* QuotaGate;
+        yield* gate.noteRateLimit({ provider: "codex", status: "rejected" });
+        yield* gate.refresh();
+        expect(reads).toBe(0);
+        const snapshot = yield* gate.snapshot;
+        const codex = snapshot.providers.find(
+          (entry) => entry.provider === "codex"
+        );
+        expect(codex?.state).toBe("paused");
+        expect(codex?.pausedUntil).not.toBeNull();
       })
     );
   });

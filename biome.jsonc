@@ -29,6 +29,20 @@
   },
   "overrides": [
     {
+      // tsconfig files are JSONC by specification — TypeScript has always
+      // parsed comments in them — but biome applies strict JSON to anything
+      // named `.json`. The shared configs in packages/typescript-config carry
+      // the reasoning for the Effect language service's per-rule severities,
+      // which belongs next to the severities rather than in a README nobody
+      // opens while editing them.
+      "includes": ["**/tsconfig*.json", "packages/typescript-config/*.json"],
+      "json": {
+        "parser": {
+          "allowComments": true
+        }
+      }
+    },
+    {
       "includes": [
         "**/*.test.ts",
         "**/*.test.tsx",

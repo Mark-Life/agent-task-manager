@@ -10,6 +10,8 @@ export * from "./notify";
 export * from "./primitives";
 export * from "./project";
 export * from "./project-env";
+export * from "./provider-usage";
+export * from "./repo-url";
 export * from "./run";
 export * from "./run-command";
 export * from "./run-event";

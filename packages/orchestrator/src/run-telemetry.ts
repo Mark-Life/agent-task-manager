@@ -39,6 +39,7 @@
 
 import {
   costUsdToNumber,
+  parseRepoUrl,
   RUN_ROLES,
   RunRole,
   RunTrigger,
@@ -46,7 +47,7 @@ import {
   SessionProvider,
   TaskStatus,
 } from "@workspace/domain";
-import { parseRepoUrl, SANDBOX_KINDS, SandboxKind } from "@workspace/sandbox";
+import { SANDBOX_KINDS, SandboxKind } from "@workspace/sandbox";
 import {
   BASE_OUTCOMES,
   boundedCounter,

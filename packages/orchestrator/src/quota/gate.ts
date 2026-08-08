@@ -36,7 +36,7 @@
  */
 
 import { join } from "node:path";
-import type { SessionProvider } from "@workspace/domain";
+import { QUOTA_SEGMENT, type SessionProvider } from "@workspace/domain";
 import type { RateLimitStatus } from "@workspace/harness";
 import { Clock, Context, Effect, Layer, Ref, Semaphore } from "effect";
 import { FileSystem } from "effect/FileSystem";
@@ -45,7 +45,7 @@ import { orchestratorConfig } from "../config";
 import { QuotaPaused } from "../errors";
 import { fetchClaudeUsage } from "./claude-usage";
 import { fetchCodexUsage } from "./codex-usage";
-import { QUOTA_SEGMENT, type QuotaConfig, quotaConfig } from "./config";
+import { type QuotaConfig, quotaConfig } from "./config";
 import {
   detectRateLimitStatus,
   detectUsageLimitText,
@@ -57,6 +57,7 @@ import {
   quotaReadFailures,
   quotaUtilization,
 } from "./metrics";
+import { type ProviderReading, publishUsage, usageSnapshot } from "./snapshot";
 import {
   ADMIT,
   type ProviderUsage,
@@ -114,6 +115,12 @@ interface ProviderState {
 
 /** What building a gate needs: the settings, where to write, and any test readers. */
 export interface QuotaGateOptions extends QuotaConfig {
+  /**
+   * Where each provider's login lives on the host. The same directory the
+   * containers are handed, because the allowance worth reading is the one the
+   * runs spend — not whatever the operator's own CLI is logged into.
+   */
+  readonly agentHomeDirs: Readonly<Record<SessionProvider, string>>;
   /** Per-provider reader override. Injected by tests; nothing else sets it. */
   readonly readers?: Readonly<Partial<Record<SessionProvider, UsageReader>>>;
   readonly stateDir: string;
@@ -177,18 +184,26 @@ const makeGate = (options: QuotaGateOptions) =>
     // would otherwise read-modify-write over each other and lose one.
     const pauseLock = yield* Semaphore.make(1);
 
-    /** The reader for a provider: a test's, the real one, or none at all. */
+    /**
+     * The reader for a provider: a test's, the real one, or none at all.
+     *
+     * Keyed on `read` rather than on `proactive`, which is the whole of the
+     * observe-only state: the numbers are polled and published for a person to
+     * look at, and whether they may hold a dispatch back is decided later, in
+     * {@link evaluate}.
+     */
     const readerFor = (provider: SessionProvider): UsageReader => {
       const injected = options.readers?.[provider];
       if (injected !== undefined) {
         return injected;
       }
-      if (!options.proactive) {
+      if (!options.read) {
         return () => Effect.succeed(UNAVAILABLE_USAGE);
       }
+      const agentHomeDir = options.agentHomeDirs[provider];
       return provider === "codex"
-        ? () => fetchCodexUsage({ fs, http })
-        : () => fetchClaudeUsage({ fs, http });
+        ? () => fetchCodexUsage({ agentHomeDir, fs, http })
+        : () => fetchClaudeUsage({ agentHomeDir, fs, http });
     };
 
     const states = new Map<SessionProvider, ProviderState>();
@@ -237,6 +252,41 @@ const makeGate = (options: QuotaGateOptions) =>
         )
       );
 
+    /**
+     * Everything the gate currently believes, as the published document.
+     *
+     * Off the cache and the pause file, never off a live read: this is called
+     * after a refresh and after a pause changes, and a read here would put an
+     * HTTP request behind a write nobody asked for.
+     */
+    const currentSnapshot = Effect.gen(function* () {
+      const nowMs = yield* Clock.currentTimeMillis;
+      const pauses = yield* readPauses;
+      const readings: ProviderReading[] = [];
+      for (const provider of options.providers) {
+        const state = states.get(provider);
+        const cached = state === undefined ? null : yield* Ref.get(state.cache);
+        const record = pauses[provider] ?? null;
+        const active = record !== null && nowMs < record.until ? record : null;
+        readings.push({
+          enforced: options.enabled && options.proactive,
+          pausedUntilMs: active?.until ?? null,
+          pauseReason: active?.reason ?? null,
+          provider,
+          readAtMs: cached?.atMs ?? null,
+          reading: options.enabled && options.read,
+          usage: cached?.usage ?? UNAVAILABLE_USAGE,
+        });
+      }
+      return usageSnapshot({ nowMs, readings });
+    });
+
+    /** Leaves the current reading where the gateway serves it from. */
+    const publish = Effect.gen(function* () {
+      const snapshot = yield* currentSnapshot;
+      yield* publishUsage({ fs, snapshot, stateDir: options.stateDir });
+    });
+
     const setPause = (provider: SessionProvider, record: PauseRecord) =>
       Semaphore.withPermit(pauseLock)(
         Effect.gen(function* () {
@@ -262,6 +312,7 @@ const makeGate = (options: QuotaGateOptions) =>
         if (state !== undefined) {
           yield* Ref.set(state.announced, new Set<string>());
         }
+        yield* publish;
       });
 
     const recordUtilization = (
@@ -308,16 +359,45 @@ const makeGate = (options: QuotaGateOptions) =>
         yield* quotaReadFailures
           .increment({
             provider,
-            reason: options.proactive ? "unavailable" : "off",
+            reason: options.read ? "unavailable" : "off",
           })
           .pipe(Effect.ignoreCause);
-        if (options.proactive) {
+        if (options.read) {
           yield* Effect.logWarning(
             `quota: ${provider} usage read produced no signal — dispatching anyway`
           );
         }
         return usage;
       });
+
+    /**
+     * Take the reading and publish it, on whatever cadence the caller sweeps.
+     *
+     * This is what keeps the published numbers honest on an idle board. Without
+     * it the only thing that ever polls is a dispatch, so a factory with nothing
+     * to do would show the allowance it had when it last had work — which is
+     * precisely when somebody is looking to decide whether to give it more.
+     *
+     * Cheap to call often: the cache decides whether a poll actually happens, so
+     * a 30-second sweep against a five-minute interval is one HTTP GET per
+     * provider per five minutes and a small file write per sweep.
+     */
+    const refresh = Effect.fn("QuotaGate.refresh")(function* () {
+      const nowMs = yield* Clock.currentTimeMillis;
+      for (const provider of options.providers) {
+        const state = stateOf(provider);
+        if (state === null) {
+          continue;
+        }
+        // A paused provider is not polled: the pause is a confirmed drain, and
+        // the cooldown is what decides when to look again.
+        const pause = yield* activePause(provider, nowMs);
+        if (pause === null) {
+          yield* cachedUsage(provider, state, nowMs);
+        }
+      }
+      yield* publish;
+    });
 
     const defer = (
       window: QuotaWindow,
@@ -372,9 +452,14 @@ const makeGate = (options: QuotaGateOptions) =>
     /**
      * The decision, given everything already resolved. Side-effect free, and the
      * order is the policy: a live reactive pause wins because it is a confirmed
-     * drain, an unreadable signal then fails open, a stated limit beats a
-     * threshold, and the short window is checked before the long one so the
-     * shorter wait is the one reported.
+     * drain, an unenforced reading is published rather than acted on, an
+     * unreadable signal then fails open, a stated limit beats a threshold, and
+     * the short window is checked before the long one so the shorter wait is the
+     * one reported.
+     *
+     * The reactive pause is checked before the enforcement switch on purpose: it
+     * is a drain a run already paid for, and it holds whatever the proactive
+     * read is or is not allowed to do.
      */
     const evaluate = (input: {
       readonly inflight: number;
@@ -384,7 +469,7 @@ const makeGate = (options: QuotaGateOptions) =>
       if (input.pause !== null) {
         return defer(input.pause.window, input.pause.reason, input.pause.until);
       }
-      if (!input.usage.available) {
+      if (!(options.proactive && input.usage.available)) {
         return ADMIT;
       }
       if (input.usage.limitReached) {
@@ -436,6 +521,7 @@ const makeGate = (options: QuotaGateOptions) =>
           until,
           window: "reactive",
         });
+        yield* publish;
         yield* quotaReactivePauses
           .increment({ provider: input.provider })
           .pipe(Effect.ignoreCause);
@@ -582,6 +668,9 @@ const makeGate = (options: QuotaGateOptions) =>
       describe,
       noteError,
       noteRateLimit,
+      refresh,
+      /** The reading as it stands, for a caller in this process. The file is for everyone else. */
+      snapshot: currentSnapshot,
     } as const;
   });
 
@@ -615,10 +704,14 @@ export class QuotaGate extends Context.Service<QuotaGate, QuotaGateInterface>()(
 export const quotaGateLayer = Layer.effect(
   QuotaGate,
   Effect.gen(function* () {
-    const { dataRoot } = yield* orchestratorConfig;
+    const { agentHomeDirs, dataRoot } = yield* orchestratorConfig;
     const config = yield* quotaConfig;
     return yield* makeGate({
       ...config,
+      // The loop already resolved where each provider's login lives, because it
+      // mounts those directories into every container. One resolution, so the
+      // account a run spends and the account this reads cannot be two accounts.
+      agentHomeDirs,
       stateDir: join(dataRoot, QUOTA_SEGMENT),
     });
   })

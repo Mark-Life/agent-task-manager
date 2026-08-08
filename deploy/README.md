@@ -128,7 +128,14 @@ sudo install -d -m 0700 -o atm -g atm /var/lib/agent-task-manager-home/codex
 sudo -u atm CLAUDE_CONFIG_DIR=/var/lib/agent-task-manager-home/claude claude   # then /login
 sudo -u atm CODEX_HOME=/var/lib/agent-task-manager-home/codex codex login
 cd /opt/agent-task-manager && sudo -u atm bun run harness:check
+cd /opt/agent-task-manager && sudo -u atm bun run quota:check
 ```
+
+`quota:check` reads the same two logins and prints what is left on each
+subscription, per window. It is the fastest way to see that a home is logged
+into the account you meant — and the loop reads exactly the same files, so a
+provider that prints "no signal" here is one the board will dispatch against
+blind and show as unavailable on the dashboard.
 
 The paths must match `ATM_AGENT_HOME_DIR_CLAUDE` / `ATM_AGENT_HOME_DIR_CODEX` in
 `loop.env`, be mode `0700`, and be owned by the uid the loop's containers run as

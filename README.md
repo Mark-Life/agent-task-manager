@@ -92,6 +92,7 @@ bun run loop:check           # dispatch to terminus   --docker contained, --live
 bun run gateway:check        # a task's lifecycle over HTTP
 bun run bot:check            # the bot's handlers, with no token and no Telegram call
 bun run github:check         # what the agents' GitHub credential may do; add owner/name
+bun run quota:check          # what is left on both subscriptions, per window
 ```
 
 A claim that stops holding is a named line, not a diff in a five-hundred-line program.
@@ -108,6 +109,20 @@ bun run logs                 # read the event ledger: runs | errors | stats | fo
 The libraries are consumed as source through tsconfig paths and have no build step, so
 `typecheck` and `test` — not `build` — are what cover them. `bun run openapi --check` fails when
 the committed spec has drifted from the contract.
+
+`typecheck` is two gates in one pass. The compiler is TypeScript 7, the native Go port, and the
+binary behind `tsc` is [`@effect/tsgo`](https://github.com/Effect-TS/tsgo) — a superset of
+Microsoft's `tsgo` carrying the Effect language service, so ordinary type errors and Effect
+diagnostics (`floatingEffect`, `missingEffectContext`, `missingLayerContext`, …) come out of the
+same run over the same program. Errors and warnings fail the build; suggestions print and do not.
+Severities are set in `packages/typescript-config/base.json`, which also records the rules
+currently held at `suggestion` and what each is waiting on.
+
+Two things this changes day to day. `effect-tsgo patch` is what puts that binary behind `tsc`, and
+it runs from `prepare` on every `bun install` — if the Effect diagnostics ever go quiet, that is
+the thing to re-run. And because `incremental` is on, a `.tsbuildinfo` written before a change to
+the plugin's options will keep serving the old severities; delete `**/*.tsbuildinfo` after editing
+them.
 
 Other commands: `gateway:token` mints a scoped bearer token for the system's own agents — a
 person issues their own from the dashboard's *API keys* screen, `db:seed` fills a fresh database,

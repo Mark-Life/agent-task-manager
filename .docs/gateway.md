@@ -1,7 +1,7 @@
 # Gateway (`bun run gateway:start`, `bun run gateway:check`)
 
 **One typed contract, four consumers.** `packages/api` declares every operation — projects,
-tasks, comments, sessions, runs, run commands, artifacts, conversations — as an Effect `HttpApi` and holds no
+tasks, comments, sessions, runs, run commands, artifacts, conversations, provider usage — as an Effect `HttpApi` and holds no
 handlers at all. `apps/gateway` implements it group by group over the repositories, and
 `openapi.json` falls out of the same value. That derivation is the whole reason this is HttpApi
 rather than RPC: an external agent reaching the board through [Executor](https://executor.sh)
@@ -11,6 +11,13 @@ needs to see each operation to hold it as a tool, and RPC over HTTP is one opaqu
 off the credential, so no caller can name a workspace it cannot read and no handler can forget
 to scope a query. Everything a task owns nests under `/tasks/:taskId`, which is what lets a
 run's task-bound token be checked once, in the access middleware, against the path.
+
+`GET /usage` is the one read that is not a workspace's: it reports what is left on the
+subscriptions this machine runs agents with, per rolling window, and two workspaces on one host
+draw down the same five hours. The gateway does not poll the providers — the loop does, and
+publishes to `${DATA_ROOT}/quota/usage.json`; this serves that file, answering an empty provider
+list when nothing has been published yet, which is also the honest answer while the loop is
+down. A credential is still required.
 
 **Three doors, one answer.** A browser sends a Better Auth session cookie; the system's own
 agents send a signed, scoped, expiring bearer token; a person's script or agent sends an API key

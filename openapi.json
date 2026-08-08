@@ -4357,6 +4357,69 @@
           "required": true
         }
       }
+    },
+    "/usage": {
+      "get": {
+        "tags": [
+          "usage"
+        ],
+        "operationId": "usage.get",
+        "parameters": [],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "userApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ProviderUsageSnapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderUsageSnapshot"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequestsJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Remaining provider usage"
+      }
     }
   },
   "components": {
@@ -7699,6 +7762,176 @@
           "queued"
         ],
         "additionalProperties": false
+      },
+      "UsageWindow": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "primary",
+              "secondary"
+            ]
+          },
+          "remainingPercent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          },
+          "resetsAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "usedPercent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          },
+          "windowSeconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "remainingPercent",
+          "resetsAt",
+          "label",
+          "usedPercent",
+          "windowSeconds"
+        ],
+        "additionalProperties": false
+      },
+      "ProviderUsageReport": {
+        "type": "object",
+        "properties": {
+          "enforced": {
+            "type": "boolean"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pausedUntil": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "readAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "limit_reached",
+              "paused",
+              "unavailable"
+            ]
+          },
+          "windows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageWindow"
+            }
+          }
+        },
+        "required": [
+          "enforced",
+          "note",
+          "pausedUntil",
+          "provider",
+          "readAt",
+          "state",
+          "windows"
+        ],
+        "additionalProperties": false
+      },
+      "ProviderUsageSnapshot": {
+        "type": "object",
+        "properties": {
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderUsageReport"
+            }
+          },
+          "publishedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "providers",
+          "publishedAt"
+        ],
+        "additionalProperties": false
       }
     },
     "securitySchemes": {
@@ -7771,6 +8004,10 @@
     {
       "name": "threads",
       "description": "Threads: conversations with the manager agent, and the turns they cause."
+    },
+    {
+      "name": "usage",
+      "description": "Remaining subscription allowance per provider, per rolling window, as of the loop's last read."
     }
   ]
 }

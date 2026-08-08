@@ -812,6 +812,13 @@ const make = Effect.gen(function* () {
 
   const pass = (signal: DispatchSignal) =>
     Effect.gen(function* () {
+      // Before the board is read, not per card: the gate caches, so this is one
+      // GET per provider per poll interval however many tasks the sweep finds —
+      // and it happens on an empty board too, which is where a dashboard
+      // showing the tanks would otherwise show the last busy hour's numbers.
+      yield* gate
+        .refresh()
+        .pipe(bestEffort("provider usage could not be refreshed", undefined));
       const found = yield* allWorkspaces;
       for (const workspace of found) {
         // A notice names the workspace whose board moved, and nothing else: the

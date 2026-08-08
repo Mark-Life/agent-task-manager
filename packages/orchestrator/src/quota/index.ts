@@ -4,8 +4,10 @@
  * The service, its options and its decisions are exported because dispatch asks
  * it a question and the run lifecycle feeds it answers. The two usage readers
  * are exported for the tests that pin their field spellings against the captured
- * fixtures, and for a check script that wants to prove a live account is
- * readable before the proactive switch is turned on.
+ * fixtures, and for the check script that proves a live account is readable.
+ * The snapshot builders are exported because the document they produce is read
+ * outside this process — by the gateway, off the data root — and a shape a test
+ * cannot reach is a shape that drifts.
  *
  * The pause file, the cooldown ladder and the per-provider cache stay inside: a
  * caller that could write a pause record could pause a healthy provider without
@@ -28,12 +30,7 @@ export {
   fetchCodexUsage,
   parseWhamUsage,
 } from "./codex-usage";
-export {
-  GATED_PROVIDERS,
-  QUOTA_SEGMENT,
-  type QuotaConfig,
-  quotaConfig,
-} from "./config";
+export { GATED_PROVIDERS, type QuotaConfig, quotaConfig } from "./config";
 export {
   detectRateLimitStatus,
   detectUsageLimitText,
@@ -52,6 +49,13 @@ export {
   type RateLimitNotice,
   type UsageReader,
 } from "./gate";
+export {
+  type ProviderReading,
+  providerReport,
+  publishUsage,
+  usagePathOf,
+  usageSnapshot,
+} from "./snapshot";
 export {
   ADMIT,
   type ProviderUsage,

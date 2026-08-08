@@ -1,8 +1,30 @@
 {
   "tailwindCSS.experimental.configFile": "packages/ui/src/styles/globals.css",
   "editor.defaultFormatter": "biomejs.biome",
-  "typescript.tsdk": "node_modules/typescript/lib",
-  "typescript.enablePromptUseWorkspaceTsdk": true,
+
+  // TypeScript 7 is a native binary. It ships no `tsserver`, so the built-in
+  // extension's JavaScript language service cannot run it — `typescript.tsdk`
+  // used to point at `node_modules/typescript/lib`, which under 7 holds a
+  // `tsc.js` shim and nothing else, and leaving it there breaks the editor
+  // outright. These four settings replace it.
+  //
+  // `useTsgo` switches the TypeScript Native Preview extension
+  // (`TypeScriptTeam.native-preview`, see extensions.json) on as the language
+  // server. `tsdk.path` then points it at the workspace compiler rather than
+  // the tsgo the extension bundles, which matters here: the root `prepare`
+  // script runs `effect-tsgo patch`, replacing that binary with `@effect/tsgo`
+  // — a superset of tsgo carrying the Effect language service. Pointing at it
+  // is what gives the editor the same Effect diagnostics `bun run typecheck`
+  // reports, from a single server. Running the bundled tsgo alongside it would
+  // duplicate every diagnostic.
+  //
+  // `bin`, not `lib`: the extension resolves a tsdk directory to an executable
+  // the same way `node_modules/typescript/lib/getExePath.js` does.
+  "js/ts.experimental.useTsgo": true,
+  "js/ts.tsdk.path": "./node_modules/typescript/bin",
+  "js/ts.tsdk.additionalLocations": ["./node_modules/typescript/bin"],
+  "js/ts.tsdk.promptToUseWorkspaceVersion": true,
+
   "editor.formatOnSave": true,
   "editor.formatOnPaste": true,
   "emmet.showExpandedAbbreviation": "never",

@@ -3,15 +3,25 @@
  * loop's, and kept apart from it because they answer to a different appetite for
  * risk.
  *
- * Two switches rather than one, and the split is the point. The reactive floor
- * is on by default: it costs nothing, it only ever fires on a run that already
- * failed, and the signal it reads — the provider refusing to serve — is not
- * something to be wrong about. The proactive read is off by default, because it
- * talks to two undocumented endpoints whose bodies are pinned to a captured
- * fixture; until those have been watched against a live account, a gate that
- * defers on a shape it misread would idle a healthy pool with nobody watching.
- * Turning it on is one variable, and the fail-open path means a wrong reading
- * still dispatches.
+ * Three switches, and the split between the last two is the point.
+ *
+ * `ENABLED` is the gate itself, reactive floor included: a run that failed on a
+ * drained provider pauses the provider. On by default because it costs nothing
+ * and only ever fires after a run has already paid.
+ *
+ * `READ` is whether the providers' own numbers are polled at all. On by default
+ * — the read is a passive GET that generates nothing, and it is what puts
+ * remaining allowance in front of a person before a wall does. It is also what
+ * publishes the reading the dashboard renders, so switching it off blinds the
+ * dashboard as well as the gate.
+ *
+ * `PROACTIVE` is whether a reading may hold a dispatch back. Separate from
+ * `READ` because "watch it for a week, then let it act" is a real state an
+ * operator wants, and folding the two together makes watching impossible. On by
+ * default: both bodies are pinned to captured live responses, and every failure
+ * path — no credentials, a 401, a shape that moved — degrades to *unreadable*,
+ * which dispatches. What is left to be wrong about is a correct reading held
+ * against the threshold below, which is the feature rather than the risk.
  */
 
 import { SESSION_PROVIDERS, type SessionProvider } from "@workspace/domain";
@@ -57,17 +67,18 @@ export const GATED_PROVIDERS: readonly SessionProvider[] = [
   ...SESSION_PROVIDERS,
 ];
 
-/** Where under the data root the pause record lives. */
-export const QUOTA_SEGMENT = "quota";
-
 /** The gate's settings, resolved from the environment. */
 export const quotaConfig = Effect.gen(function* () {
   const enabled = yield* Config.boolean("ORCHESTRATOR_QUOTA_ENABLED").pipe(
     Config.withDefault(true)
   );
 
+  const read = yield* Config.boolean("ORCHESTRATOR_QUOTA_READ").pipe(
+    Config.withDefault(true)
+  );
+
   const proactive = yield* Config.boolean("ORCHESTRATOR_QUOTA_PROACTIVE").pipe(
-    Config.withDefault(false)
+    Config.withDefault(true)
   );
 
   const thresholdPercent = yield* Config.int(
@@ -91,8 +102,12 @@ export const quotaConfig = Effect.gen(function* () {
     enabled,
     headroomPercent,
     pollIntervalMs,
-    proactive,
+    // A reading nobody takes cannot hold anything back, so the pair is resolved
+    // here rather than at each of the places that would otherwise have to
+    // remember to check both.
+    proactive: read && proactive,
     providers: GATED_PROVIDERS,
+    read,
     thresholdPercent,
   } as const;
 });

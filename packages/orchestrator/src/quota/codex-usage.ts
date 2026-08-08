@@ -18,7 +18,6 @@
  * rather than restating.
  */
 
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
 import type { FileSystem } from "effect/FileSystem";
@@ -34,8 +33,13 @@ import {
 /** The passive usage endpoint behind the ChatGPT plan. */
 const WHAM_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 
-/** Where the Codex CLI keeps the credentials it refreshes. */
-const CODEX_AUTH_PATH = join(homedir(), ".codex", "auth.json");
+/**
+ * What the Codex CLI names the credentials it refreshes, inside `CODEX_HOME`.
+ * Read out of the agent home the containers are handed rather than out of
+ * `~/.codex`, for the reason `./claude-usage` gives: on a server the operator's
+ * own login is not there, and on a laptop it is a different subscription.
+ */
+const CODEX_CREDENTIALS_FILE = "auth.json";
 
 /** The reset is a unix-seconds stamp; everything downstream speaks milliseconds. */
 const SECONDS_TO_MS = 1000;
@@ -51,7 +55,15 @@ const asRecord = (value: unknown) =>
     ? (value as Readonly<Record<string, unknown>>)
     : null;
 
-/** One nested window object, or null when it is absent or unusable. */
+/**
+ * One nested window object, or null when it is absent or unusable.
+ *
+ * The span comes off `limit_window_seconds`, which is what settles what these
+ * two windows actually are rather than what a plan's documentation implies:
+ * captured live, `primary_window` is 18000 seconds and `secondary_window` is
+ * 604800 — five hours and seven days, the same pair Claude reports, and not the
+ * daily window the plan pages describe.
+ */
 const parseWindow = (raw: unknown): WindowUsage | null => {
   const window = asRecord(raw);
   if (window === null || !isFiniteNumber(window.used_percent)) {
@@ -62,6 +74,9 @@ const parseWindow = (raw: unknown): WindowUsage | null => {
       ? window.reset_at * SECONDS_TO_MS
       : null,
     utilizationPercent: window.used_percent,
+    windowSeconds: isFiniteNumber(window.limit_window_seconds)
+      ? window.limit_window_seconds
+      : null,
   };
 };
 
@@ -150,14 +165,15 @@ const readCredentials = (fs: FileSystem, authPath: string) =>
     })
   );
 
-/** Overrides, both of them for a test. */
+/** Overrides: a test's endpoint. */
 export interface CodexUsageOptions {
-  readonly authPath?: string;
   readonly url?: string;
 }
 
 /** What the reader is handed once, at gate construction. */
 export interface CodexUsageInput {
+  /** The provider's system-owned login directory — the one mounted into every container. */
+  readonly agentHomeDir: string;
   readonly fs: FileSystem;
   readonly http: HttpClient.HttpClient;
   readonly options?: CodexUsageOptions;
@@ -169,11 +185,12 @@ export interface CodexUsageInput {
  * failing the dispatch it was asked about. Only a 200 body can produce a drain.
  */
 export const fetchCodexUsage = ({
+  agentHomeDir,
   fs,
   http,
   options,
 }: CodexUsageInput): Effect.Effect<ProviderUsage> =>
-  readCredentials(fs, options?.authPath ?? CODEX_AUTH_PATH).pipe(
+  readCredentials(fs, join(agentHomeDir, CODEX_CREDENTIALS_FILE)).pipe(
     Effect.flatMap((credentials) =>
       http.execute(
         HttpClientRequest.get(options?.url ?? WHAM_USAGE_URL).pipe(

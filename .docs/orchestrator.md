@@ -32,6 +32,24 @@ live run, project, attempt, provider. The quota gate, the concurrency cap and th
 each get to refuse over that plan with nothing to undo — so a drained subscription costs a
 skipped sweep, not a run row and a trip through *review* to say "not now".
 
+**The gate knows what is left before it spends any of it.** Both subscriptions report two
+rolling windows — five hours and seven days, on Claude and on Codex alike — through a passive
+endpoint that generates nothing, read with the credentials in the agent home the containers are
+handed. The loop polls both once per `ORCHESTRATOR_QUOTA_POLL_INTERVAL_MS` (5m) at the top of
+each sweep, caches the reading, defers a dispatch whose window is over
+`ORCHESTRATOR_QUOTA_THRESHOLD_PCT` (95, plus 5 points reserved per in-flight run), and publishes
+what it read to `${DATA_ROOT}/quota/usage.json`, which the gateway serves at `GET /usage` —
+remaining percent, the window it belongs to, and when that window rolls over. Under it sits a
+reactive floor: a run that dies on a drained provider pauses that provider for a doubling
+cooldown, which covers the window filling between two polls. A pause is per provider, so a
+drained Claude leaves Codex dispatching. The split that decides everything is *unreadable*
+against *drained* — no login, an expired token, a body whose shape moved all mean "could not
+tell", which dispatches and warns, because a gate that silently disables itself is worse than no
+gate. Only a reading that says the provider is out holds a card back. Nothing already running is
+stopped: a live run is allowance already committed, and killing it wastes what it spent.
+`bun run quota:check` prints the same reading from a terminal, and is the way to find out a host
+is unreadable before a blank dashboard does.
+
 **Every ending lands the task in *review*, failures included.** A crashed run posts its error
 into the thread as a comment, marks its session failed, and moves the card to the human gate;
 there is no failed column and no auto-retry. The backoff ladder and the park stamp
@@ -107,6 +125,11 @@ Knobs: `ORCHESTRATOR_MAX_CONCURRENCY` (default 2, sized for a 4-core box),
 `ORCHESTRATOR_LEASE_STALE_MS`, `ORCHESTRATOR_MAX_ATTEMPTS`, `ORCHESTRATOR_RUN_TIMEOUT_MS`,
 `ORCHESTRATOR_CHAT_TIMEOUT_MS`, `ORCHESTRATOR_DEFAULT_PROVIDER`,
 `ORCHESTRATOR_GATEWAY_URL`, `ORCHESTRATOR_AGENT_TOKEN_TTL_MS`, `LOOP_SHUTDOWN_GRACE_MS`.
+The gate's own: `ORCHESTRATOR_QUOTA_ENABLED` (the gate at all), `ORCHESTRATOR_QUOTA_READ` (poll
+and publish), `ORCHESTRATOR_QUOTA_PROACTIVE` (let a reading defer — set it to `false` for
+watch-only, which still publishes and still keeps the reactive floor),
+`ORCHESTRATOR_QUOTA_THRESHOLD_PCT`, `ORCHESTRATOR_QUOTA_HEADROOM_PCT`,
+`ORCHESTRATOR_QUOTA_POLL_INTERVAL_MS`, `ORCHESTRATOR_QUOTA_COOLDOWN_MS`.
 
 **Every turn gets the board tools**, worker and manager alike: the loop mints a scoped token
 per run, writes an `mcp-servers.json` onto that run's mount before the container starts and

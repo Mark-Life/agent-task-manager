@@ -34,6 +34,7 @@ import { type ReactNode, useCallback, useEffect } from "react";
 import { signOut, useSession } from "@/auth/client";
 import { WorkspacePicker } from "@/auth/workspace";
 import { ModeToggle } from "@/components/theme";
+import { UsageMeters } from "@/features/usage/meters";
 
 /** Where signing out lands, and the one page the shell never wraps. */
 const SIGN_IN_PATH = "/login";
@@ -280,6 +281,13 @@ export const Shell = ({ children, conversations }: ShellProps) => {
         </SidebarContent>
 
         <SidebarFooter>
+          {/*
+            Imported rather than handed in like the conversation list. That one
+            is a feature with routing of its own and the chrome only makes room
+            for it; this is a fact about the machine the whole frame runs on,
+            with no route, no selection and nothing for a screen to pass it.
+          */}
+          <UsageMeters />
           <div className="flex items-center gap-1 group-data-[collapsible=icon]:flex-col">
             <div className="min-w-0 flex-1">
               <AccountMenu />

@@ -15,6 +15,7 @@ import {
 import { ProjectSelect } from "@/features/task/properties";
 import { StatusPicker } from "@/features/task/status-select";
 import { failureText } from "@/lib/failure";
+import { REPO_URL_PLACEHOLDER, repoUrlProblem } from "@/lib/repo-url";
 
 /**
  * What a task is before it exists: the fields creation accepts, held entirely
@@ -259,6 +260,8 @@ const DraftBody = ({ onClose, onFiled, status }: DraftBodyProps) => {
             editLabel="Edit repository URL"
             emptyText="Empty"
             onCommit={onRepoUrl}
+            placeholder={REPO_URL_PLACEHOLDER}
+            problemOf={repoUrlProblem}
             value={draft.repoUrl ?? ""}
           />
         </PropertyRow>
