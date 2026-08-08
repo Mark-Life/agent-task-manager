@@ -46,6 +46,7 @@ const labels: RunLabels = {
 const sources: MountSources = {
   agentHomeDir: "/home/op/.claude-task-management",
   cacheDir: "/data/caches",
+  composedSkillsDir: null,
   globalArtifactsDir: "/data/artifacts/global",
   labels,
   projectArtifactsDir: "/data/artifacts/projects/p1",
@@ -230,7 +231,6 @@ describe("mountsFor", () => {
     const mounts = mountsFor(sources, {
       agentMcpPath: null,
       entrypointPath: "/data/bin/turn.js",
-      skillsDir: null,
     });
     const entrypoint = byPurpose(mounts, "entrypoint");
     expect(entrypoint?.hostPath).toBe("/data/bin/turn.js");
@@ -246,7 +246,6 @@ describe("mountsFor", () => {
     const mounts = mountsFor(sources, {
       agentMcpPath: "/data/bin/agent-mcp.js",
       entrypointPath: null,
-      skillsDir: null,
     });
     const bundle = byPurpose(mounts, "agent_mcp");
     expect(bundle?.hostPath).toBe("/data/bin/agent-mcp.js");
@@ -264,7 +263,6 @@ describe("mountsFor", () => {
       mountsFor(sources, {
         agentMcpPath: "/data/bin/agent-mcp.js",
         entrypointPath: null,
-        skillsDir: null,
       }),
       "agent_mcp"
     );
@@ -274,19 +272,18 @@ describe("mountsFor", () => {
     expect(bundle?.hostPath.startsWith(sources.runDir)).toBe(false);
   });
 
-  test("the operator's skills are mounted read-only, and only when shared", () => {
+  test("the run's composed skills are mounted read-only, and only when it has some", () => {
     expect(byPurpose(mountsFor(sources), "skills")).toBeUndefined();
 
-    const mounts = mountsFor(sources, {
-      agentMcpPath: null,
-      entrypointPath: null,
-      skillsDir: "/home/op/.agents/skills",
+    const mounts = mountsFor({
+      ...sources,
+      composedSkillsDir: "/data/runs/r1/skills",
     });
     const skills = byPurpose(mounts, "skills");
-    expect(skills?.hostPath).toBe("/home/op/.agents/skills");
+    expect(skills?.hostPath).toBe("/data/runs/r1/skills");
     expect(skills?.containerPath).toBe(CONTAINER_SKILLS_DIR);
-    // One directory serves every container on the host, and a run that could
-    // write it would be editing the instructions every later run is given.
+    // The composition is what a later run's mount is made from as well, so a
+    // run that could write this one would be editing what they are given.
     expect(skills?.readOnly).toBe(true);
   });
 
@@ -296,11 +293,13 @@ describe("mountsFor", () => {
 
   test("nothing resembling the docker socket is ever mounted", () => {
     const args = mountArgs(
-      mountsFor(sources, {
-        agentMcpPath: null,
-        entrypointPath: "/data/bin/turn.js",
-        skillsDir: "/home/op/.agents/skills",
-      })
+      mountsFor(
+        { ...sources, composedSkillsDir: "/data/runs/r1/skills" },
+        {
+          agentMcpPath: "/data/bin/agent-mcp.js",
+          entrypointPath: "/data/bin/turn.js",
+        }
+      )
     ).join(" ");
     expect(args).not.toContain("docker.sock");
     expect(args).not.toContain("/var/run/docker");
@@ -384,11 +383,13 @@ describe("nestedMountPointsOf", () => {
 
   test("covers a bind inside a bind wherever it is, not only inside the tree", () => {
     const points = nestedMountPointsOf(
-      mountsFor(sources, {
-        agentMcpPath: null,
-        entrypointPath: "/data/bin/turn.js",
-        skillsDir: "/home/op/.agents/skills",
-      })
+      mountsFor(
+        { ...sources, composedSkillsDir: "/data/runs/r1/skills" },
+        {
+          agentMcpPath: "/data/bin/agent-mcp.js",
+          entrypointPath: "/data/bin/turn.js",
+        }
+      )
     );
     expect(points).toContainEqual({
       path: `${sources.agentHomeDir}/skills`,
@@ -404,6 +405,7 @@ describe("nestedMountPointsOf", () => {
       nestedMountPointsOf(
         managerMountsFor({
           agentHomeDir: "/home/op/.claude-task-management",
+          composedSkillsDir: null,
           globalArtifactsDir: "/data/artifacts/global",
           runDir: "/data/threads/th1/run",
           workspaceDir: "/data/threads/th1/workspace",
@@ -514,6 +516,7 @@ describe("the container's run directory", () => {
 describe("managerMountsFor", () => {
   const managerSources: ManagerMountSources = {
     agentHomeDir: "/home/op/.claude-task-management",
+    composedSkillsDir: null,
     globalArtifactsDir: "/data/artifacts/global",
     runDir: "/data/threads/th1/run",
     workspaceDir: "/data/threads/th1/workspace",
@@ -537,7 +540,6 @@ describe("managerMountsFor", () => {
     const purposes = managerMountsFor(managerSources, {
       agentMcpPath: null,
       entrypointPath: "/data/bin/turn.js",
-      skillsDir: null,
     }).map((mount) => mount.purpose);
     expect(purposes).not.toContain("task_artifacts");
     expect(purposes).not.toContain("project_artifacts");
@@ -575,7 +577,6 @@ describe("managerMountsFor", () => {
     const mounts = managerMountsFor(managerSources, {
       agentMcpPath: null,
       entrypointPath: "/data/bin/turn.js",
-      skillsDir: null,
     });
     const entrypoint = byPurpose(mounts, "entrypoint");
     expect(entrypoint?.containerPath).toBe(CONTAINER_ENTRYPOINT_PATH);
@@ -586,18 +587,16 @@ describe("managerMountsFor", () => {
     const mounts = managerMountsFor(managerSources, {
       agentMcpPath: "/data/bin/agent-mcp.js",
       entrypointPath: null,
-      skillsDir: null,
     });
     const bundle = byPurpose(mounts, "agent_mcp");
     expect(bundle?.containerPath).toBe(CONTAINER_AGENT_MCP_PATH);
     expect(bundle?.readOnly).toBe(true);
   });
 
-  test("a conversation is given the operator's skills on the same terms", () => {
-    const mounts = managerMountsFor(managerSources, {
-      agentMcpPath: null,
-      entrypointPath: null,
-      skillsDir: "/home/op/.agents/skills",
+  test("a conversation is given its composed skills on the same terms", () => {
+    const mounts = managerMountsFor({
+      ...managerSources,
+      composedSkillsDir: "/data/threads/th1/run/skills",
     });
     const skills = byPurpose(mounts, "skills");
     expect(skills?.containerPath).toBe(CONTAINER_SKILLS_DIR);

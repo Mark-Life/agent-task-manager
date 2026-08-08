@@ -13,6 +13,7 @@ import { describe, expect, test } from "bun:test";
 import {
   ancestorsOf,
   joinScopePath,
+  linkTextOf,
   nameOf,
   parentOf,
   resolveLinkTarget,
@@ -118,6 +119,48 @@ describe("resolveLinkTarget", () => {
       resolveLinkTarget(".claude/skills", "../../../../etc/passwd")
     ).toBeNull();
     expect(resolveLinkTarget(null, "/etc/passwd")).toBeNull();
+  });
+});
+
+/**
+ * A link's text has to be read from the folder the link sits in, and it has to
+ * be relative. Every scope is a bind mount, so an absolute path would resolve
+ * on the screen that showed it and reach nothing inside a run — which is the one
+ * failure here nobody would notice until an agent quietly stopped being given
+ * the rules.
+ */
+describe("linkTextOf", () => {
+  test("a link beside its target names it and climbs nowhere", () => {
+    expect(linkTextOf({ from: "CLAUDE.md", to: "AGENTS.md" })).toBe(
+      "AGENTS.md"
+    );
+    expect(linkTextOf({ from: "notes/CLAUDE.md", to: "notes/AGENTS.md" })).toBe(
+      "AGENTS.md"
+    );
+  });
+
+  test("the skills layout climbs out of one folder and back down the other", () => {
+    expect(
+      linkTextOf({
+        from: ".claude/skills/writing",
+        to: ".agents/skills/writing",
+      })
+    ).toBe("../../.agents/skills/writing");
+  });
+
+  test("a target deeper than the link is reached by descending alone", () => {
+    expect(linkTextOf({ from: "SKILL.md", to: "docs/skills/SKILL.md" })).toBe(
+      "docs/skills/SKILL.md"
+    );
+  });
+
+  test("nothing it produces starts at a root no container shares", () => {
+    expect(
+      linkTextOf({ from: "a/b/c/link", to: "AGENTS.md" }).startsWith("/")
+    ).toBe(false);
+    expect(linkTextOf({ from: "a/b/c/link", to: "AGENTS.md" })).toBe(
+      "../../../AGENTS.md"
+    );
   });
 });
 

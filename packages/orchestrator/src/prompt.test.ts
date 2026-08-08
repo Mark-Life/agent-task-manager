@@ -79,6 +79,7 @@ describe("placement", () => {
     agentHomeDir: "/host/.claude-task-management",
     branch: "atm/task-1",
     cacheDir: "/host/.data/caches",
+    composedSkillsDir: null,
     envFiles: { excluded: false, paths: [] },
     globalArtifactsDir: "/host/.data/artifacts/global",
     labels: {

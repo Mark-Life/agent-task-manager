@@ -29,9 +29,10 @@ import {
   projectArtifactsDirOf,
   taskArtifactsDirOf,
 } from "./artifacts";
+import { composedSkillsDirOf } from "./composed-skills";
 import { CloneFailed } from "./errors";
 import { eventLogDirOf, type RunLabels, runTreeOf, slugOf } from "./mounts";
-import type { MaterializeInput, RepoSource } from "./spec";
+import type { MaterializeInput, RepoSource, RunWorkspace } from "./spec";
 import { Workspace } from "./spec";
 import {
   type CloneIntoWorkspace,
@@ -142,6 +143,7 @@ const materializeInput = (
     projectId,
     provider: "claude",
     repo,
+    skillsDir: null,
     taskId,
   }) as MaterializeInput;
 
@@ -149,10 +151,7 @@ const materializeInput = (
 const withWorkspace = <A>(options: {
   readonly clone: CloneIntoWorkspace;
   readonly input: MaterializeInput;
-  readonly use: (workspace: {
-    readonly branch: string | null;
-    readonly workspaceDir: string;
-  }) => A;
+  readonly use: (workspace: RunWorkspace) => A;
 }) =>
   Effect.runPromiseExit(
     Effect.scoped(
@@ -509,6 +508,92 @@ describe("the project's env files", () => {
 
     expect(Exit.isFailure(exit)).toBe(true);
     expect(existsSync(join(target, ".env"))).toBe(false);
+  });
+});
+
+/**
+ * The promise this keeps: a skill dropped in a shared folder reaches the run.
+ * Codex reads those folders itself; Claude reads only the composed directory,
+ * so a materialization that stopped producing one would take scope-level skills
+ * away from that provider with nothing failing anywhere.
+ */
+describe("the skills a run is composed", () => {
+  /** Writes a skill into a scope's host directory before the run is materialized. */
+  const seedSkill = (input: {
+    readonly name: string;
+    readonly scope: string;
+  }) => {
+    const path = join(input.scope, ".agents/skills", input.name);
+    mkdirSync(path, { recursive: true });
+    writeFileSync(join(path, "SKILL.md"), `# ${input.name}\n`);
+  };
+
+  test("carries a skill from the workspace folder into a directory beside the run's own", async () => {
+    seedSkill({ name: "house-style", scope: globalArtifactsDirOf(dataRoot) });
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null),
+      use: (workspace) =>
+        readFileSync(
+          join(String(workspace.composedSkillsDir), "house-style", "SKILL.md"),
+          "utf8"
+        ),
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (!Exit.isSuccess(exit)) {
+      return;
+    }
+    expect(exit.value.used).toBe("# house-style\n");
+    expect(exit.value.materialized.composedSkillsDir).toBe(
+      composedSkillsDirOf({ dataRoot, runId: identity.runId })
+    );
+    // A sibling of the run directory rather than a child, because `/run` is
+    // bound read-write and a composition under it would be reachable in
+    // writable form there.
+    expect(
+      exit.value.materialized.composedSkillsDir?.startsWith(
+        runDirOf({ dataRoot, runId: identity.runId })
+      )
+    ).toBe(false);
+  });
+
+  test("gives a tree with no skills no mount to make", async () => {
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null),
+      use: () => null,
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.materialized.composedSkillsDir).toBe(null);
+    }
+  });
+
+  test("is the run's while the run lasts, and gone after it", async () => {
+    seedSkill({ name: "house-style", scope: globalArtifactsDirOf(dataRoot) });
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null),
+      use: (workspace) => existsSync(String(workspace.composedSkillsDir)),
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (!Exit.isSuccess(exit)) {
+      return;
+    }
+    expect(exit.value.used).toBe(true);
+    expect(existsSync(String(exit.value.materialized.composedSkillsDir))).toBe(
+      false
+    );
+    // The source outlives it: what died is a copy, and the next run makes its
+    // own from the same folder.
+    expect(
+      existsSync(
+        join(globalArtifactsDirOf(dataRoot), ".agents/skills/house-style")
+      )
+    ).toBe(true);
   });
 });
 

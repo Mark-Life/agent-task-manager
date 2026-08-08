@@ -11,8 +11,8 @@
  *
  * Six mounts a run always gets — the run directory, the agent home, the package
  * store, and the three scopes of its tree that always exist — a seventh when its
- * task belongs to a project, one when the install shares a skills directory, one
- * when it runs our own entrypoint and one when it is given the board tools. The
+ * task belongs to a project, one when any skills were composed for it, one when
+ * it runs our own entrypoint and one when it is given the board tools. The
  * reasons are each their own.
  *
  * The run directory carries the run's message marker, its turn spec and its
@@ -99,20 +99,24 @@
  * directories from the mount set itself, and materialization makes them before
  * the container starts.
  *
- * The operator's own skills directory is mounted read-only at
- * {@link CONTAINER_SKILLS_DIR} when the install names one, and it is the only
- * mount that is a bind inside another bind. That is the point of it: a provider
- * reads its personal skills from a fixed name under its config directory, so
- * the directory has to appear *inside* the agent home or it is not found. The
- * daemon mounts a destination before anything nested under it, which is what
- * makes the ordering safe; the nesting buys the one thing a sibling mount
- * cannot. Read-only, because a run reads skills and an install that let a
- * container rewrite them would be letting one run edit the instructions every
- * later run is given.
+ * The run's composed skills directory is mounted read-only at
+ * {@link CONTAINER_SKILLS_DIR}, and it is the only mount that is a bind inside
+ * another bind. That is the point of it: a provider reads its personal skills
+ * from a fixed name under its config directory, so the directory has to appear
+ * inside the agent home itself or it is not found. The daemon mounts a
+ * destination
+ * before anything nested under it, which is what makes the ordering safe; the
+ * nesting buys the one thing a sibling mount cannot. Read-only, because a run
+ * reads skills and an install that let a container rewrite them would be
+ * letting one run edit the instructions every later run is given.
  *
- * Mounted rather than copied for the same reason as everything else here: the
- * operator edits the skills in their own directory, and the next container sees
- * the edit without a sync step that can be forgotten.
+ * It is a per-run directory rather than one of the operator's, and that is the
+ * one mount here that is a copy rather than a window onto something durable.
+ * The reason is a difference between the two providers: Codex reads
+ * `.agents/skills` at every level of a run's tree already, while Claude's
+ * project scan stops at the repository root — which is below every scope — and
+ * only its personal scan reads this path. So the tree is walked on the host and
+ * the result is composed into one directory per run. See `./composed-skills`.
  *
  * The last two are bundles rather than directories: the turn entrypoint and the
  * board tools, one file each, read-only. Neither is in the image on purpose —
@@ -395,13 +399,22 @@ export const CONTAINER_EVENT_LOG_DIR = join(
 export const CONTAINER_AGENT_HOME_DIR = "/agent-home";
 
 /**
- * Where a run finds the skills the operator shares with it. Under the agent
- * home and named `skills`, because that is where a provider looks for the
- * personal skills of whoever it is running as — the path is the provider's, not
- * ours, which is why it is derived from {@link CONTAINER_AGENT_HOME_DIR} rather
- * than chosen.
+ * What a provider calls the directory holding the personal skills of whoever it
+ * is running as. The provider's name, not ours, which is why it is a constant
+ * applied to two roots rather than a path chosen twice: the container's agent
+ * home, and the host directory behind it, which is a source the composition
+ * reads.
  */
-export const CONTAINER_SKILLS_DIR = join(CONTAINER_AGENT_HOME_DIR, "skills");
+export const AGENT_HOME_SKILLS_SEGMENT = "skills";
+
+/**
+ * Where a run finds the skills it was given. Under the agent home, because that
+ * is where a provider looks — see {@link AGENT_HOME_SKILLS_SEGMENT}.
+ */
+export const CONTAINER_SKILLS_DIR = join(
+  CONTAINER_AGENT_HOME_DIR,
+  AGENT_HOME_SKILLS_SEGMENT
+);
 
 /** The ledger directory under an already-resolved host run directory. */
 export const eventLogDirOf = (runDir: string) =>
@@ -464,6 +477,14 @@ export interface MountSources {
    */
   readonly cacheDir: string;
   /**
+   * The skills gathered for this run, or null when it was given none — an
+   * install that shares no directory and a tree whose scopes define nothing,
+   * which is the default. Null means no mount at all rather than an empty one:
+   * an empty directory bound over {@link CONTAINER_SKILLS_DIR} would hide the
+   * skills the agent home already holds behind nothing.
+   */
+  readonly composedSkillsDir: string | null;
+  /**
    * The global promoted folder, which is the host side of the workspace scope.
    * Read-only to a worker, read-write to a manager.
    */
@@ -507,35 +528,32 @@ export interface MountExtras {
    * the image already has — a shell, in the checks that prove the plumbing.
    */
   readonly entrypointPath: string | null;
-  /**
-   * The operator's skills directory on the host, mounted read-only at
-   * {@link CONTAINER_SKILLS_DIR}. Null on an install that shares none, which is
-   * the default: a run reaches nothing of the host's until an operator names
-   * the directory it may read.
-   */
-  readonly skillsDir: string | null;
 }
 
-/** What a container that brings its own command gets: the five run mounts. */
+/** What a container that brings its own command gets: the run's own mounts. */
 export const NO_MOUNT_EXTRAS: MountExtras = {
   agentMcpPath: null,
   entrypointPath: null,
-  skillsDir: null,
 };
 
 /**
  * The skills mount, or nothing. One function for both mount sets: what a
- * conversation and a task may read of the host's skills is the same answer, and
- * two copies of it is where they would come to differ.
+ * conversation and a task are given of the host's skills is composed the same
+ * way and mounted on the same terms, and two copies of this is where they would
+ * come to differ.
  */
-const skillsMounts = (extras: MountExtras): readonly Mount[] =>
-  extras.skillsDir === null
+const skillsMounts = (composedSkillsDir: string | null): readonly Mount[] =>
+  composedSkillsDir === null
     ? []
     : [
         {
           containerPath: CONTAINER_SKILLS_DIR,
-          hostPath: extras.skillsDir,
+          hostPath: composedSkillsDir,
           purpose: "skills",
+          // Read-only, and the composition is what makes that affordable: the
+          // directory is this run's own copy, so nothing is lost by refusing
+          // the run write access to it, and a later run's skills cannot be
+          // rewritten by this one.
           readOnly: true,
         },
       ];
@@ -655,7 +673,10 @@ export const mountsFor = (
       readOnly: false,
     }
   );
-  mounts.push(...skillsMounts(extras), ...bundleMounts(extras));
+  mounts.push(
+    ...skillsMounts(sources.composedSkillsDir),
+    ...bundleMounts(extras)
+  );
   return mounts;
 };
 
@@ -667,7 +688,11 @@ export const mountsFor = (
  */
 export type ManagerMountSources = Pick<
   MountSources,
-  "agentHomeDir" | "globalArtifactsDir" | "runDir" | "workspaceDir"
+  | "agentHomeDir"
+  | "composedSkillsDir"
+  | "globalArtifactsDir"
+  | "runDir"
+  | "workspaceDir"
 >;
 
 /**
@@ -682,9 +707,10 @@ export type ManagerMountSources = Pick<
  * to this shape silently. Separate functions mean the caller names which kind
  * of turn it is starting, and both remain closed by construction.
  *
- * The skills directory is shared with a conversation on the same terms as with
- * a run: the manager is the role that reads the board and writes the briefs, so
- * the operator's own instructions are the most use to it of anywhere.
+ * The skills mount is here on the same terms as a run's: the manager is the
+ * role that reads the board and writes the briefs, so the instructions it is
+ * given are the most use to it of anywhere. Its composition is shallower —
+ * there is no project and no task — and it is composed by the same function.
  *
  * The package cache is not here, and neither are the variables that name it. A
  * chat turn answers over HTTP and installs nothing, so the mount would be a
@@ -731,7 +757,7 @@ export const managerMountsFor = (
       purpose: "workspace",
       readOnly: false,
     },
-    ...skillsMounts(extras),
+    ...skillsMounts(sources.composedSkillsDir),
   ];
   mounts.push(...bundleMounts(extras));
   return mounts;
@@ -807,6 +833,11 @@ export const isUnder = (child: string, parent: string) =>
  *
  * Every entry is a directory. The one bind of a file — the entrypoint bundle —
  * is at a top-level path under no other mount, so it never appears here.
+ *
+ * The skills destination appears here too, and it is the one a caller should
+ * drop: it sits inside the agent home, which is the host's own login directory
+ * — checked and never created, because making part of it is making it. That
+ * parent is mounted read-write, so the daemon creates the destination itself.
  */
 export const nestedMountPointsOf = (
   mounts: readonly Mount[]

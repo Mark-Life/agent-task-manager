@@ -21,15 +21,25 @@
  * a handler, and the tests say so by decoding them: a rule the type carries is
  * a rule no route can forget, and a test that only exercised the handler would
  * not notice if the brand were ever dropped from a route.
+ *
+ * **A link a person makes is relative, and it points at one real file.** The
+ * text on disk is read back with `readlink` rather than trusted from the
+ * answer, because an absolute host path is the failure that would pass every
+ * assertion about behaviour in the browser and reach nothing inside a
+ * container. The refusals around it — a target outside the scope, a target in
+ * the object store, a target that is not there, a target that is itself a link
+ * — each have their own test.
  */
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -69,6 +79,7 @@ import { Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
 import {
   createScopeDirectory,
   deleteScopePath,
+  linkScopePath,
   listScopeFiles,
   moveScopeFile,
   readScopeFile,
@@ -159,6 +170,27 @@ const writing = (input: {
     principal,
     scope: input.scope,
   });
+
+const linking = (input: {
+  readonly path: ScopePath;
+  readonly scope: FileScope;
+  readonly target: ScopePath;
+}) =>
+  linkScopePath({
+    dataRoot,
+    path: input.path,
+    principal,
+    scope: input.scope,
+    target: input.target,
+  });
+
+/**
+ * Whether a name is there at all, a link pointing at nothing included.
+ * `existsSync` follows the link and answers no, which is the wrong answer when
+ * the question is whether a dangling link was left behind.
+ */
+const lstatExists = (path: string) =>
+  lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 
 /** What `git log` says about the newest commit in a scope, or null where there is none. */
 const lastCommit = (dir: string) => {
@@ -531,6 +563,242 @@ test("a directory is created with its parents, and a move renames inside the sco
   expect(readFileSync(join(dir, "reports/2026/final.md"), "utf8")).toBe(
     "draft\n"
   );
+});
+
+/**
+ * The whole point of the link route, and the one thing it could get wrong
+ * invisibly.
+ *
+ * `AGENTS.md` holds a rule and `CLAUDE.md` points at it, because neither
+ * provider reads the other's name. What is on disk has to be the relative path
+ * from the link's own directory — an absolute host path would resolve for the
+ * person who made it in the browser and reach nothing at all inside a
+ * container, where the scope is a bind mount at a different address.
+ */
+test("a link is written relative to its own directory and reads as the target", async () => {
+  const scope: FileScope = { scope: "manager" };
+  const body = "Say the thing itself.\n";
+  await runtime.runPromise(
+    writing({ content: body, path: at("AGENTS.md"), scope })
+  );
+
+  const entry = await runtime.runPromise(
+    linking({ path: at("CLAUDE.md"), scope, target: at("AGENTS.md") })
+  );
+
+  const dir = scopeDirOf(scope);
+  expect(entry.kind).toBe("symlink");
+  expect(entry.target).toBe("AGENTS.md");
+  expect(entry.targetOutsideScope).toBe(false);
+  expect(readlinkSync(join(dir, "CLAUDE.md"))).toBe("AGENTS.md");
+  expect(readFileSync(join(dir, "CLAUDE.md"), "utf8")).toBe(body);
+});
+
+/** A link deeper in the tree climbs back with `..` rather than naming a root. */
+test("a link two directories down points back up through the scope", async () => {
+  const scope: FileScope = { scope: "manager" };
+  const dir = madeScopeDir(scope);
+  mkdirSync(join(dir, ".agents/skills/reviewing"), { recursive: true });
+  writeFileSync(
+    join(dir, ".agents/skills/reviewing/SKILL.md"),
+    "# Reviewing\n"
+  );
+
+  await runtime.runPromise(
+    linking({
+      path: at(".claude/skills/reviewing"),
+      scope,
+      target: at(".agents/skills/reviewing"),
+    })
+  );
+
+  expect(readlinkSync(join(dir, ".claude/skills/reviewing"))).toBe(
+    "../../.agents/skills/reviewing"
+  );
+  expect(
+    readFileSync(join(dir, ".claude/skills/reviewing/SKILL.md"), "utf8")
+  ).toBe("# Reviewing\n");
+});
+
+/** A link is an edit, and an edit in a shared scope is attributed like any other. */
+test("a link in a git-backed scope lands in that scope's history", async () => {
+  const scope: FileScope = { projectId: project.id, scope: "project" };
+  await runtime.runPromise(
+    linking({ path: at("CLAUDE.md"), scope, target: at("AGENTS.md") })
+  );
+
+  const commit = lastCommit(scopeDirOf(scope));
+
+  expect(commit?.subject).toBe("link CLAUDE.md -> AGENTS.md");
+  expect(commit?.name).toBe(person.userId);
+});
+
+/**
+ * The containment, asked of the target rather than of the link. A path of
+ * ordinary segments still lands outside the scope when one of them is a link a
+ * run planted, and a link this route wrote to it would be a permanent door.
+ */
+test("a link whose target resolves outside the scope is refused", async () => {
+  const outside = mkdtempSync(join(tmpdir(), "gateway-files-link-out-"));
+  writeFileSync(join(outside, "secret.env"), "TOKEN=hunter2\n");
+  const scope: FileScope = { scope: "task", taskId: task.id };
+  const dir = madeScopeDir(scope);
+  symlinkSync(outside, join(dir, "planted"));
+
+  const refusal = await runtime.runPromise(
+    Effect.flip(
+      linking({
+        path: at("secrets.env"),
+        scope,
+        target: forced("planted/secret.env"),
+      })
+    )
+  );
+
+  expect(refusal._tag).toBe("Forbidden");
+  expect(existsSync(join(dir, "secrets.env"))).toBe(false);
+  rmSync(outside, { force: true, recursive: true });
+});
+
+/**
+ * The object store is the record of who changed the rules a run reads. The
+ * schema refuses the segment in a string; a link somebody planted is the way
+ * around that, and pointing a second link at it would put the audit trail back
+ * inside the tree a person edits.
+ */
+test("a link whose target resolves into the object store is refused", async () => {
+  const scope: FileScope = { projectId: project.id, scope: "project" };
+  const dir = scopeDirOf(scope);
+  symlinkSync(".git", join(dir, "objects-link"));
+
+  const refusal = await runtime.runPromise(
+    Effect.flip(
+      linking({
+        path: at("head.txt"),
+        scope,
+        target: forced("objects-link/HEAD"),
+      })
+    )
+  );
+
+  expect(refusal._tag).toBe("Forbidden");
+  expect(existsSync(join(dir, "head.txt"))).toBe(false);
+});
+
+/**
+ * A dangling link is a rule that quietly reaches nothing, and it is also how
+ * the containment above would be sidestepped: a target created after the check
+ * is a target this process never resolved.
+ */
+test("a link whose target is not there is refused rather than left dangling", async () => {
+  const scope: FileScope = { scope: "task", taskId: task.id };
+
+  const refusal = await runtime.runPromise(
+    Effect.flip(
+      linking({ path: at("ghost.md"), scope, target: at("nowhere.md") })
+    )
+  );
+
+  expect(refusal._tag).toBe("NotFound");
+  expect(lstatExists(join(scopeDirOf(scope), "ghost.md"))).toBe(false);
+});
+
+/** One hop, so a listing always says what a name ends up at. */
+test("a link cannot point at another link", async () => {
+  const scope: FileScope = { scope: "task", taskId: task.id };
+  await runtime.runPromise(
+    writing({ content: "the rule\n", path: at("chain/real.md"), scope })
+  );
+  await runtime.runPromise(
+    linking({ path: at("chain/first.md"), scope, target: at("chain/real.md") })
+  );
+
+  const refusal = await runtime.runPromise(
+    Effect.flip(
+      linking({
+        path: at("chain/second.md"),
+        scope,
+        target: at("chain/first.md"),
+      })
+    )
+  );
+
+  expect(refusal._tag).toBe("InvalidInput");
+  expect(existsSync(join(scopeDirOf(scope), "chain/second.md"))).toBe(false);
+});
+
+/** A read follows a link that lands back inside the scope. That is what one file under two names is. */
+test("reading a link answers with the target's bytes", async () => {
+  const scope: FileScope = { scope: "task", taskId: task.id };
+  await runtime.runPromise(
+    writing({ content: "two names\n", path: at("named/AGENTS.md"), scope })
+  );
+  await runtime.runPromise(
+    linking({
+      path: at("named/CLAUDE.md"),
+      scope,
+      target: at("named/AGENTS.md"),
+    })
+  );
+
+  const content = await runtime.runPromise(
+    reading({ path: at("named/CLAUDE.md"), scope })
+  );
+
+  expect(content.encoding).toBe("utf8");
+  expect(content.content).toBe("two names\n");
+});
+
+/**
+ * A link to a directory is the shape a skill is installed in, and the one where
+ * a recursive delete that followed the link would take the skill with it.
+ */
+test("deleting a link to a directory removes the name and leaves the directory", async () => {
+  const scope: FileScope = { scope: "task", taskId: task.id };
+  await runtime.runPromise(
+    writing({ content: "# Writing\n", path: at("kept/SKILL.md"), scope })
+  );
+  await runtime.runPromise(
+    linking({ path: at("shortcut"), scope, target: at("kept") })
+  );
+
+  await runtime.runPromise(
+    deleteScopePath({ dataRoot, path: at("shortcut"), principal, scope })
+  );
+
+  const dir = scopeDirOf(scope);
+  expect(lstatExists(join(dir, "shortcut"))).toBe(false);
+  expect(readFileSync(join(dir, "kept/SKILL.md"), "utf8")).toBe("# Writing\n");
+});
+
+/** A move takes the link, not the file it names. */
+test("moving a link moves the name and leaves the target where it is", async () => {
+  const scope: FileScope = { scope: "task", taskId: task.id };
+  await runtime.runPromise(
+    writing({ content: "held\n", path: at("moved/AGENTS.md"), scope })
+  );
+  await runtime.runPromise(
+    linking({
+      path: at("moved/CLAUDE.md"),
+      scope,
+      target: at("moved/AGENTS.md"),
+    })
+  );
+
+  const entry = await runtime.runPromise(
+    moveScopeFile({
+      dataRoot,
+      from: at("moved/CLAUDE.md"),
+      principal,
+      scope,
+      to: at("moved/CODEX.md"),
+    })
+  );
+
+  const dir = scopeDirOf(scope);
+  expect(entry.kind).toBe("symlink");
+  expect(readlinkSync(join(dir, "moved/CODEX.md"))).toBe("AGENTS.md");
+  expect(readFileSync(join(dir, "moved/AGENTS.md"), "utf8")).toBe("held\n");
 });
 
 test("deleting a link unlinks it and leaves what it pointed at alone", async () => {

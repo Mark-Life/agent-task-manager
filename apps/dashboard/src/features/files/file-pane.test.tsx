@@ -81,7 +81,7 @@ describe("FilePane", () => {
     });
 
     expect(markup).toContain("Instruction budget used");
-    expect(markup).toContain("half the budget");
+    expect(markup).toContain("across every level a run reads");
   });
 
   test("an ordinary document is not measured against it", () => {
@@ -122,6 +122,55 @@ describe("FilePane", () => {
 
     expect(markup).toContain("not text");
     expect(markup).not.toContain("<textarea");
+  });
+
+  /**
+   * Claude does not read `AGENTS.md` at all, so rules written into a folder
+   * holding only that name reach one provider. The offer is made where the
+   * rules were just written, and it says plainly that the folders this system
+   * seeds do the same job with an import line instead — both work, and neither
+   * is imposed.
+   */
+  test("rules with no second name are offered one, without being told to take it", () => {
+    const markup = markupFor({
+      content: {
+        bytes: 12,
+        content: "# rules\n",
+        encoding: "utf8",
+        path: "AGENTS.md",
+      },
+      listing: [
+        entryOf({ bytes: 12, ext: "md", name: "AGENTS.md", path: "AGENTS.md" }),
+      ],
+      path: "AGENTS.md",
+    });
+
+    expect(markup).toContain("Claude does not read AGENTS.md");
+    expect(markup).toContain("Link CLAUDE.md to this");
+    expect(markup).toContain("import line");
+  });
+
+  test("rules that already have their pair are offered nothing", () => {
+    const markup = markupFor({
+      content: {
+        bytes: 12,
+        content: "# rules\n",
+        encoding: "utf8",
+        path: "AGENTS.md",
+      },
+      listing: [
+        entryOf({ bytes: 12, ext: "md", name: "AGENTS.md", path: "AGENTS.md" }),
+        entryOf({
+          kind: "symlink",
+          name: "CLAUDE.md",
+          path: "CLAUDE.md",
+          target: "AGENTS.md",
+        }),
+      ],
+      path: "AGENTS.md",
+    });
+
+    expect(markup).not.toContain("Link CLAUDE.md to this");
   });
 
   test("a link is drawn as a link, with the file it really points at", () => {

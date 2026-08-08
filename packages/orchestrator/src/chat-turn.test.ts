@@ -10,7 +10,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunFileSystem } from "@effect/platform-bun";
@@ -54,6 +61,7 @@ const withThreadRun = <A>(use: (dirs: ThreadRunDirectories) => A) =>
           dataRoot,
           provider: "claude",
           runId,
+          skillsDir: null,
         }),
         (dirs) => ({ dirs, used: use(dirs) })
       )
@@ -81,6 +89,41 @@ describe("a manager turn's directories", () => {
     );
   });
 
+  /**
+   * The manager reads the board and writes the briefs, so a house skill written
+   * into its own folder is the one an operator most wants it to have. It reads
+   * no repository, so the composed directory is the only place its provider
+   * will find one.
+   */
+  test("composes the skills of the two levels a conversation can see", async () => {
+    const managerScope = join(globalArtifactsDirOf(dataRoot), "manager");
+    const skill = join(managerScope, ".agents/skills/writing-briefs");
+    mkdirSync(skill, { recursive: true });
+    writeFileSync(join(skill, "SKILL.md"), "# writing-briefs\n");
+
+    const exit = await withThreadRun((dirs) =>
+      readFileSync(
+        join(String(dirs.composedSkillsDir), "writing-briefs", "SKILL.md"),
+        "utf8"
+      )
+    );
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (!Exit.isSuccess(exit)) {
+      return;
+    }
+    expect(exit.value.used).toBe("# writing-briefs\n");
+  });
+
+  test("gives a conversation with no skills anywhere no mount to make", async () => {
+    const exit = await withThreadRun((dirs) => dirs.composedSkillsDir);
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.used).toBe(null);
+    }
+  });
+
   test("refuses a turn whose provider home does not exist, and does not create it", async () => {
     const absent = join(root, "never-logged-in");
     agentHomeDir = absent;
@@ -93,6 +136,7 @@ describe("a manager turn's directories", () => {
 
 describe("where a manager turn is told it stands", () => {
   const dirs: ThreadRunDirectories = {
+    composedSkillsDir: null,
     globalArtifactsDir: "/host/.data/artifacts/global",
     runDir: "/host/.data/runs/r1",
     workspaceDir: "/host/.data/workspaces/r1",

@@ -104,6 +104,27 @@ export {
   type ResolveCommitterOptions,
   resolveCommitter,
 } from "./committer";
+// The skills one run is handed, gathered from every level of its tree. Here
+// rather than in `./skills` because it is about a run's directories and not
+// about what a skill is: the layout is durable, and this is a copy that dies
+// with the run that read it.
+export {
+  COMPOSED_SKILLS_DIR_MODE,
+  COMPOSED_SKILLS_MAX_BYTES,
+  COMPOSED_SKILLS_SEGMENT,
+  type ComposedSkill,
+  type ComposedSkills,
+  composedSkillsDirOf,
+  composeSkills,
+  composeSkillsScoped,
+  releaseComposedSkills,
+  type ShadowedSkill,
+  SKILL_LEVELS,
+  type SkillCompositionInput,
+  type SkillLevel,
+  type SkillScope,
+  skillSearchDirsOf,
+} from "./composed-skills";
 export { dockerSandbox, dockerSandboxLayer } from "./docker";
 export {
   ENV_DIR_MODE,
@@ -212,6 +233,7 @@ export {
   sandboxLayerFor,
 } from "./mode";
 export {
+  AGENT_HOME_SKILLS_SEGMENT,
   CONTAINER_AGENT_HOME_DIR,
   CONTAINER_CACHE_DIR,
   CONTAINER_EVENT_LOG_DIR,

@@ -9,16 +9,20 @@ import {
   fileScopeOf,
   parseFileScopeAddress,
   parseScopePath,
+  parseScopeView,
+  type ScopeView,
 } from "@/routes/search";
 
 /**
- * Both halves of what is on screen, because both are things a person meant to
- * show somebody: the directory and the file inside it. Sending a link is how
- * one operator tells another which rule to change.
+ * Everything on screen, because every part of it is something a person meant to
+ * show somebody: the directory, the file inside it, and whether they are looking
+ * at the tree or at what is installed. Sending a link is how one operator tells
+ * another which rule to change.
  */
 export interface FilesSearch {
   readonly path?: ScopePath;
   readonly scope?: string;
+  readonly view?: ScopeView;
 }
 
 /**
@@ -29,6 +33,7 @@ export interface FilesSearch {
 const validateSearch = (search: Record<string, unknown>): FilesSearch => ({
   path: parseScopePath(search.path),
   scope: parseFileScopeAddress(search.scope),
+  view: parseScopeView(search.view),
 });
 
 /**
@@ -41,7 +46,7 @@ const validateSearch = (search: Record<string, unknown>): FilesSearch => ({
  * happened to share a name.
  */
 const FilesScreen = () => {
-  const { path, scope } = filesRoute.useSearch();
+  const { path, scope, view } = filesRoute.useSearch();
   const navigate = filesRoute.useNavigate();
 
   const openScope = useMemo(() => fileScopeOf(scope) ?? DEFAULT_SCOPE, [scope]);
@@ -70,12 +75,24 @@ const FilesScreen = () => {
     [navigate]
   );
 
+  const selectView = useCallback(
+    (next: ScopeView) => {
+      navigate({
+        search: (previous) => ({ ...previous, view: next }),
+        to: ".",
+      });
+    },
+    [navigate]
+  );
+
   return (
     <FileBrowser
       onSelectPath={selectPath}
       onSelectScope={selectScope}
+      onSelectView={selectView}
       path={path ?? null}
       scope={openScope}
+      view={view ?? "files"}
     />
   );
 };

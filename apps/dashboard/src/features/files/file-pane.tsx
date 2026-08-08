@@ -214,7 +214,12 @@ export const FilePane = ({ onSelect, path, scope }: FilePaneProps) => {
         <DirectoryPane path={path} scope={scope} />
       ) : null}
       {entry.kind === "file" ? (
-        <ScopeFileEditor key={path} path={path} scope={scope} />
+        <ScopeFileEditor
+          key={path}
+          onSelect={onSelect}
+          path={path}
+          scope={scope}
+        />
       ) : null}
     </div>
   );

@@ -480,6 +480,10 @@ const sandboxCheck = Effect.gen(function* () {
         projectId: CHECK_PROJECT_ID,
         provider: CHECK_PROVIDER,
         repo: null,
+        // No shared skills directory: what the check proves is the mount set
+        // and the confinement, and a composition is made from whatever the
+        // scopes hold either way.
+        skillsDir: null,
         taskId,
       });
       yield* Effect.logInfo(`dir   ${made.runDir}`);

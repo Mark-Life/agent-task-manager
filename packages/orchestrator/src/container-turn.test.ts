@@ -650,6 +650,7 @@ describe("the directory a turn starts in", () => {
   const sources = {
     agentHomeDir: "/host/agent-home",
     cacheDir: "/host/.data/caches",
+    composedSkillsDir: null,
     globalArtifactsDir: "/host/.data/artifacts/global",
     labels: {
       project: "Atlas",

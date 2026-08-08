@@ -22,6 +22,18 @@ export interface ScopeFileSave extends ScopeFileRef {
   readonly content: string;
 }
 
+/**
+ * A link and the file in the same scope it names.
+ *
+ * Two scope-relative paths and no link text: the server computes the text
+ * between them and there is no field to put an absolute one in. A scope is a
+ * bind mount, so a host path in a link would resolve on the screen that made it
+ * and dangle in every container that reads the tree.
+ */
+export interface ScopeLinkCreate extends ScopeFileRef {
+  readonly target: ScopePath;
+}
+
 /** A rename, inside one scope. Both ends are scope-relative because a move between scopes is a promotion, which copies and records who chose to. */
 export interface ScopeFileMove {
   readonly from: ScopePath;
@@ -71,8 +83,11 @@ export const scopeFileQuery = (ref: ScopeFileRef) =>
  * folder and fills another, and a delete takes a subtree — so the cheap,
  * correct answer is to drop the scope. A tree left holding a directory the
  * server no longer has is worse than a refetch nobody notices.
+ *
+ * Shared with the skills calls, which are writes of the same files under a
+ * different name and would otherwise carry a second spelling of this.
  */
-const refreshScope = (queryClient: QueryClient, scope: FileScope) =>
+export const refreshScope = (queryClient: QueryClient, scope: FileScope) =>
   queryClient.invalidateQueries({
     queryKey: keys.scope(fileScopeAddressOf(scope)),
   });
@@ -114,6 +129,33 @@ export const useCreateScopeDirectory = () => {
       })
     ),
     onSuccess: (_entry, ref) => refreshScope(queryClient, ref.scope),
+  });
+};
+
+/**
+ * Point one name at another file in the same scope.
+ *
+ * What it is for is one rule under two names: `AGENTS.md` holds the text and
+ * `CLAUDE.md` links to it, because Claude does not read the first name and Codex
+ * does not read the second. One file to edit, and no pair to keep in step by
+ * hand. The other use is the skills layout, where real files under
+ * `.agents/skills/<name>` are reached through a link at the path the other CLI
+ * scans.
+ *
+ * Refused when something is already at the path, when the target is not there,
+ * and when the target is itself a link — one hop, so a listing always says what
+ * a name ends up at.
+ */
+export const useCreateScopeLink = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    ...apiMutation((link: ScopeLinkCreate, client) =>
+      client.files.createLink({
+        params: { scope: link.scope },
+        payload: { path: link.path, target: link.target },
+      })
+    ),
+    onSuccess: (_entry, link) => refreshScope(queryClient, link.scope),
   });
 };
 

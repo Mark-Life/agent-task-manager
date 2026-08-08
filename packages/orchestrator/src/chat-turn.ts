@@ -19,6 +19,11 @@
  * empty home boots a container that reports an auth error nobody can tell from
  * an expired token.
  *
+ * It also gets the skills of the two levels it can see, composed into a
+ * directory of its own and mounted where a provider reads its personal skills.
+ * A conversation has no project and no task, so its composition is two levels
+ * where a worker's is four; it is the same function either way.
+ *
  * The scratch directory hangs under the manager's own branch of the tree rather
  * than beside it, which is what keeps project rules out of a chat turn for free:
  * both CLIs collect instruction files by walking up from the working directory,
@@ -32,6 +37,7 @@
  * is reading in decides how to show it.
  */
 
+import { join } from "node:path";
 import { ChatMessageRepo, withActor } from "@workspace/db";
 import type { RunId, SessionProvider } from "@workspace/domain";
 import { agentHomeLoginHint, runDirOf } from "@workspace/harness";
@@ -39,8 +45,10 @@ import type { RunPlacement } from "@workspace/prompts";
 import {
   CONTAINER_MANAGER_SCRATCH_DIR,
   CONTAINER_WORKSPACE_DIR,
+  composeSkillsScoped,
   ensureArtifactDir,
   eventLogDirOf,
+  MANAGER_SEGMENT,
   type MountPurpose,
   MountSourceMissing,
   managerMountsFor,
@@ -61,6 +69,13 @@ import {
 /** The host directories one manager turn is mounted over. */
 export interface ThreadRunDirectories {
   /**
+   * The skills gathered for this turn, or null when it was given none. A copy
+   * of the run's own, made from the workspace scope and the manager's own
+   * directory, because the provider that cannot walk the tree reads only this
+   * path — see `composeSkills`.
+   */
+  readonly composedSkillsDir: string | null;
+  /**
    * The global promoted folder, which is the host side of the workspace scope
    * and is read-write for this role. The manager's own rules live in a directory
    * inside it, so there is nothing further to mount for them.
@@ -79,6 +94,11 @@ export interface ThreadRunInput {
   readonly dataRoot: string;
   readonly provider: SessionProvider;
   readonly runId: RunId;
+  /**
+   * The skills directory the install shares with every run, or null when it
+   * names none. The broadest level of this turn's composition.
+   */
+  readonly skillsDir: string | null;
 }
 
 /**
@@ -191,7 +211,22 @@ export const materializeThreadRun = Effect.fn("Workspace.thread")(function* (
       )
   );
 
+  // Two levels, broadest first: the workspace scope every role reads, and the
+  // manager's own directory inside it. No project and no task, because a
+  // conversation is about neither — the same rule the mount set follows.
+  const composed = yield* composeSkillsScoped({
+    agentHomeDir: input.agentHomeDir,
+    dataRoot: input.dataRoot,
+    runId: input.runId,
+    scopes: [
+      { dir: globalArtifactsDir, level: "workspace" },
+      { dir: join(globalArtifactsDir, MANAGER_SEGMENT), level: "manager" },
+    ],
+    sharedSkillsDir: input.skillsDir,
+  });
+
   const dirs = {
+    composedSkillsDir: composed.dir,
     globalArtifactsDir,
     runDir,
     workspaceDir,
@@ -205,13 +240,14 @@ export const materializeThreadRun = Effect.fn("Workspace.thread")(function* (
   // instead of failing as an "invalid mount config", and so the manager path and
   // the worker path pre-create by the same rule.
   //
-  // Computed with no extras, exactly as a worker's materialization is: the one
-  // nested extra is the operator's skills directory inside the agent home, and
-  // that home is checked and never created.
+  // The skills destination is dropped and the extras are absent, exactly as in
+  // a worker's materialization: both nest inside the agent home, which is
+  // checked and never created, and the daemon makes that destination itself
+  // through a writable parent.
   yield* Effect.forEach(
     nestedMountPointsOf(
       managerMountsFor({ agentHomeDir: input.agentHomeDir, ...dirs })
-    ),
+    ).filter((point) => point.purpose !== "skills"),
     ensureDirectory,
     { discard: true }
   );

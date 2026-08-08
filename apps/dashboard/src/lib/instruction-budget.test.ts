@@ -12,8 +12,10 @@
 import { describe, expect, test } from "bun:test";
 import { INSTRUCTION_BUDGET_WARN_BYTES } from "@workspace/domain";
 import {
+  type BudgetFile,
   budgetPercentOf,
   budgetPressureOf,
+  budgetTallyOf,
   byteLengthOf,
   isInstructionFile,
 } from "@/lib/instruction-budget";
@@ -74,5 +76,64 @@ describe("budgetPercentOf", () => {
 
   test("half the budget reads as half", () => {
     expect(budgetPercentOf(INSTRUCTION_BUDGET_WARN_BYTES / 2)).toBe(50);
+  });
+});
+
+/** One file at one level, with only the fields a case is about spelled out. */
+const fileOf = (over: Partial<BudgetFile>): BudgetFile => ({
+  bytes: 0,
+  level: "Workspace",
+  name: "AGENTS.md",
+  open: false,
+  ...over,
+});
+
+describe("budgetTallyOf", () => {
+  /**
+   * The reason this function exists. A run spends one budget across every level
+   * of its tree, so two documents that each read "spare" on their own can be
+   * over it together — and the screen that measured them one at a time told
+   * nobody.
+   */
+  test("two files that each look spare are over the budget together", () => {
+    const each = INSTRUCTION_BUDGET_WARN_BYTES * 0.6;
+
+    expect(budgetPressureOf(each)).toBe("crowding");
+    expect(
+      budgetTallyOf([
+        fileOf({ bytes: each }),
+        fileOf({ bytes: each, level: "Task" }),
+      ]).pressure
+    ).toBe("over");
+  });
+
+  test("the deepest level is named as the one a truncation takes first", () => {
+    const tally = budgetTallyOf([
+      fileOf({ bytes: 100 }),
+      fileOf({ bytes: 200, level: "Project" }),
+      fileOf({ bytes: 300, level: "Task" }),
+    ]);
+
+    expect(tally.totalBytes).toBe(600);
+    expect(tally.droppedFirst).toBe("Task");
+  });
+
+  /**
+   * A pair at one level is one document under two names, not a deeper level —
+   * so there is nothing to name as "dropped first", and naming one anyway would
+   * tell somebody to shorten a file that is no more at risk than its twin.
+   */
+  test("a tree of one level names nothing as the first to go", () => {
+    const tally = budgetTallyOf([
+      fileOf({ bytes: 100 }),
+      fileOf({ bytes: 20, name: "CLAUDE.md" }),
+    ]);
+
+    expect(tally.droppedFirst).toBeNull();
+  });
+
+  test("an empty tree costs nothing", () => {
+    expect(budgetTallyOf([]).totalBytes).toBe(0);
+    expect(budgetTallyOf([]).droppedFirst).toBeNull();
   });
 });

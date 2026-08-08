@@ -88,6 +88,7 @@ const mountsForFixture = (input: Fixture) =>
   mountsFor({
     agentHomeDir: input.agentHomeDir,
     cacheDir: input.cacheDir,
+    composedSkillsDir: null,
     globalArtifactsDir: input.globalDir,
     labels: LABELS,
     projectArtifactsDir: null,

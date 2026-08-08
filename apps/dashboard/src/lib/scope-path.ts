@@ -108,6 +108,38 @@ export const resolveLinkTarget = (directory: string | null, target: string) => {
 };
 
 /**
+ * The text a link at one path would hold to reach another in the same scope.
+ *
+ * A preview, computed the way the server computes the real thing: the way from
+ * the link's own directory to the target, never either path as typed. A scope is
+ * a bind mount, so an absolute path in a link resolves for the person who made
+ * it and dangles inside every container that reads the tree — showing the text
+ * before the link is made is what lets a reader see it is relative rather than
+ * take it on trust.
+ *
+ * The server resolves the link's directory through any links above it first, so
+ * a scope with a linked folder in the middle of the path can land on a different
+ * text than this one. That case has no listing on this screen either; what is
+ * drawn afterwards is the entry the server answered with.
+ */
+export const linkTextOf = ({ from, to }: { from: string; to: string }) => {
+  const parent = from.split(SEPARATOR).slice(0, -1);
+  const target = to.split(SEPARATOR);
+  let shared = 0;
+  while (
+    shared < parent.length &&
+    shared < target.length &&
+    parent[shared] === target[shared]
+  ) {
+    shared += 1;
+  }
+  return [
+    ...parent.slice(shared).map(() => ".."),
+    ...target.slice(shared),
+  ].join(SEPARATOR);
+};
+
+/**
  * What each refusal means to the person typing the path.
  *
  * The same rule the proposals and the environment files are branded off, said

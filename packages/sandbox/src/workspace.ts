@@ -44,6 +44,7 @@ import { Effect, Layer } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { type ArtifactLocation, ensureArtifactDir } from "./artifacts";
 import { resolveCommitter } from "./committer";
+import { composeSkillsScoped, type SkillScope } from "./composed-skills";
 import { writeEnvFiles } from "./env-files";
 import { type CloneFailed, MountSourceMissing } from "./errors";
 import {
@@ -334,9 +335,32 @@ export const makeLocalWorkspace = Effect.fnUntraced(function* (
       releaseWorkspace
     );
 
+    // The scopes of the tree, broadest first, which is the order the
+    // composition resolves a repeated name in. Only the scopes this run really
+    // has: a task with no project contributes no project level, exactly as it
+    // mounts none.
+    const skillScopes: readonly SkillScope[] = [
+      { dir: globalArtifactsDir, level: "workspace" },
+      ...(projectArtifactsDir === null
+        ? []
+        : [{ dir: projectArtifactsDir, level: "project" as const }]),
+      { dir: taskArtifactsDir, level: "task" },
+    ];
+    // Scoped like the checkout, and for the same reason: it is derived from
+    // durable sources, so keeping it would be keeping a stale copy of
+    // something a person can already read where they wrote it.
+    const composed = yield* composeSkillsScoped({
+      agentHomeDir,
+      dataRoot,
+      runId: identity.runId,
+      scopes: skillScopes,
+      sharedSkillsDir: input.skillsDir,
+    }).pipe(Effect.provideService(FileSystem, fs));
+
     const sources = {
       agentHomeDir,
       cacheDir,
+      composedSkillsDir: composed.dir,
       globalArtifactsDir,
       labels,
       projectArtifactsDir,
@@ -352,17 +376,19 @@ export const makeLocalWorkspace = Effect.fnUntraced(function* (
     // that make a read-only parent workable. Read off the mount set rather than
     // listed here, so nothing has to be remembered when the tree changes shape.
     //
-    // The extras are deliberately absent from the set this is computed over.
-    // Their one nested path is the operator's skills directory inside the agent
-    // home, and that home is checked and never created: making a directory
-    // inside it is making part of it.
+    // The skills destination is dropped and the extras are absent, for one
+    // reason: both of those nest inside the agent home, and that home is
+    // checked and never created — making a directory inside it is making part
+    // of it. It is mounted read-write, so the daemon creates the destination.
     //
-    // What it leaves behind is an empty directory per level naming the level
+    // What this leaves behind is an empty directory per level naming the level
     // below — a `worker/` inside the global folder, a task directory inside a
     // project folder. They hold nothing, and `scanArtifacts` drops directories,
     // so no artifact row ever comes of them.
     yield* Effect.forEach(
-      nestedMountPointsOf(mountsFor(sources)),
+      nestedMountPointsOf(mountsFor(sources)).filter(
+        (point) => point.purpose !== "skills"
+      ),
       ensureMountSource,
       { discard: true }
     );

@@ -7,9 +7,14 @@
  * confirmed over HTTP, and a run's own writes — which is to say there was no way
  * to fix a typo in the house rules without a deploy.
  *
+ * Two views of one directory. The tree is what the directory *is*; the skills
+ * view is the same files under two known paths, with where they came from
+ * recorded — and installing one is still writing files, which is why it lives
+ * behind the same scope picker rather than on a screen of its own.
+ *
  * **There is no terminal here, and there will not be one.** A shell on this page
  * runs as the loop process, which holds the GitHub token, the database
- * credentials and the agent-home logins. Six file operations are what a person
+ * credentials and the agent-home logins. Seven file operations are what a person
  * needs to keep a tree in order, and they are all this screen offers. If one is
  * ever wanted, the safe shape is a throwaway container with only the target
  * scope mounted, and it is an escape hatch rather than something that lives on a
@@ -29,12 +34,14 @@ import {
   SelectValue,
 } from "@workspace/ui/components/select";
 import { SidebarTrigger } from "@workspace/ui/components/sidebar";
+import { Tabs, TabsList, TabsTrigger } from "@workspace/ui/components/tabs";
 import { cn } from "@workspace/ui/lib/utils";
 import { useCallback, useMemo } from "react";
 import { projectsQuery } from "@/api/projects";
 import { tasksQuery } from "@/api/tasks";
 import { FilePane } from "@/features/files/file-pane";
 import { NewEntry } from "@/features/files/new-entry";
+import { NewLink } from "@/features/files/new-link";
 import {
   SCOPE_NOTES,
   scopeGroupsOf,
@@ -42,18 +49,29 @@ import {
 } from "@/features/files/scopes";
 import { directoryOf, useScopeEntry } from "@/features/files/selection";
 import { ScopeTree } from "@/features/files/tree";
+import { SkillsPanel } from "@/features/skills/skills-panel";
+import { SCOPE_VIEWS, type ScopeView } from "@/routes/search";
+
+/** What each view is called on its tab. */
+const VIEW_LABELS: Record<ScopeView, string> = {
+  files: "Files",
+  skills: "Skills",
+};
 
 interface BrowserProps {
   readonly onSelectPath: (path: ScopePath | null) => void;
   readonly onSelectScope: (address: string) => void;
+  readonly onSelectView: (view: ScopeView) => void;
   readonly path: ScopePath | null;
   readonly scope: FileScope;
+  readonly view: ScopeView;
 }
 
 /**
- * The tree on one side and the file on the other.
+ * One directory: the tree on one side and the file on the other, or what that
+ * directory has installed.
  *
- * Both halves are facts about the URL, so a link opens the same file in the
+ * Every part of it is a fact about the URL, so a link opens the same file in the
  * same scope for whoever receives it — which is the whole point of putting the
  * rules on a screen: the way to tell somebody what to change is to send them
  * the file.
@@ -65,8 +83,10 @@ interface BrowserProps {
 export const FileBrowser = ({
   onSelectPath,
   onSelectScope,
+  onSelectView,
   path,
   scope,
+  view,
 }: BrowserProps) => {
   const projects = useQuery(projectsQuery());
   const tasks = useQuery(tasksQuery());
@@ -93,6 +113,18 @@ export const FileBrowser = ({
       }
     },
     [onSelectScope]
+  );
+
+  // The tab strip hands back whatever string was clicked, and only two of them
+  // are views. Anything else is dropped rather than pushed into the URL.
+  const chooseView = useCallback(
+    (next: unknown) => {
+      const chosen = SCOPE_VIEWS.find((known) => known === next);
+      if (chosen !== undefined) {
+        onSelectView(chosen);
+      }
+    },
+    [onSelectView]
   );
 
   // New things land where the reader is: inside the selected folder, or beside
@@ -130,56 +162,85 @@ export const FileBrowser = ({
           </SelectContent>
         </Select>
 
-        <div className="flex items-center gap-2">
-          <NewEntry
-            directory={directory}
-            kind="file"
-            onCreated={onSelectPath}
-            scope={scope}
-          />
-          <NewEntry
-            directory={directory}
-            kind="directory"
-            onCreated={onSelectPath}
-            scope={scope}
-          />
-        </div>
+        <Tabs onValueChange={chooseView} value={view}>
+          <TabsList variant="line">
+            {SCOPE_VIEWS.map((name) => (
+              <TabsTrigger key={name} value={name}>
+                {VIEW_LABELS[name]}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
 
+        {view === "files" ? (
+          <div className="flex items-center gap-2">
+            <NewEntry
+              directory={directory}
+              kind="file"
+              onCreated={onSelectPath}
+              scope={scope}
+            />
+            <NewEntry
+              directory={directory}
+              kind="directory"
+              onCreated={onSelectPath}
+              scope={scope}
+            />
+            <NewLink
+              directory={directory}
+              onCreated={onSelectPath}
+              scope={scope}
+            />
+          </div>
+        ) : null}
+
+        {/*
+          Who reads this directory, said where the directory is chosen. The
+          picker is the only place that choice is made, and a rule filed one
+          level too high reaches every run of every project. The skills view
+          says the same thing in its own words, against what it installs.
+        */}
         <p className="w-full text-muted-foreground text-xs">
           {SCOPE_NOTES[scope.scope]}
         </p>
       </header>
 
-      <div className="flex min-h-0 min-w-0 flex-1">
-        <nav
-          aria-label="Files in this scope"
-          className={cn(
-            "min-h-0 w-full shrink-0 overflow-y-auto border-border p-2 md:w-72 md:border-r",
-            path === null ? null : "max-md:hidden"
-          )}
-        >
-          {/*
-            Keyed by the scope: which folders are open are paths inside one
-            directory, and carrying them across a change of scope would open
-            whatever happened to share a name.
-          */}
-          <ScopeTree
-            key={address}
-            onSelect={onSelectPath}
-            scope={scope}
-            selected={path}
-          />
-        </nav>
+      {view === "skills" ? (
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+          <SkillsPanel scope={scope} />
+        </div>
+      ) : (
+        <div className="flex min-h-0 min-w-0 flex-1">
+          <nav
+            aria-label="Files in this scope"
+            className={cn(
+              "min-h-0 w-full shrink-0 overflow-y-auto border-border p-2 md:w-72 md:border-r",
+              path === null ? null : "max-md:hidden"
+            )}
+          >
+            {/*
+              Keyed by the scope: which folders are open are paths inside one
+              directory, and carrying them across a change of scope would open
+              whatever happened to share a name.
+            */}
+            <ScopeTree
+              key={address}
+              onSelect={onSelectPath}
+              scope={scope}
+              selected={path}
+            />
+          </nav>
 
-        <section
-          className={cn(
-            "flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto",
-            path === null ? "max-md:hidden" : null
-          )}
-        >
-          <FilePane onSelect={onSelectPath} path={path} scope={scope} />
-        </section>
-      </div>
+          <section
+            className={cn(
+              "flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto",
+              path === null ? "max-md:hidden" : null
+            )}
+          >
+            <FilePane onSelect={onSelectPath} path={path} scope={scope} />
+          </section>
+        </div>
+      )}
     </div>
   );
 };

@@ -332,6 +332,16 @@ export interface MaterializeInput {
   /** Null for a task with no repo — a scratch directory, and the same machinery otherwise. */
   readonly repo: RepoSource | null;
   /**
+   * The skills directory the install shares with every run, or null when it
+   * names none.
+   *
+   * The broadest source of the skills this run is composed, and the only one
+   * that is not a scope of its own tree — it is one directory for the whole
+   * host, read from the loop's settings, like the entrypoint bundle. What comes
+   * out is a directory of the run's own; see `./composed-skills`.
+   */
+  readonly skillsDir: string | null;
+  /**
    * Whose artifacts folder the checkout is materialized against. Carried here
    * rather than read off {@link RunIdentity} because materializing a checkout
    * is task work: the identity is now nullable for turns that are about no

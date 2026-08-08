@@ -49,6 +49,7 @@ const dir = (name: string) => {
 const sourcesOf = (): MountSources => ({
   agentHomeDir: dir("agent-home"),
   cacheDir: dir("cache"),
+  composedSkillsDir: null,
   globalArtifactsDir: dir("global"),
   labels: { project: "Atlas", repo: "owner/atlas", task: "Ship the thing" },
   projectArtifactsDir: dir("project"),
@@ -94,6 +95,7 @@ describe("the levels a run's tree is counted over", () => {
     const dirs = instructionDirsOf(
       managerMountsFor({
         agentHomeDir: sources.agentHomeDir,
+        composedSkillsDir: null,
         globalArtifactsDir: sources.globalArtifactsDir,
         runDir: sources.runDir,
         workspaceDir: sources.workspaceDir,

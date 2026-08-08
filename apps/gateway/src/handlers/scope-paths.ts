@@ -2,9 +2,9 @@
  * Where a path a person typed becomes a path something opens, and the only
  * place in the gateway that decides whether it may.
  *
- * Its own module because the answer is one answer. Six operations join a
- * caller's path to a scope's directory, and six copies of a containment check
- * is five chances for one of them to be subtly weaker than the others — so the
+ * Its own module because the answer is one answer. Seven operations join a
+ * caller's path to a scope's directory, and seven copies of a containment check
+ * is six chances for one of them to be subtly weaker than the others — so the
  * routes in `./files` decide policy, and every question about where a path
  * actually lands is asked here.
  *
@@ -369,7 +369,16 @@ export const entryOf = Effect.fnUntraced(function* (input: {
   } satisfies FileEntry;
 });
 
-/** Creates the directories above a path, then proves the parent is still inside the scope. */
+/**
+ * Creates the directories above a path, proves the parent is still inside the
+ * scope, and answers with where that parent really is.
+ *
+ * The real path is the answer rather than the string, because a relative
+ * symbolic link is resolved by the kernel against the directory the link
+ * physically sits in. Computing one against the typed parent instead would
+ * write a link that resolves correctly only while no directory above it is
+ * itself a link.
+ */
 export const makeParent = Effect.fnUntraced(function* (input: {
   readonly absolute: string;
   readonly root: string;
@@ -398,4 +407,5 @@ export const makeParent = Effect.fnUntraced(function* (input: {
       escaped("the path resolves into the scope's git directory")
     );
   }
+  return real;
 });

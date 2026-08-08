@@ -93,26 +93,26 @@ exposed from the untrusted side.
 Sandbox writable roots, the turn-diff root and worktree hook redirection all hardcode `.git` and are
 unaffected.
 
-## D6 — skills: the layout lands, Claude's delivery does not
+## D6 — skills: the layout lands, and Claude is handed a composed copy
 
 Real files at `<scope>/.agents/skills/<name>/`, a **relative** symlink at
 `<scope>/.claude/skills/<name>` pointing at `../../.agents/skills/<name>`. Codex reads the real path,
 Claude reads the link, one thing to edit.
 
-**Claude will not see them, and the plan was wrong about this.** Claude's project-skill scan runs from
-the working directory up to *the repository root* and stops. The working directory is the clone, so
-every scope directory sits above the stop. Verified live, not read off a page: a skill one level above
-a `git init` did not load while four inside it did.
+**Claude cannot walk the tree, and the plan was wrong about this.** Claude's project-skill scan runs
+from the working directory up to *the repository root* and stops. The working directory is the clone,
+so every scope directory sits above the stop. Verified live, not read off a page: a skill one level
+above a `git init` did not load while four inside it did.
 
 Claude's CLAUDE.md walk has no such stop — it reaches the filesystem root, past the repo and past
 `$HOME` — so instruction files at every level work on both providers. Skills are the asymmetry.
 
-So Claude keeps getting the operator's personal skills at `/agent-home/skills`, exactly as today.
-Per-scope skills reach Codex only. Closing that gap means composing a per-run skills directory, which
-is its own piece of work and is not in this build.
-
-Claude does follow symlinked skill directories and deduplicates by target, so the layout is right for
-the day the composition exists.
+**Corrected in this build.** The walk happens on the host instead. Materialization composes one
+directory per run out of the agent home's own `skills`, the install's shared directory and each
+scope's two spellings, and mounts it read-only at `/agent-home/skills` — the one path Claude's
+personal scan reads whatever its working directory is. Broadest first, so a name defined twice
+resolves to the narrowest level, and the operator's own skills are a source rather than something the
+mount hides. Nothing about the on-disk layout moved.
 
 ## D7 — nothing on the host moves, and there is no migration
 
@@ -179,8 +179,8 @@ bytes somebody can still read, which a content hash would not.
 
 - Vault sync, and secrets in the vault. Untouched by this build, by the card's own scope.
 - Where the vault sits relative to `.atm-root`. It is a hole in the tree the later card fills.
-- Composing a per-run skills directory so Claude sees scope-level skills (D6).
-- The skill routes have no dashboard surface yet — they ship reachable by an HTTP client only.
-- The editor's size warning measures one file. A run walks four, against one combined budget, so two
-  files at 40% each read "spare" while together they crowd out the task's rules.
+- The composed skills directory sits under the run directory, which is also bound read-write at
+  `/run`. A run can edit its own copy there; the mount every later run reads is composed fresh.
+- A skill whose only spelling is a link under a *different* name is composed twice, once per name.
+  Deduplication is by name, and the copies are separate directories.
 - A person's commit is authored as their user id rather than a name and mailbox.

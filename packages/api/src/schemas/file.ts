@@ -148,6 +148,36 @@ export interface FileDirectoryCreate
   extends Schema.Schema.Type<typeof FileDirectoryCreate> {}
 
 /**
+ * A symbolic link to create, and the file or directory in the same scope it
+ * names.
+ *
+ * Both ends are scope-relative, and what lands on disk is the relative path
+ * from the link's own directory to {@link target} — never either string as
+ * given, and never a host path. A scope is a bind mount, so a link holding
+ * `/var/lib/atm/artifacts/global/AGENTS.md` resolves for the person who made it
+ * and dangles for every run that reads the tree, which is the failure this
+ * shape exists to make unrepresentable: a caller cannot express an absolute
+ * link at all.
+ *
+ * The case it is for is one rule under two names. `AGENTS.md` holds the text
+ * and `CLAUDE.md` links to it, because Claude does not read the first and Codex
+ * does not read the second — one file to edit, and no pair to keep in step by
+ * hand.
+ */
+export const FileLinkCreate = Schema.Struct({
+  /** Where the link goes. Nothing may be there already, link or not. */
+  path: ScopePath,
+  /**
+   * What it points at: a path in the same scope that exists and is not itself a
+   * link. One hop, so what a name resolves to is readable from one listing.
+   */
+  target: ScopePath,
+}).annotate({ identifier: "FileLinkCreate" });
+
+export interface FileLinkCreate
+  extends Schema.Schema.Type<typeof FileLinkCreate> {}
+
+/**
  * A rename, within one scope.
  *
  * Both ends are scope-relative because a move between scopes is a different

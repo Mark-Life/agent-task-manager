@@ -11,6 +11,7 @@ import { describe, expect, test } from "bun:test";
 import type { Project, Task } from "@workspace/api";
 import { DateTime } from "effect";
 import {
+  instructionChainOf,
   scopeGroupsOf,
   scopeKeepsHistory,
   scopeLabelOf,
@@ -95,5 +96,59 @@ describe("scopeKeepsHistory", () => {
       true
     );
     expect(scopeKeepsHistory({ scope: "task", taskId: task.id })).toBe(false);
+  });
+});
+
+/**
+ * The list a combined instruction budget is added up over.
+ *
+ * A level left out reads as budget that is free, and free is the reading that
+ * ends with a task's own brief being dropped in silence. So the chain has to be
+ * every directory a run really walks, and no more: a manager turn never enters a
+ * project folder, and a worker never enters the manager's.
+ */
+describe("instructionChainOf", () => {
+  const onProject = {
+    ...task,
+    projectId: project.id,
+  } as unknown as Task;
+
+  test("house rules stand alone at the top of every tree", () => {
+    expect(
+      instructionChainOf({ scope: { scope: "workspace" }, tasks: [] })
+    ).toEqual([{ scope: "workspace" }]);
+  });
+
+  test("a manager turn walks the house rules and its own folder, and no project", () => {
+    expect(
+      instructionChainOf({ scope: { scope: "manager" }, tasks: [] })
+    ).toEqual([{ scope: "workspace" }, { scope: "manager" }]);
+  });
+
+  test("a task's folder is read under the project it belongs to", () => {
+    expect(
+      instructionChainOf({
+        scope: { scope: "task", taskId: onProject.id },
+        tasks: [onProject],
+      })
+    ).toEqual([
+      { scope: "workspace" },
+      { projectId: project.id, scope: "project" },
+      { scope: "task", taskId: onProject.id },
+    ]);
+  });
+
+  /**
+   * A task with no project gets a shallower tree on the host too, so this is
+   * the honest answer rather than a level short. The same shape covers a task
+   * whose row has not arrived yet — the panel says the total is incomplete.
+   */
+  test("a task on no project sits directly under the house rules", () => {
+    expect(
+      instructionChainOf({
+        scope: { scope: "task", taskId: task.id },
+        tasks: [task],
+      })
+    ).toEqual([{ scope: "workspace" }, { scope: "task", taskId: task.id }]);
   });
 });

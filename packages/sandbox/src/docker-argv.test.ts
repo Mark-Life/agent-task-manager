@@ -63,6 +63,7 @@ const spec: SandboxSpec = {
   mounts: mountsFor({
     agentHomeDir: "/home/op/.claude-task-management",
     cacheDir: "/data/caches",
+    composedSkillsDir: null,
     globalArtifactsDir: "/data/artifacts/global",
     labels,
     projectArtifactsDir: "/data/artifacts/projects/p1",

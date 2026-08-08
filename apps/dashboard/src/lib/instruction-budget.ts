@@ -1,6 +1,10 @@
 /**
- * How close an instruction file is to the size at which a run stops being given
- * all of it.
+ * How close a run's instruction files are to the size at which it stops being
+ * given all of them.
+ *
+ * The whole tree, not one file of it. A budget drawn per file is worse than
+ * none: two documents at 40% each both read "spare" while together they push the
+ * deepest one out.
  *
  * Codex collects every `AGENTS.md` from the top of the tree down to the working
  * directory and spends one combined budget, root first. Past the budget the
@@ -83,10 +87,70 @@ export const budgetPressureOf = (bytes: number): BudgetPressure => {
  *
  * "Crowding" tells a reader nothing; "the levels below this one have half the
  * budget left" tells them what their next edit costs somebody else.
+ *
+ * One file at a time. Use {@link TALLY_SENTENCES} wherever the whole tree can be
+ * added up, which is the honest reading — see {@link budgetTallyOf}.
  */
 export const BUDGET_SENTENCES: Record<BudgetPressure, string> = {
   crowding:
     "This one file has taken half the budget a whole run's instruction files share. The levels below it — a project's rules, a task's — are what gets dropped first.",
   over: "This file alone is over the budget a run's instruction files share, and a default Codex truncates from the deepest file up. Shorten it, or the task's own rules never arrive.",
   spare: "Well inside the budget a run's instruction files share.",
+};
+
+/** The same three readings, for the whole tree rather than for one file of it. */
+export const TALLY_SENTENCES: Record<BudgetPressure, string> = {
+  crowding:
+    "Half the budget spent. What is left has to cover every level below this one.",
+  over: "Over the budget. A default Codex spends it from the top down and drops the rest, so the deepest file in this list is the one that never arrives.",
+  spare: "Room left for the levels below.",
+};
+
+/**
+ * One instruction file a run is handed, and which level of the tree it sits at.
+ *
+ * `level` rather than a scope address, because what decides whether a file
+ * survives is its depth: the budget is spent from the top of the tree down, so
+ * the last row of a tally is the first thing dropped.
+ */
+export interface BudgetFile {
+  readonly bytes: number;
+  /** What the level is called on screen — "Workspace", "Project", "Task". */
+  readonly level: string;
+  /** The file, named as the person editing it would name it. */
+  readonly name: string;
+  /** True for the file in the editor, whose size is the draft rather than the disk. */
+  readonly open: boolean;
+}
+
+/**
+ * What a run's whole instruction tree comes to, which is the only number worth
+ * drawing.
+ *
+ * One file's size against the budget is the reading this screen used to show,
+ * and it misleads exactly the person it is for: a run walks every level of its
+ * tree against **one** combined budget, so two files at 40% each both read
+ * "spare" while together they crowd out the task's own rules. Everything here is
+ * arithmetic over listings the tree has already fetched.
+ *
+ * Files arrive shallowest first and stay in that order, because that is the
+ * order the budget is spent in and the order the answer has to be read in.
+ */
+export const budgetTallyOf = (files: readonly BudgetFile[]) => {
+  const totalBytes = files.reduce((sum, file) => sum + file.bytes, 0);
+  const deepest = files.at(-1)?.level ?? null;
+  return {
+    /**
+     * The level a truncation takes first, and null when every file in the tally
+     * is at one level — there is nothing to name as "first" when the whole tree
+     * is one directory.
+     */
+    droppedFirst:
+      deepest !== null && files.some((file) => file.level !== deepest)
+        ? deepest
+        : null,
+    files,
+    pressure: budgetPressureOf(totalBytes),
+    totalBytes,
+  };
 };

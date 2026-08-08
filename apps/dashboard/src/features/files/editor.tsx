@@ -6,28 +6,18 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useQuery } from "@tanstack/react-query";
 import { MAX_FILE_BYTES } from "@workspace/api";
-import {
-  type FileScope,
-  INSTRUCTION_BUDGET_WARN_BYTES,
-  type ScopePath,
-} from "@workspace/domain";
+import type { FileScope, ScopePath } from "@workspace/domain";
 import { Button } from "@workspace/ui/components/button";
 import { CodeBlock, Markdown } from "@workspace/ui/components/markdown";
-import { Progress } from "@workspace/ui/components/progress";
 import { Textarea } from "@workspace/ui/components/textarea";
-import { cn } from "@workspace/ui/lib/utils";
 import { type ChangeEvent, useCallback, useState } from "react";
 import { scopeFileQuery, useWriteScopeFile } from "@/api/files";
 import { Failed, failureSentence, Pending } from "@/components/query-state";
+import { InstructionBudget } from "@/features/files/budget";
+import { InstructionPairOffer } from "@/features/files/instruction-pair";
 import { scopeKeepsHistory } from "@/features/files/scopes";
 import { formatBytes } from "@/lib/format";
-import {
-  BUDGET_SENTENCES,
-  budgetPercentOf,
-  budgetPressureOf,
-  byteLengthOf,
-  isInstructionFile,
-} from "@/lib/instruction-budget";
+import { byteLengthOf, isInstructionFile } from "@/lib/instruction-budget";
 import { nameOf } from "@/lib/scope-path";
 
 /** Names a document rather than code, and is drawn as one. */
@@ -38,47 +28,6 @@ const extOf = (path: string) => {
   const name = nameOf(path);
   const dot = name.lastIndexOf(".");
   return dot <= 0 ? null : name.slice(dot + 1).toLowerCase();
-};
-
-/** The tone the budget reading is drawn in, which is the only thing that changes with it. */
-const PRESSURE_TONES = {
-  crowding: "[&_[data-slot=progress-indicator]]:bg-amber-500",
-  over: "[&_[data-slot=progress-indicator]]:bg-destructive",
-  spare: null,
-} as const;
-
-interface BudgetProps {
-  readonly bytes: number;
-}
-
-/**
- * How much of a run's instruction budget this one file has taken.
- *
- * Drawn live against the draft while somebody types, because the number only
- * helps before the save. Codex spends one budget across every instruction file
- * from the top of the tree down and drops what does not fit — so the file that
- * goes first is the deepest and most specific one, the task's own brief, and
- * nothing tells the person who caused it. This bar is the only warning there
- * is.
- */
-const InstructionBudget = ({ bytes }: BudgetProps) => {
-  const pressure = budgetPressureOf(bytes);
-
-  return (
-    <div className="flex flex-col gap-1 border-border border-b px-3 py-2">
-      <Progress
-        aria-label="Instruction budget used"
-        className={cn("gap-1", PRESSURE_TONES[pressure])}
-        value={budgetPercentOf(bytes)}
-      />
-      <p className="text-muted-foreground text-xs">
-        <span className="tabular-nums">
-          {formatBytes(bytes)} of {formatBytes(INSTRUCTION_BUDGET_WARN_BYTES)}
-        </span>{" "}
-        — {BUDGET_SENTENCES[pressure]}
-      </p>
-    </div>
-  );
 };
 
 interface SourceProps {
@@ -130,6 +79,8 @@ const editorHint = (input: {
 };
 
 interface EditorProps {
+  /** Where the selection goes when an action here creates a second file. */
+  readonly onSelect: (path: ScopePath) => void;
   readonly path: ScopePath;
   readonly scope: FileScope;
 }
@@ -147,7 +98,7 @@ interface EditorProps {
  * failure that prevents is silent and total: a PNG read as text and saved back
  * is a destroyed file, with no error raised at either end.
  */
-export const ScopeFileEditor = ({ path, scope }: EditorProps) => {
+export const ScopeFileEditor = ({ onSelect, path, scope }: EditorProps) => {
   const file = useQuery(scopeFileQuery({ path, scope }));
   const write = useWriteScopeFile();
   const { mutate, reset } = write;
@@ -247,7 +198,10 @@ export const ScopeFileEditor = ({ path, scope }: EditorProps) => {
         </div>
       </div>
 
-      {isInstructionFile(path) ? <InstructionBudget bytes={bytes} /> : null}
+      {isInstructionFile(path) ? (
+        <InstructionBudget draftBytes={bytes} path={path} scope={scope} />
+      ) : null}
+      <InstructionPairOffer onCreated={onSelect} path={path} scope={scope} />
 
       {tooLarge ? (
         <p className="shrink-0 border-border border-b px-3 py-1.5 text-destructive text-xs">

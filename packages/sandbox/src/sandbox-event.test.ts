@@ -115,6 +115,7 @@ const WORKSPACE_ID = WorkspaceId.make("ws-1");
 const MOUNTS = mountsFor({
   agentHomeDir: "/home/op/.claude-task-management",
   cacheDir: "/data/caches",
+  composedSkillsDir: null,
   globalArtifactsDir: "/data/artifacts/global",
   labels: { project: "Atlas", repo: "mark-life/atlas", task: "Ship it" },
   projectArtifactsDir: "/data/artifacts/project-1",

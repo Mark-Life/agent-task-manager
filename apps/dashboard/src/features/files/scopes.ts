@@ -40,8 +40,81 @@ export const SCOPE_NOTES: Record<FileScopeKind, string> = {
     "House rules, read by every run of both roles. A worker has this read-only; the manager can write it.",
 };
 
+/**
+ * Who is handed a skill installed at each level, said as the people and the runs
+ * rather than as a directory.
+ *
+ * Read where the scope is chosen, because choosing the scope *is* choosing the
+ * audience and nothing else on the screen says so. A skill dropped into the
+ * workspace folder because it was the folder that happened to be open reaches
+ * every run of every project, which is not a thing anybody would do on purpose.
+ */
+export const SCOPE_AUDIENCE: Record<FileScopeKind, string> = {
+  manager:
+    "Installed here, a skill reaches the chat role only — a worker run is never in this directory.",
+  project:
+    "Installed here, a skill reaches every worker on this project, on every task in it.",
+  task: "Installed here, a skill reaches this task's runs and nothing else.",
+  workspace:
+    "Installed here, a skill reaches every agent in this workspace: both roles, every project.",
+};
+
+/**
+ * Which provider actually loads a skill from these directories, and how.
+ *
+ * Two different mechanisms, and the difference is worth a sentence: Codex reads
+ * `.agents/skills` at every level of a run's tree directly, while Claude only
+ * scans one directory whatever its working directory is — so each run is handed
+ * a composed copy at that path instead. A person installing a skill should know
+ * which of those they are relying on.
+ */
+export const SKILL_REACH =
+  "Codex runs read these directly, at every level of the tree. Claude scans one directory whatever its working directory is, so each run is given a copy of these composed into it — a skill named at two levels resolves to the narrower one.";
+
 /** Whether edits to a scope are kept anywhere but the file itself. */
 export const scopeKeepsHistory = (scope: FileScope) => scope.scope !== "task";
+
+/** What each level is called in a tally that reads as the tree. */
+export const SCOPE_LEVELS: Record<FileScopeKind, string> = {
+  manager: "Manager",
+  project: "Project",
+  task: "Task",
+  workspace: "Workspace",
+};
+
+/**
+ * The scopes one run walks for its instructions, shallowest first.
+ *
+ * This is the list a combined budget is added up over. A run reads instruction
+ * files from the top of its tree down to its working directory, so which
+ * directories those are depends on the role and on what the task belongs to: a
+ * manager turn walks the workspace and its own folder, a worker on a task walks
+ * the workspace, that task's project if it has one, and the task.
+ *
+ * Derived from the tasks already in the cache rather than fetched. A task whose
+ * row has not arrived resolves to the pair that is certain — a tally missing a
+ * project reads low, and reading low is the failure this whole measurement
+ * exists to prevent, so the caller is told the list is short by its length.
+ */
+export const instructionChainOf = ({
+  scope,
+  tasks,
+}: {
+  readonly scope: FileScope;
+  readonly tasks: readonly Task[];
+}): readonly FileScope[] => {
+  const workspace: FileScope = { scope: "workspace" };
+  if (scope.scope === "workspace") {
+    return [workspace];
+  }
+  if (scope.scope === "task") {
+    const projectId = tasks.find((task) => task.id === scope.taskId)?.projectId;
+    return projectId === undefined || projectId === null
+      ? [workspace, scope]
+      : [workspace, { projectId, scope: "project" }, scope];
+  }
+  return [workspace, scope];
+};
 
 /** One directory, named and addressed. */
 export interface ScopeOption {

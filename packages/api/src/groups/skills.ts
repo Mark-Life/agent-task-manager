@@ -13,12 +13,14 @@
  *
  * **Where they are read, and by which provider.** Codex collects
  * `.agents/skills` from every level of a run's tree, so a skill installed here
- * reaches a Codex run. Claude does not: its scan for project skills runs from
- * the working directory up to the repository root and stops, and the working
- * directory is the checkout, so every scope directory sits above that stop.
- * Claude keeps reading the operator's personal skills at `/agent-home/skills`
- * instead. A dashboard must say so rather than imply a skill installed here
- * changes what a Claude run can do.
+ * reaches a Codex run directly. Claude cannot walk the tree: its scan for
+ * project skills runs from the working directory up to the repository root and
+ * stops, and the working directory is the checkout, so every scope directory
+ * sits above that stop. So the tree is walked on the host instead, and each run
+ * is given the result as its own copy at `/agent-home/skills` — the one path
+ * Claude's personal scan reads whatever its working directory is. A name
+ * defined at two levels resolves to the narrower one, and the operator's own
+ * skills are the broadest level rather than being replaced.
  *
  * **Admin, like the file routes, and for the same two reasons.** A worker run
  * may not install or update a skill: that is one run editing what every later
@@ -164,5 +166,5 @@ export class SkillsGroup extends HttpApiGroup.make("skills")
   .add(list, install, checkUpdate, applyUpdate, uninstall)
   .annotate(
     OpenApi.Description,
-    "Skills installed into a directory of the agent filesystem. Codex reads them from every level of a run's tree; Claude reads the operator's personal skills instead."
+    "Skills installed into a directory of the agent filesystem. Codex reads them from every level of a run's tree; Claude is given a copy composed into each run, with a name defined at two levels resolving to the narrower one."
   ) {}

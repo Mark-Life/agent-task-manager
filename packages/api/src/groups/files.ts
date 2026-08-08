@@ -1,5 +1,5 @@
 /**
- * The agent filesystem, as six operations over one addressable directory.
+ * The agent filesystem, as seven operations over one addressable directory.
  *
  * A run is handed a nested tree of directories and reads its instructions by
  * walking up it. Those directories are ordinary folders on the host, and until
@@ -38,8 +38,8 @@
  *
  * **There is no terminal here, and there will not be one.** A shell in the
  * dashboard runs as the loop process, which holds the GitHub token, the database
- * credentials and the agent-home logins. These six operations are what a person
- * needs to keep a tree in order, and they are all a person gets.
+ * credentials and the agent-home logins. These seven operations are what a
+ * person needs to keep a tree in order, and they are all a person gets.
  */
 
 import { FileScopeAddress, ScopePath } from "@workspace/domain";
@@ -54,6 +54,7 @@ import {
   FileContent,
   FileDirectoryCreate,
   FileEntry,
+  FileLinkCreate,
   FileMove,
   FileWrite,
 } from "../schemas/file";
@@ -153,6 +154,36 @@ const createDirectory = HttpApiEndpoint.post(
   .annotate(OpenApi.Summary, "Create a directory in a scope");
 
 /**
+ * Points one name at another file in the same scope, with a relative symbolic
+ * link, and commits it.
+ *
+ * Its own route rather than a flavour of `write`, because what is being created
+ * is not bytes: a caller gives two scope-relative paths and the server computes
+ * the link text from the first's directory to the second. There is no way to
+ * ask for an absolute link, which is the point — a scope is a bind mount, so a
+ * host path in a link resolves for the person who typed it and dangles inside
+ * every container that reads the tree.
+ *
+ * What it is for: `AGENTS.md` holds a rule and `CLAUDE.md` links to it, since
+ * Claude does not read the first name and Codex does not read the second. One
+ * file, two names, and nothing to keep in step by hand.
+ *
+ * The target has to exist and must not itself be a link. Both refusals are
+ * about what a person can see: a dangling link is a rule that silently reaches
+ * nothing, and a chain of links is a tree whose listing no longer says what a
+ * name resolves to. A target that does not exist yet would also be a way past
+ * containment, since the check would have nothing on disk to resolve.
+ */
+const createLink = HttpApiEndpoint.post("createLink", "/files/:scope/link", {
+  error: [Forbidden, InvalidInput, NotFound],
+  params: scopeParams,
+  payload: FileLinkCreate,
+  success: FileEntry,
+})
+  .middleware(AdminAccess)
+  .annotate(OpenApi.Summary, "Link one name to another file in a scope");
+
+/**
  * Renames a file or a directory inside one scope, and commits it.
  *
  * Both ends are contained separately, and the destination must not exist — a
@@ -193,7 +224,7 @@ const remove = HttpApiEndpoint.delete("delete", "/files/:scope", {
 
 /** The tree a run reads its rules from, as something a person can open and edit. */
 export class FilesGroup extends HttpApiGroup.make("files")
-  .add(list, read, write, createDirectory, move, remove)
+  .add(list, read, write, createDirectory, createLink, move, remove)
   .annotate(
     OpenApi.Description,
     "The agent filesystem: the directories a run walks for its instructions, browsable and editable by a person."

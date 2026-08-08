@@ -68,6 +68,23 @@ export const parseFileScopeAddress = (value: unknown) =>
 export const parseScopePath = optional(Schema.decodeUnknownOption(ScopePath));
 
 /**
+ * The two things one directory of the agent filesystem is opened for.
+ *
+ * Files first, and what the screen falls back to: the tree is the directory
+ * itself, and skills are files in it under two known paths. Both are in the URL
+ * because both are things one operator sends another — "install this here" is a
+ * link, not an instruction to click twice.
+ */
+export const SCOPE_VIEWS = ["files", "skills"] as const;
+
+/** Which of the two a scope is open on. */
+export type ScopeView = (typeof SCOPE_VIEWS)[number];
+
+/** The view a URL asks for, or undefined when it asks for nothing sensible. */
+export const parseScopeView = (value: unknown) =>
+  SCOPE_VIEWS.find((view) => view === value);
+
+/**
  * The panels of a task page, in the order they are drawn.
  *
  * Details comes first, and is what a task opens on when the link asks for

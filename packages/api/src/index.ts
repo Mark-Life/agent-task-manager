@@ -60,6 +60,7 @@ export {
   FileEncoding,
   FileEntry,
   FileEntryKind,
+  FileLinkCreate,
   FileMove,
   FileWrite,
   MAX_FILE_BYTES,

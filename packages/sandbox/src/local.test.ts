@@ -116,6 +116,7 @@ const makeSources = (): MountSources => {
   const sources: MountSources = {
     agentHomeDir: join(root, "agent-home"),
     cacheDir: join(root, "caches"),
+    composedSkillsDir: null,
     globalArtifactsDir: join(root, "artifacts", "global"),
     labels,
     projectArtifactsDir: join(root, "artifacts", "project"),
@@ -182,6 +183,7 @@ describe("hostPathOf", () => {
   const mounts = mountsFor({
     agentHomeDir: "/home/op/.claude-task-management",
     cacheDir: "/data/caches",
+    composedSkillsDir: null,
     globalArtifactsDir: "/data/artifacts/global",
     labels,
     projectArtifactsDir: "/data/artifacts/projects/p1",
@@ -225,6 +227,7 @@ describe("localEnv", () => {
   const mounts = mountsFor({
     agentHomeDir: "/home/op/.claude-task-management",
     cacheDir: "/data/caches",
+    composedSkillsDir: null,
     globalArtifactsDir: "/data/artifacts/global",
     labels,
     projectArtifactsDir: "/data/artifacts/projects/p1",
@@ -302,6 +305,7 @@ describe("localWorkingDir", () => {
     const mounts = mountsFor({
       agentHomeDir: "/home/op/.claude-task-management",
       cacheDir: "/data/caches",
+      composedSkillsDir: null,
       globalArtifactsDir: "/data/artifacts/global",
       labels,
       projectArtifactsDir: "/data/artifacts/projects/p1",
@@ -319,6 +323,7 @@ describe("unhonouredBy", () => {
   const mounts = mountsFor({
     agentHomeDir: "/home/op/.claude-task-management",
     cacheDir: "/data/caches",
+    composedSkillsDir: null,
     globalArtifactsDir: "/data/artifacts/global",
     labels,
     projectArtifactsDir: "/data/artifacts/projects/p1",

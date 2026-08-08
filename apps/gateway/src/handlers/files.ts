@@ -25,6 +25,13 @@
  * scope, so every question about the parent answers "inside" and only the
  * resolved target says otherwise.
  *
+ * **One route makes a link, and it makes a relative one.** A person names two
+ * paths in one scope and the text on disk is computed between them, because a
+ * scope is a bind mount: a host path in a link resolves for whoever typed it
+ * and dangles inside every container that reads the tree. That is what one file
+ * under two names is for — `AGENTS.md` holding a rule and `CLAUDE.md` pointing
+ * at it, since neither provider reads the other's name.
+ *
  * **A person, and only a person.** Every operation is admin-scoped, reads
  * included. An agent credential's ceiling is `task-write` and can never be
  * minted higher, so the refusal is arithmetic on a token rather than a check
@@ -44,7 +51,7 @@
  * mounts a run actually gets.
  */
 
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   Api,
   type FileContent,
@@ -414,6 +421,85 @@ export const createScopeDirectory = Effect.fn("Gateway.files.createDirectory")(
 );
 
 /**
+ * Points one name at another file in the same scope, with a relative symbolic
+ * link, and commits it.
+ *
+ * **The link text is computed, never taken.** A caller names two paths inside
+ * one scope and the text written on disk is the way from the first's real
+ * directory to the second. A scope is a bind mount, so an absolute host path in
+ * a link is the bug that would look perfect in the file browser and reach
+ * nothing at all inside a container — the one place this feature would fail
+ * silently, and the reason the wire has no field to put one in.
+ *
+ * **The target has to be there, and has to be the real thing.** A dangling
+ * link is a rule that quietly means nothing, and it is also how the containment
+ * above would be sidestepped: a target created after the check is a target this
+ * process never resolved. A target that is itself a link is refused for the
+ * reader rather than for safety — one hop means a listing always says what a
+ * name ends up at, and a chain means following three entries to find out.
+ *
+ * The `.git` refusal comes free at both ends. The branded path refuses the
+ * segment, and the resolver refuses a link that lands in an object store however
+ * it got there.
+ */
+export const linkScopePath = Effect.fn("Gateway.files.createLink")(function* (
+  input: ScopePathRequest & { readonly target: ScopePath }
+) {
+  const committer = yield* editorOf(input.principal);
+  const root = yield* scopeRootOf({ create: true, request: input });
+
+  const link = yield* resolveInScope({ path: input.path, root });
+  if (link.link !== null || link.real !== null) {
+    return yield* Effect.fail(
+      new InvalidInput({
+        detail: "something is already there — remove it first",
+        entity: "file",
+      })
+    );
+  }
+
+  const target = yield* resolveInScope({ path: input.target, root }).pipe(
+    Effect.tap((resolved) => refuseEscape({ root, target: resolved }))
+  );
+  if (target.link !== null) {
+    return yield* Effect.fail(
+      new InvalidInput({
+        detail:
+          "the target is itself a link — point at what that one points at instead",
+        entity: "file",
+      })
+    );
+  }
+  if (target.real === null) {
+    return yield* Effect.fail(
+      new NotFound({ entity: "file", id: target.relative })
+    );
+  }
+
+  const parent = yield* makeParent({ absolute: link.absolute, root });
+  // Both ends are proven inside the scope's real root, so the way between them
+  // stays inside it too — which is what makes this relative path safe to write
+  // without asking a third time where it lands.
+  const text = relative(parent, target.real);
+  const fs = yield* FileSystem;
+  yield* fs.symlink(text, link.absolute).pipe(Effect.orDie);
+  const entry = yield* entryOf({
+    absolute: link.absolute,
+    relative: link.relative,
+    root,
+  });
+  yield* commitEdit({
+    committer,
+    dataRoot: input.dataRoot,
+    operation: "link",
+    path: `${link.relative} -> ${text}`,
+    scope: input.scope,
+  });
+  yield* Effect.annotateCurrentSpan({ scope: input.scope.scope, target: text });
+  return entry;
+});
+
+/**
  * Renames a path inside one scope, and commits it.
  *
  * The destination must not exist. A move that silently replaced a file would be
@@ -489,7 +575,7 @@ export const deleteScopePath = Effect.fn("Gateway.files.delete")(function* (
   });
 });
 
-/** The `files` group: one tree, six operations, and a person on the other end of all of them. */
+/** The `files` group: one tree, seven operations, and a person on the other end of all of them. */
 export const filesHandlers = HttpApiBuilder.group(Api, "files", (handlers) =>
   Effect.gen(function* () {
     // At build time, not per request: a mistyped DATA_ROOT should stop the
@@ -508,6 +594,18 @@ export const filesHandlers = HttpApiBuilder.group(Api, "files", (handlers) =>
               path: payload.path,
               principal,
               scope: params.scope,
+            })
+          )
+        ),
+      createLink: ({ params, payload }) =>
+        on(
+          Effect.flatMap(Principal, (principal) =>
+            linkScopePath({
+              dataRoot,
+              path: payload.path,
+              principal,
+              scope: params.scope,
+              target: payload.target,
             })
           )
         ),

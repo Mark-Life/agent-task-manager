@@ -102,6 +102,21 @@ export const keys = {
   scopeListing: (address: string, path: string | null) =>
     [FILES, address, "list", path] as const,
 
+  /**
+   * What one scope has installed, which is the lock file checked against the
+   * disk. Under the scope so an install — which writes files — refreshes the
+   * tree and this list from one invalidation.
+   */
+  scopeSkills: (address: string) => [FILES, address, "skills"] as const,
+
+  /**
+   * What one skill's source holds now, against what is installed. Fetched only
+   * while somebody is looking at it: this key is the one read here that leaves
+   * the machine for GitHub.
+   */
+  scopeSkillUpdate: (address: string, name: string) =>
+    [FILES, address, "skills", name, "update"] as const,
+
   /** One agent session. */
   session: (taskId: TaskId, sessionId: SessionId) =>
     [TASKS, taskId, "sessions", sessionId] as const,

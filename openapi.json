@@ -4680,6 +4680,116 @@
         }
       }
     },
+    "/files/{scope}/link": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "operationId": "files.createLink",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "The directory being browsed: workspace, manager, project:<projectId> or task:<taskId>."
+            },
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "adminToken": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "userApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "FileEntry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileEntry"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundJsonEncoding"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "InvalidInput",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidInputJsonEncoding"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequestsJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Link one name to another file in a scope",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileLinkCreate"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
     "/files/{scope}/move": {
       "post": {
         "tags": [
@@ -10129,6 +10239,24 @@
         ],
         "additionalProperties": false
       },
+      "FileLinkCreate": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "A path relative to the scope's own root. No leading slash, no `..`, and no `.git` segment."
+          },
+          "target": {
+            "type": "string",
+            "description": "A path relative to the scope's own root. No leading slash, no `..`, and no `.git` segment."
+          }
+        },
+        "required": [
+          "path",
+          "target"
+        ],
+        "additionalProperties": false
+      },
       "FileMove": {
         "type": "object",
         "properties": {
@@ -10923,7 +11051,7 @@
     },
     {
       "name": "skills",
-      "description": "Skills installed into a directory of the agent filesystem. Codex reads them from every level of a run's tree; Claude reads the operator's personal skills instead."
+      "description": "Skills installed into a directory of the agent filesystem. Codex reads them from every level of a run's tree; Claude is given a copy composed into each run, with a name defined at two levels resolving to the narrower one."
     },
     {
       "name": "threads",

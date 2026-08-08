@@ -196,10 +196,13 @@ export interface ExecuteRunInput {
    */
   readonly sandboxKind: SandboxKind;
   /**
-   * The operator's skills directory on the host, mounted read-only inside the
-   * agent home, or null on an install that shares none. Read from the loop's
-   * settings rather than from the run: it is one directory for the whole host,
-   * like the entrypoint bundle and unlike everything else a run is given.
+   * The skills directory the install shares with every run, or null when it
+   * names none. Read from the loop's settings rather than from the run: it is
+   * one directory for the whole host, like the entrypoint bundle and unlike
+   * everything else a run is given.
+   *
+   * Not mounted. It is the broadest level of the composition materialization
+   * builds for this run, and what gets mounted is that composition.
    */
   readonly skillsDir: string | null;
   /**
@@ -254,7 +257,6 @@ const directoriesFor = Effect.fnUntraced(function* (input: {
   const extras = {
     agentMcpPath: input.agentMcpPath,
     entrypointPath: entrypointBundlePathOf(input.dataRoot),
-    skillsDir: input.skillsDir,
   };
 
   if (context.attached.role === "manager") {
@@ -263,6 +265,7 @@ const directoriesFor = Effect.fnUntraced(function* (input: {
       dataRoot: input.dataRoot,
       provider: context.provider,
       runId: context.runId,
+      skillsDir: input.skillsDir,
     });
     return {
       branch: null,
@@ -305,6 +308,7 @@ const directoriesFor = Effect.fnUntraced(function* (input: {
     projectId: projectIdOf(context),
     provider: context.provider,
     repo,
+    skillsDir: input.skillsDir,
     taskId,
   });
   return {

@@ -114,6 +114,17 @@ const TreeRow = ({
         strokeWidth={2}
       />
       <span className="truncate font-mono">{entry.name}</span>
+      {/*
+        A link says what it points at on the row, the way an alias does in a
+        file manager. It is half of how a skill and an instruction pair are laid
+        out, and a row that only carried a different icon would leave a reader
+        opening each one to find out which copy an edit lands in.
+      */}
+      {entry.target === null ? null : (
+        <span className="min-w-0 shrink truncate font-mono text-[0.6875rem] text-muted-foreground">
+          → {entry.target}
+        </span>
+      )}
       {entry.targetOutsideScope ? (
         <span className="shrink-0 rounded-sm bg-destructive/10 px-1 text-[0.625rem] text-destructive">
           outside

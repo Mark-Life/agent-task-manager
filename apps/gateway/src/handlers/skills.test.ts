@@ -22,6 +22,10 @@
  * **Nothing a source says decides where bytes land.** A name that is a path and
  * a `SKILL.md` above the repository root are both refused — the first two at
  * the contract's own schemas, which is where a rule no route can forget lives.
+ *
+ * **Nothing the scope's own disk says does either.** A run holds its scopes
+ * read-write and the gateway holds the host's reach, so a skills directory
+ * replaced by a link out of the scope is the one escape no string check can see.
  */
 
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
@@ -34,6 +38,7 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
+  symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -438,6 +443,32 @@ test("an install refuses a directory the lock does not know about", async () => 
   );
 
   expect(refusal._tag).toBe("InvalidInput");
+});
+
+/**
+ * The attack the source cannot mount and the disk can. A worker holds its task
+ * and project scopes read-write, so it can leave `.agents/skills -> /somewhere`
+ * in one and every string this route composes still reads as a path inside the
+ * scope. The gateway runs on the host with the whole data root's reach, so an
+ * install that followed that link would write a skill wherever the run chose —
+ * and then hand it to every later run as house rules.
+ */
+test("an install refuses a scope whose skills directory is a link out", async () => {
+  const outside = mkdtempSync(join(tmpdir(), "gateway-skills-out-"));
+  const dir = scopeDir();
+  mkdirSync(join(dir, ".agents"), { recursive: true });
+  symlinkSync(outside, join(dir, ".agents/skills"));
+  const apiOrigin = serveSkillRepo({
+    "skills/writing/SKILL.md": "# Writing\n",
+  });
+
+  const refusal = await runtime.runPromise(
+    Effect.flip(installing({ apiOrigin }))
+  );
+
+  expect(refusal._tag).toBe("Forbidden");
+  expect(existsSync(join(outside, "writing"))).toBe(false);
+  rmSync(outside, { force: true, recursive: true });
 });
 
 test("uninstalling removes the files, the link and the lock row together", async () => {

@@ -62,6 +62,26 @@ describe("ScopeTree", () => {
     expect(markup).not.toContain("<button");
   });
 
+  /**
+   * A link says what it points at on its own row. Both things a scope's layout
+   * is made of are links — one rule under two names, and a skill reached at the
+   * path the other CLI scans — so a row that only carried a different icon would
+   * leave a reader opening each one to find out which copy an edit lands in.
+   */
+  test("a link carries the file it points at, on the row", () => {
+    const markup = markupFor([
+      entryOf({
+        kind: "symlink",
+        name: "CLAUDE.md",
+        path: "CLAUDE.md",
+        target: "AGENTS.md",
+      }),
+    ]);
+
+    expect(markup).toContain("CLAUDE.md");
+    expect(markup).toContain("→ AGENTS.md");
+  });
+
   test("a link out of the scope is marked as leaving it", () => {
     const markup = markupFor([
       entryOf({

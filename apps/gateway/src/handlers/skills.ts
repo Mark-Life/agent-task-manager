@@ -16,13 +16,13 @@
  * the same bind mount, so a relative link resolves inside a container while an
  * absolute one would name a host path no container can see.
  *
- * **Codex reads them; Claude does not.** Claude's project-skill scan runs from
- * the working directory up to the repository root and stops, and the working
- * directory is the checkout — so every scope directory is above the stop, and
- * Claude keeps getting the operator's personal skills from the `/agent-home`
- * mount. The layout is still the right one, because Claude follows symlinked
- * skill directories and deduplicates by target, so the day a per-run skills
- * directory is composed nothing written here has to move.
+ * **Codex reads them here; Claude is handed a copy.** Claude's project-skill
+ * scan runs from the working directory up to the repository root and stops, and
+ * the working directory is the checkout — so every scope directory is above the
+ * stop. The tree is walked on the host instead and the result is composed into
+ * each run at `/agent-home/skills`, which its personal scan reads whatever the
+ * working directory is. Both spellings written here are sources for that walk,
+ * so a skill installed by this route reaches both providers.
  *
  * **A worker run cannot reach any of this**, and the reason is about the run
  * rather than about skills. A run installing a skill mid-task is one run
