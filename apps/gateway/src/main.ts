@@ -38,7 +38,7 @@ const program = Effect.gen(function* () {
   // Never returns on its own. The line is the operator's confirmation that the
   // interrupt was seen, written while the logger layer is still up —
   // everything after it is finalizers.
-  yield* Effect.never.pipe(
+  return yield* Effect.never.pipe(
     Effect.onInterrupt(() =>
       Effect.logInfo(
         "shutdown requested — draining requests, flushing telemetry"

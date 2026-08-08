@@ -1,5 +1,12 @@
 {
   "recommendations": [
+    // Required, not optional. TypeScript 7 is a native binary with no
+    // `tsserver`, so the built-in extension cannot run the workspace compiler
+    // and falls back to its own bundled one — which disagrees with
+    // `bun run typecheck` and knows nothing about the Effect diagnostics.
+    // `.vscode/settings.json` points this extension at the patched workspace
+    // binary so the editor and the build report the same thing.
+    "TypeScriptTeam.native-preview",
     "biomejs.biome",
     "bradlc.vscode-tailwindcss",
     "oven.bun-vscode",

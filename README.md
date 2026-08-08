@@ -109,6 +109,20 @@ The libraries are consumed as source through tsconfig paths and have no build st
 `typecheck` and `test` — not `build` — are what cover them. `bun run openapi --check` fails when
 the committed spec has drifted from the contract.
 
+`typecheck` is two gates in one pass. The compiler is TypeScript 7, the native Go port, and the
+binary behind `tsc` is [`@effect/tsgo`](https://github.com/Effect-TS/tsgo) — a superset of
+Microsoft's `tsgo` carrying the Effect language service, so ordinary type errors and Effect
+diagnostics (`floatingEffect`, `missingEffectContext`, `missingLayerContext`, …) come out of the
+same run over the same program. Errors and warnings fail the build; suggestions print and do not.
+Severities are set in `packages/typescript-config/base.json`, which also records the rules
+currently held at `suggestion` and what each is waiting on.
+
+Two things this changes day to day. `effect-tsgo patch` is what puts that binary behind `tsc`, and
+it runs from `prepare` on every `bun install` — if the Effect diagnostics ever go quiet, that is
+the thing to re-run. And because `incremental` is on, a `.tsbuildinfo` written before a change to
+the plugin's options will keep serving the old severities; delete `**/*.tsbuildinfo` after editing
+them.
+
 Other commands: `gateway:token` mints a scoped bearer token for the system's own agents — a
 person issues their own from the dashboard's *API keys* screen, `db:seed` fills a fresh database,
 `user:add` creates a login, `dashboard:build` / `dashboard:publish` produce and place the static

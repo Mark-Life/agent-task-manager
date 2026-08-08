@@ -3,6 +3,13 @@
   "display": "Next.js",
   "extends": "./base.json",
   "compilerOptions": {
+    // Replaces base.json's `plugins` rather than adding to it — tsconfig
+    // `extends` overwrites arrays — so the Effect language service is
+    // deliberately not loaded for Next.js apps. `apps/web` has no `effect`
+    // dependency and no Effect code, so the plugin would have nothing to
+    // analyse and would only cost startup time on every typecheck. A Next.js
+    // app that grows Effect code should add `@effect/language-service` back to
+    // this list; every other workspace inherits it from base.json.
     "plugins": [{ "name": "next" }],
     "module": "ESNext",
     "moduleResolution": "Bundler",
