@@ -46,6 +46,7 @@ export {
   MANAGER_RULES,
   SHARED_RULES,
   WORKER_RULES,
+  WRITING_RULES,
 } from "./rules";
 export type { UnreadInput, Watermark } from "./unread";
 export { isAfterWatermark, nextWatermarkOf, unreadOf } from "./unread";

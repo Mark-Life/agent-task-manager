@@ -44,6 +44,7 @@ import {
   CREDENTIAL_RULES,
   SHARED_RULES,
   WORKER_RULES,
+  WRITING_RULES,
 } from "./rules";
 
 /**
@@ -160,6 +161,7 @@ const freshPrompt = (input: WorkerPromptInput) => {
     // Same split, one line down: what belongs in a pull request instead of the
     // artifacts folder is not a question a run without a repository has.
     artifactRulesOf({ hasRepo: repoUrl !== null }),
+    WRITING_RULES,
     SHARED_RULES,
     section(
       "The conversation on this task so far",

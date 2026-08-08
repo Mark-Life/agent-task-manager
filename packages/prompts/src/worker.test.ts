@@ -24,7 +24,12 @@ import {
 } from "@workspace/domain";
 import { DateTime } from "effect";
 import type { PromptMode, RunPlacement } from "./render";
-import { artifactRulesOf, CREDENTIAL_RULES, SHARED_RULES } from "./rules";
+import {
+  artifactRulesOf,
+  CREDENTIAL_RULES,
+  SHARED_RULES,
+  WRITING_RULES,
+} from "./rules";
 import { buildWorkerPrompt, commentLabelOf } from "./worker";
 
 const at = DateTime.makeUnsafe("2026-08-02T10:00:00.000Z");
@@ -149,6 +154,9 @@ describe("a fresh session's prompt", () => {
     );
     expect(text).toContain(artifactRulesOf({ hasRepo: true }));
     expect(text).toContain(SHARED_RULES);
+    // The house style reaches both roles from the prompt, because a run sees
+    // neither the operator's `AGENTS.md` nor a skill body it did not invoke.
+    expect(text).toContain(WRITING_RULES);
   });
 
   /**
@@ -162,7 +170,7 @@ describe("a fresh session's prompt", () => {
   test("sends a document that belongs in a pull request to the pull request only", () => {
     expect(text).toContain("output that has nowhere else to live");
     expect(text).toContain(
-      "do not write a second copy into the artifacts directory"
+      "Do not write a second copy into the artifacts directory"
     );
     // And the honest exception: committed work with no pull request behind it
     // has nothing else holding it, so the artifacts copy is the right hedge.
@@ -185,7 +193,7 @@ describe("a fresh session's prompt", () => {
       "Anything worth keeping goes in the writable one"
     );
     expect(scratch).not.toContain(
-      "do not write a second copy into the artifacts directory"
+      "Do not write a second copy into the artifacts directory"
     );
   });
 
@@ -204,7 +212,7 @@ describe("a fresh session's prompt", () => {
     expect(text).toContain(
       "the shortest thing that lets a person decide what to do next"
     );
-    expect(text).toContain("a link to where the detail lives");
+    expect(text).toContain("A link to where the detail lives");
     expect(text).toContain(
       "Whatever the thing you linked already says, do not say again here"
     );

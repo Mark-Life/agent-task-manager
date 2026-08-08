@@ -228,11 +228,11 @@ export type StopDecision = StopAllowed | StopRefused;
  * writing the comment.
  *
  * The brevity clause is here because this text can be the last word on what a
- * comment is: it arrives as a prompt at the moment one is being written, and
- * without it the naming of three topics and nothing about size reads as an
- * invitation to cover all three at length. `WORKER_RULES` in
- * `@workspace/prompts` says the same thing first and says it more fully — this
- * is the short form of one rule, not a second rule.
+ * comment is: it arrives at the moment one is being written, and without it the
+ * naming of topics and nothing about size reads as an invitation to cover them
+ * all at length. `WORKER_RULES` in `@workspace/prompts` says the same thing
+ * first and says it more fully. This is the short form of one rule, not a
+ * second rule.
  *
  * The last sentence is the escape, and it is here rather than only in the
  * prompt because this text arrives at the exact moment it is needed: an agent
@@ -241,10 +241,10 @@ export type StopDecision = StopAllowed | StopRefused;
  * either burn its remaining turn retrying a dead tool or end without the
  * comment anyway. Naming the file gives the refusal something to be complied
  * with. The name is `HANDOFF_FILENAME`, which `@workspace/orchestrator` reads
- * back off the task's artifacts directory — one convention, three packages, no
+ * back off the task's artifacts directory: one convention, three packages, no
  * second spelling.
  */
-export const NO_COMMENT_REFUSAL = `This run has not posted a comment on its task. Post one now — what you did, what changed, and anything the next session or a human reviewer needs to know — then end your turn. Keep it short: link to what holds the detail rather than restating it here. Do not repeat work you have already finished. If the tool that posts comments is not answering, write the same text to \`${HANDOFF_FILENAME}\` in your artifacts directory instead and end your turn; it is read off the disk and posted for you.`;
+export const NO_COMMENT_REFUSAL = `This run has not posted a comment on its task. Post one now, then end your turn: the outcome in a sentence, a link to where the detail lives, and anything a reader would be wrong not to know before they open it. Do not restate what you linked, and do not repeat work you have already finished. If the tool that posts comments is not answering, write the same text to \`${HANDOFF_FILENAME}\` in your artifacts directory instead and end your turn; it is read off the disk and posted for you.`;
 
 /** The allowing response. One object, because it carries no per-decision detail. */
 export const ALLOW_TURN_END: StopHookResponse = { continue: true };
