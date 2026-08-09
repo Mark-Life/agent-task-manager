@@ -3,6 +3,7 @@ import * as languages from "@tanstack/highlight/languages";
 import { createTanStackMarkdownHighlighter } from "@tanstack/highlight/markdown";
 import { Markdown as TanStackMarkdown } from "@tanstack/markdown/react";
 import type { MarkdownComponents } from "@tanstack/markdown/react";
+import { autolinkLiterals, splitLinks } from "@workspace/ui/lib/autolink";
 import { cn } from "@workspace/ui/lib/utils";
 import type { ComponentProps } from "react";
 import { useMemo } from "react";
@@ -72,7 +73,15 @@ const components = {
   },
 } satisfies MarkdownComponents;
 
-interface MarkdownProps {
+/**
+ * What the parser is taught beyond CommonMark. See `autolink.ts`: an address
+ * pasted on its own is a link, which the parser does not do by itself and has
+ * no option for.
+ */
+const EXTENSIONS = [autolinkLiterals];
+
+/** A body and where it is drawn. The same two things whether it is parsed or not. */
+interface TextProps {
   readonly children: string;
   readonly className?: string;
 }
@@ -84,18 +93,56 @@ interface MarkdownProps {
  * shown verbatim it reads as punctuation around the sentences. Raw HTML stays
  * off: the renderer escapes it, so a task body is never a place to run script,
  * which matters because the text on this page was written by a model reading
- * material nobody vetted.
+ * material nobody vetted. Autolinking comes from the parser for the same
+ * reason: an extension emits link nodes, and no step here interpolates markup.
  *
  * Appearance lives in `markdown.css` under the class this wraps in, so the
  * twenty tags a document can emit are styled once instead of being mapped to
  * components one at a time.
  */
-export const Markdown = ({ children, className }: MarkdownProps) => (
+export const Markdown = ({ children, className }: TextProps) => (
   <div className={cn("markdown", className)}>
-    <TanStackMarkdown components={components} highlighter={highlightFence}>
+    <TanStackMarkdown
+      components={components}
+      extensions={EXTENSIONS}
+      highlighter={highlightFence}
+    >
       {children}
     </TanStackMarkdown>
   </div>
+);
+
+/**
+ * Words somebody typed, shown as they typed them, with their addresses live.
+ *
+ * A person's own message is deliberately not markdown — asterisks and
+ * underscores they typed are asterisks and underscores, and their line breaks
+ * are theirs — which leaves a pasted URL in one with no renderer at all. So this
+ * is the narrowest renderer there is: the same scan for addresses as the
+ * document above, and no other syntax interpreted.
+ *
+ * Anchors carry the position of the address they came from as their key, and
+ * `plain-text` is the class `markdown.css` styles them under — underlined in
+ * the colour around them, because a person's words are drawn in the accent
+ * bubble and an accent-coloured link there is invisible.
+ */
+export const PlainText = ({ children, className }: TextProps) => (
+  <p className={cn("plain-text whitespace-pre-wrap", className)}>
+    {splitLinks(children).map((run) =>
+      run.kind === "text" ? (
+        run.value
+      ) : (
+        <a
+          href={run.href}
+          key={run.start}
+          rel="nofollow noopener noreferrer"
+          target="_blank"
+        >
+          {run.value}
+        </a>
+      )
+    )}
+  </p>
 );
 
 interface CodeBlockProps {
