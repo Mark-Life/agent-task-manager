@@ -1,6 +1,5 @@
-import { createRoute } from "@tanstack/react-router";
+import { createRoute, lazyRouteComponent } from "@tanstack/react-router";
 import { RouteError } from "@/components/error-boundary";
-import { ApiKeys } from "@/features/api-keys/api-keys";
 import { layoutRoute } from "@/routes/layout";
 
 /**
@@ -9,7 +8,10 @@ import { layoutRoute } from "@/routes/layout";
  * are on the row already.
  */
 export const apiKeysRoute = createRoute({
-  component: ApiKeys,
+  component: lazyRouteComponent(
+    () => import("@/features/api-keys/api-keys"),
+    "ApiKeys"
+  ),
   errorComponent: RouteError,
   getParentRoute: () => layoutRoute,
   path: "/api-keys",

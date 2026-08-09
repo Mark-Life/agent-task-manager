@@ -1,16 +1,21 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select";
-import { useCallback, useMemo } from "react";
-import { authClient, organization } from "@/auth/client";
+import { lazy, Suspense, useMemo } from "react";
+import { authClient } from "@/auth/client";
 
 /** Below this a workspace is implied by the membership, so nothing is asked. */
 const AMBIGUOUS_FROM = 2;
+
+/**
+ * The control, fetched only by the accounts that can see it.
+ *
+ * The membership count is the whole condition, and it is known here without any
+ * of the select's own weight — so the import is placed behind the same test
+ * that decides whether anything is drawn at all.
+ */
+const WorkspaceSelect = lazy(() =>
+  import("@/auth/workspace-select").then((module) => ({
+    default: module.WorkspaceSelect,
+  }))
+);
 
 /**
  * Which workspace the session speaks for.
@@ -23,7 +28,6 @@ const AMBIGUOUS_FROM = 2;
  * be here before the second workspace is.
  */
 export const WorkspacePicker = () => {
-  const queryClient = useQueryClient();
   const workspaces = authClient.useListOrganizations();
   const active = authClient.useActiveOrganization();
 
@@ -36,53 +40,16 @@ export const WorkspacePicker = () => {
     [workspaces.data]
   );
 
-  // Everything read under the old workspace is about rows this session can no
-  // longer see, so the cache is dropped whole rather than invalidated key by
-  // key — there is no key that survives the switch.
-  const choose = useMutation({
-    mutationFn: (organizationId: string) =>
-      organization.setActive({ organizationId }),
-    onSuccess: () => queryClient.clear(),
-  });
-
-  // The select's value is nullable because nothing is chosen until a second
-  // workspace exists and somebody chooses; clearing it is not an offer this
-  // control makes, so a null is ignored rather than sent.
-  const { mutate } = choose;
-  const onValueChange = useCallback(
-    (value: string | null) => {
-      if (value !== null) {
-        mutate(value);
-      }
-    },
-    [mutate]
-  );
-
   if (items.length < AMBIGUOUS_FROM) {
     return null;
   }
 
   return (
-    <Select
-      items={items}
-      onValueChange={onValueChange}
-      value={active.data?.id ?? null}
-    >
-      <SelectTrigger
-        aria-label="Workspace"
-        className="w-full"
-        disabled={choose.isPending}
-        size="sm"
-      >
-        <SelectValue placeholder="Choose a workspace" />
-      </SelectTrigger>
-      <SelectContent>
-        {items.map((item) => (
-          <SelectItem key={item.value} value={item.value}>
-            {item.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    // Nothing stands in for the control while it arrives: the row it sits in is
+    // empty until the memberships are read anyway, and a placeholder shaped like
+    // a select would be a second thing appearing where one is about to.
+    <Suspense fallback={null}>
+      <WorkspaceSelect activeId={active.data?.id ?? null} items={items} />
+    </Suspense>
   );
 };

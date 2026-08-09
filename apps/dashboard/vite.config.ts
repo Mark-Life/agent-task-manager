@@ -60,6 +60,25 @@ const gatewayProxy = (target: string): ProxyOptions => ({
 });
 
 /**
+ * The two libraries that are the same on every deploy that does not upgrade
+ * them, pulled out so a change to this app does not expire them in anybody's
+ * cache. Together they are around a third of what a first load fetches:
+ * rendering, and the schemas the typed client decodes every response against.
+ *
+ * This buys cache lifetime rather than bytes — the same code ships either way.
+ * What it saves is the re-download on every deploy that only touched this app,
+ * which for an operator who reloads the board all day is most of them.
+ *
+ * Everything else is left to the splitter. Route chunks are decided by the
+ * dynamic imports in `src/routes`, and naming those by hand here would put the
+ * app's shape in two places that have to agree.
+ */
+const CHUNK_GROUPS = [
+  { name: "react", test: /node_modules\/(react|react-dom|scheduler)\// },
+  { name: "effect", test: /node_modules\/effect\// },
+];
+
+/**
  * Dev serves the app and the API from one origin, which is what makes the
  * session cookie first-party locally and lets the API client run with an empty
  * base URL. `GATEWAY_PROXY_TARGET` moves the far end without touching this
@@ -71,6 +90,11 @@ export default defineConfig(({ mode }) => {
   const target = env.GATEWAY_PROXY_TARGET || DEFAULT_GATEWAY;
 
   return {
+    build: {
+      rolldownOptions: {
+        output: { advancedChunks: { groups: CHUNK_GROUPS } },
+      },
+    },
     optimizeDeps: {
       exclude: ["@workspace/ui"],
     },

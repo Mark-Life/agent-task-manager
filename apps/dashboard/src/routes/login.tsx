@@ -1,6 +1,5 @@
-import { createRoute } from "@tanstack/react-router";
+import { createRoute, lazyRouteComponent } from "@tanstack/react-router";
 import { RouteError } from "@/components/error-boundary";
-import { SignIn } from "@/features/auth/sign-in";
 import { rootRoute } from "@/routes/root";
 
 /**
@@ -13,7 +12,10 @@ import { rootRoute } from "@/routes/root";
  * page to an address of a stranger's choosing.
  */
 export const loginRoute = createRoute({
-  component: SignIn,
+  component: lazyRouteComponent(
+    () => import("@/features/auth/sign-in"),
+    "SignIn"
+  ),
   errorComponent: RouteError,
   getParentRoute: () => rootRoute,
   path: "/login",

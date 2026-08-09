@@ -60,6 +60,7 @@
     "quota:check": "bun run scripts/quota-check.ts",
     "dashboard:dev": "turbo dev --filter=gateway --filter=dashboard",
     "dashboard:build": "bun run --cwd apps/dashboard build",
+    "dashboard:budget": "bun run scripts/dashboard-budget.ts",
     "dashboard:publish": "rsync -a --delete apps/dashboard/dist/ \"${ATM_DASHBOARD_ROOT:?set it to the directory Caddy serves the dashboard from}\"/",
     "gateway:dev": "bun run --watch apps/gateway/src/main.ts",
     "gateway:start": "bun run apps/gateway/src/main.ts",
