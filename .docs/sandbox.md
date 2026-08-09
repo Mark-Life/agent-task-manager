@@ -105,6 +105,17 @@ nothing ever owned the schedule, so mirrors were fetched once and every later ru
 a base frozen on the day the repo was first seen. It is bounded (3 minutes) and retried past the
 ref-lock race two concurrent dispatches cause, and a fetch that still fails **fails the run** —
 there is no fallback to the stale mirror, because a silently old base is the bug this prevents.
+
+**A task's later runs continue the branch, rather than resetting it to the base.** The branch is
+keyed on the task, so a rerun, a retry and a follow-up turn all land on `atm/task-<id>`; where
+the remote already has that branch with commits the base does not, the checkout starts at its
+tip. It used to start at the base every time, which left the previous run's pushed work
+unreferenced — the run either rebuilt it or spent its turn recovering it by hand, and its next
+push was a non-fast-forward. A branch the base already contains (a merged pull request nobody
+deleted) or one the remote no longer has (a merged pull request that was) is not resumed from:
+there is nothing in it the base is missing, so the run is cut fresh. Nothing is merged or
+rebased into the branch on the way in — `origin/<base>` is in the checkout, fresh as of
+dispatch, and catching up is the run's own call rather than an unattended three-way merge.
 A task with no repo gets an empty scratch directory and the same machinery. Artifacts live under
 `${DATA_ROOT}/artifacts/{global,projects/<id>,tasks/<id>}`; Postgres holds an index of them,
 never the bytes.
