@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { TaskId } from "@workspace/domain";
 import { BOT_COMMANDS, HELP_TEXT } from "./commands";
-import { makePendingComments } from "./dispatch";
+import { makePendingMessages } from "./dispatch";
 import { BUTTON_COMMANDS } from "./keyboard";
 
 const TASK_ID = TaskId.make("0195f2a0-1c3d-7a11-8f2e-0b1c2d3e4f50");
@@ -46,9 +46,9 @@ describe("BOT_COMMANDS", () => {
   });
 });
 
-describe("makePendingComments", () => {
+describe("makePendingMessages", () => {
   test("an armed chat yields its task once", () => {
-    const pending = makePendingComments();
+    const pending = makePendingMessages();
     pending.arm({ chatId: CHAT, taskId: TASK_ID });
 
     expect(pending.take(CHAT)).toBe(TASK_ID);
@@ -56,11 +56,11 @@ describe("makePendingComments", () => {
   });
 
   test("an unarmed chat yields nothing", () => {
-    expect(makePendingComments().take(CHAT)).toBeNull();
+    expect(makePendingMessages().take(CHAT)).toBeNull();
   });
 
   test("arming one chat leaves another alone", () => {
-    const pending = makePendingComments();
+    const pending = makePendingMessages();
     pending.arm({ chatId: CHAT, taskId: TASK_ID });
 
     expect(pending.take(OTHER_CHAT)).toBeNull();
@@ -68,7 +68,7 @@ describe("makePendingComments", () => {
   });
 
   test("a second tap replaces the task the chat is armed for", () => {
-    const pending = makePendingComments();
+    const pending = makePendingMessages();
     pending.arm({ chatId: CHAT, taskId: TASK_ID });
     pending.arm({ chatId: CHAT, taskId: OTHER_TASK_ID });
 

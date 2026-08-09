@@ -4,7 +4,7 @@
  * Everything that decides *whether* a message reaches the manager lives here,
  * so the decision is made once. A message that is not a supported kind is
  * refused with a sentence. A message that arrives while the chat is armed for a
- * comment becomes a comment on that task instead. Everything else is written to
+ * message becomes a task message on that card instead. Everything else is written to
  * `chat_message`, and that write is the whole of this bot's dispatch: the insert
  * trigger wakes the orchestrator, which claims the thread and runs the turn.
  *
@@ -28,7 +28,7 @@
  * same way, transcribed the same way, and then handed to `./compose` rather than
  * to the store. Nothing runs until the *Send* button, and what that writes is
  * one row for the whole batch, through the same append every other message takes.
- * The buffer is checked before the armed comment and before the write, because
+ * The buffer is checked before the armed message and before the write, because
  * those are the two things it has to come first of.
  *
  * **Nothing here holds a grammy context past the reply it is sending.** Every
@@ -84,21 +84,21 @@ import {
 } from "./voice";
 
 /**
- * The chats waiting for their next message to become a comment, armed by the
- * Comment button.
+ * The chats waiting for their next message to become a task message, armed by the
+ * Message button.
  *
  * In memory, per chat, and consumed by the first message that follows: a person
- * who taps *Comment* and then changes their mind sends anything else and the
+ * who taps *Message* and then changes their mind sends anything else and the
  * arming is spent. Nothing durable, because an intent that survives a restart
  * would silently swallow a message sent hours later.
  */
-export interface PendingComments {
+export interface PendingMessages {
   readonly arm: (input: { chatId: number; taskId: TaskId }) => void;
   readonly take: (chatId: number) => TaskId | null;
 }
 
-/** Builds the pending-comment state. One per process. */
-export const makePendingComments = (): PendingComments => {
+/** Builds the pending-message state. One per process. */
+export const makePendingMessages = (): PendingMessages => {
   const armed = new Map<number, TaskId>();
   return {
     arm: ({ chatId, taskId }) => {
@@ -129,7 +129,7 @@ export interface DispatcherOptions {
   readonly compose: ComposeBuffers;
   /** Where the "still working" line for each thread is remembered. */
   readonly notices: QueueNotices;
-  readonly pending: PendingComments;
+  readonly pending: PendingMessages;
 }
 
 /** The `chat_message` row a resolved user message fills. */
@@ -169,8 +169,8 @@ export const makeDispatcher = Effect.fnUntraced(function* (
   const reply = (ctx: BotContext, text: string) =>
     Effect.promise(() => ctx.reply(text).catch(swallow));
 
-  /** The armed-comment path: the next message becomes a comment, not a turn. */
-  const postComment = Effect.fnUntraced(function* (input: {
+  /** The armed path: the next message becomes a task message, not a turn. */
+  const postMessage = Effect.fnUntraced(function* (input: {
     readonly body: string;
     readonly ctx: BotContext;
     readonly taskId: TaskId;
@@ -178,7 +178,7 @@ export const makeDispatcher = Effect.fnUntraced(function* (
   }) {
     const { ctx, taskId } = input;
     const posted = yield* board
-      .addComment({
+      .postMessage({
         actor: {
           threadId: input.threadId,
           userId: ctx.identity.userId,
@@ -192,8 +192,8 @@ export const makeDispatcher = Effect.fnUntraced(function* (
     yield* reply(
       ctx,
       posted._tag === "Some"
-        ? "Comment posted."
-        : "That comment did not reach the board."
+        ? "Message posted."
+        : "That message did not reach the board."
     );
   });
 
@@ -403,7 +403,7 @@ export const makeDispatcher = Effect.fnUntraced(function* (
 
     const armed = pending.take(chatId);
     if (armed !== null) {
-      yield* postComment({
+      yield* postMessage({
         body: message.body,
         ctx,
         taskId: armed,

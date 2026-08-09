@@ -58,12 +58,6 @@ export {
   decodeChatNotification,
   decodeChatThread,
 } from "./chat";
-export {
-  CommentInsert,
-  CommentRow,
-  CommentUpdate,
-  decodeComment,
-} from "./comment";
 export { conforms, type Decoded } from "./conformance";
 export { JsonObject, joinPayload } from "./payload";
 export {
@@ -88,4 +82,10 @@ export {
 } from "./run-command";
 export { decodeRunEvent, RunEventInsert, RunEventRow } from "./run-event";
 export { decodeTask, TaskInsert, TaskRow, TaskUpdate } from "./task";
+export {
+  decodeTaskMessage,
+  TaskMessageInsert,
+  TaskMessageRow,
+  TaskMessageUpdate,
+} from "./task-message";
 export { decodeWorkspace, WorkspaceRow } from "./workspace";

@@ -227,7 +227,7 @@ export class ReadAccess extends HttpApiMiddleware.Service<
 
 /**
  * Ordinary work: creating and editing tasks, moving them, deleting one,
- * commenting, steering a run, keeping a file. A run's token reaches these only
+ * posting a message, steering a run, keeping a file. A run's token reaches these only
  * on its own task, and that is checked here against the `:taskId` in the path —
  * which is the floor and not the whole answer for a delete, since a run may
  * write on its own task and still may not erase it.

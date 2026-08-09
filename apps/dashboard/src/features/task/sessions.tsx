@@ -28,7 +28,7 @@ import { EmptyState } from "@/components/empty-state";
 import { Pending } from "@/components/query-state";
 import { formatRelative } from "@/lib/format";
 
-/** Enough of a session id to recognise it beside a comment that names it. */
+/** Enough of a session id to recognise it beside a message that names it. */
 const ID_PREFIX = 8;
 
 /**

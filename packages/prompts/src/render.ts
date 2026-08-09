@@ -24,7 +24,7 @@ export const section = (title: string, body: string | null) =>
 export interface SpeechInput {
   readonly body: string;
   /**
-   * What separates the label from the words. A comment runs to paragraphs and
+   * What separates the label from the words. A task message runs to paragraphs and
    * reads better on its own line; a chat line is one sentence and reads as
    * dialogue.
    */

@@ -21,7 +21,7 @@ dialog. Click a value, change it, it saves.
   - Properties: Notion-style label/value rows -> Status (existing select), Project (select),
     Pull request, Repository, Sandbox image (click-to-edit; `Empty` when null).
   - Metadata: keep raw-JSON editing with parse validation, same click-to-edit pattern.
-- Header keeps verbs (PR link, delete, close); actions row keeps verbs (stop, rerun, comment).
+- Header keeps verbs (PR link, delete, close); actions row keeps verbs (stop, rerun, post a message).
   Status select moves into the property rows; project name leaves the meta line (now a property).
 - Overlay and `/tasks/<id>` page share `TaskDetailView`: both get the new body for free.
 
@@ -34,7 +34,7 @@ dialog. Click a value, change it, it saves.
 3. `features/task/header.tsx`: title -> `InlineText`; drop pencil + dialog.
 4. `features/task/brief.tsx`: per-field click-to-edit; drop section-wide edit mode.
 5. `features/task/status-select.tsx`: absorb `STATUS_LABELS`.
-6. `features/task/actions.tsx`: drop `StatusSelect`; keep stop/rerun/comment.
+6. `features/task/actions.tsx`: drop `StatusSelect`; keep stop/rerun/message.
 7. `features/task/draft.tsx` (new): the client-side draft sheet; files on first commit.
 8. Delete `features/task/task-form.tsx` and `features/task/task-fields.tsx`.
 

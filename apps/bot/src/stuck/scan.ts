@@ -111,7 +111,7 @@ export const stuckDedupeKey = (options: {
  * The message a person reads: which task, which run, how long it has looked
  * stuck, what it kept doing, and the two things they can do about it.
  *
- * The keyboard is the run-notice one — *Stop*, *Rerun*, *Comment* — because
+ * The keyboard is the run-notice one — *Stop*, *Rerun*, *Message* — because
  * leaving it alone is the option that needs no button, and approving work is a
  * decision that belongs on a task message where the status is visible.
  */

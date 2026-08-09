@@ -9,7 +9,7 @@
  * one token and Telegram is dropping half the updates.
  *
  * What is **not** here is an `Actor`. The bot never writes a board row directly:
- * every project, task, comment and run command goes over the gateway with a
+ * every project, task, message and run command goes over the gateway with a
  * freshly minted manager token carrying the conversation that caused it, and the
  * chat tables it does own are not audited. A process-wide actor would be a
  * second, unattributed way to write, so there is none — see `chatStoreLayer`,

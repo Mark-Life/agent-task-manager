@@ -1,5 +1,5 @@
 /**
- * That a comment stranded on disk is found.
+ * That a message stranded on disk is found.
  *
  * A real directory rather than a stubbed filesystem, because the claim is
  * entirely about where the file is: the reader has to look in the task's own
@@ -31,7 +31,7 @@ const HANDOFF_BODY = `## What I did
 Rewrote the dispatcher's lease handling.
 
 The run's atm MCP token expired part-way through, so this is a file rather
-than a comment.`;
+than a message.`;
 
 let next = 0;
 /** A task with its own artifacts directory, holding whatever the run left there. */
@@ -82,12 +82,12 @@ describe("readHandoff", () => {
 
   test("treats a blank file as nothing to say", async () => {
     // The agent created the file and then posted through the tool after all.
-    // A blank comment on the card reads as a run that had nothing to report.
+    // A blank message on the card reads as a run that had nothing to report.
     expect(await read(taskWith("\n  \n\t\n"))).toBeNull();
   });
 
   test("keeps the file where it was, so the rescan still indexes it", async () => {
-    // The handoff is a comment *and* an artifact. Consuming it would take the
+    // The handoff is a message *and* an artifact. Consuming it would take the
     // run's only surviving output off the card the moment it was read.
     const taskId = taskWith(HANDOFF_BODY);
     await read(taskId);

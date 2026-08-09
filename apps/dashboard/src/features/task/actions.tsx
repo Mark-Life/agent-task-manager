@@ -30,7 +30,7 @@ const REFUSAL_POLL_MS = 3000;
  * Stop and rerun steer a container and are refused by the orchestrator rather
  * than by the board, so they stay buttons and stay chosen by whether there is
  * a run to steer; a button whose only outcome is a rejection teaches a person
- * nothing. Commenting is not here: the Comments tab carries its own count and
+ * nothing. Posting is not here: the Messages tab carries its own count and
  * its own box, and a button that only scrolls to another button is furniture.
  *
  * With nothing to steer the row disappears rather than holding a gap open — a

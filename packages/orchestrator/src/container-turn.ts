@@ -7,7 +7,7 @@
  * written into the run directory the container already has mounted, the
  * container appends its normalized events to the file in that same directory,
  * and the host reads them back. Every stage after the turn — the terminus, the
- * comment fallback, the ingest, the artifact rescan, the wide event — is handed
+ * message fallback, the ingest, the artifact rescan, the wide event — is handed
  * exactly what the local path hands it, which is the test that the seam was
  * drawn in the right place.
  *

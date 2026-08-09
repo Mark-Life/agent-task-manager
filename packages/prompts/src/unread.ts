@@ -1,7 +1,7 @@
 /**
  * What a session has not read yet, over any append-only conversation.
  *
- * A worker's comments on a task and a manager's messages in a thread are the
+ * A worker's messages on a task and a manager's messages in a thread are the
  * same question asked twice — "what has arrived since this session last
  * looked" — answered over the same `(createdAt, id)` tuple. One implementation
  * serves both, and the row type is only required to carry those two fields.
@@ -52,7 +52,7 @@ export interface UnreadInput<Row extends Watermark> {
  * database compares the truncation against the full-precision column, finds it
  * smaller, and hands back the very row the watermark was set to — every
  * resumed session would re-read the last thing it was shown, which for a run
- * whose own fallback comment sits at the end of the thread means reading its
+ * whose own fallback message sits at the end of the thread means reading its
  * own words back as new instructions forever. Comparing in the precision the
  * domain actually has is what closes that.
  */

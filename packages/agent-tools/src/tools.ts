@@ -29,9 +29,9 @@
  */
 
 import {
-  CommentAppend,
   ProjectCreate,
   TaskCreate,
+  TaskMessagePost,
   TaskPatch,
   TaskTransition,
 } from "@workspace/api";
@@ -202,7 +202,7 @@ const tasksMove = defineTool({
  */
 const tasksDelete = defineTool({
   description:
-    "Delete a task. Its comments, sessions, runs and artifacts go with it and there is no undo, so confirm with the person before calling this.",
+    "Delete a task. Its messages, sessions, runs and artifacts go with it and there is no undo, so confirm with the person before calling this.",
   endpoint: "DELETE /tasks/:taskId",
   input: TaskRef,
   name: "tasks_delete",
@@ -212,28 +212,36 @@ const tasksDelete = defineTool({
       .pipe(Effect.as({ deleted: true, taskId: input.taskId })),
 });
 
-/** The task's whole thread, oldest first — the order it is read in. */
-const commentsList = defineTool({
-  description: "Read a task's comment thread, oldest first.",
-  endpoint: "GET /tasks/:taskId/comments",
+/**
+ * The task's whole thread, oldest first — the order it is read in.
+ *
+ * The description names the task, not just the thread, because the other
+ * conversation an agent can read is `threads_messages` and the two are
+ * different things: this one belongs to a card and outlives every session on
+ * it, that one is a chat with a person.
+ */
+const messagesList = defineTool({
+  description:
+    "Read a task's message thread, oldest first. Every session on the task speaks here, so this is what a previous run left for you.",
+  endpoint: "GET /tasks/:taskId/messages",
   input: TaskRef,
-  name: "comments_list",
-  run: ({ client, input }) => client.comments.list({ params: input }),
+  name: "messages_list",
+  run: ({ client, input }) => client.messages.list({ params: input }),
 });
 
 /**
  * Say something on the task. The author is not a field: it comes off the
- * credential, so the comment is attributed to the manager and the chat thread
+ * credential, so the message is attributed to the manager and the chat thread
  * behind it whatever the body says.
  */
-const commentsAdd = defineTool({
+const messagesPost = defineTool({
   description:
-    "Post a comment on a task. This is how the next session on that task finds out what was decided in chat.",
-  endpoint: "POST /tasks/:taskId/comments",
-  input: Schema.Struct({ body: CommentAppend.fields.body, taskId: TaskId }),
-  name: "comments_add",
+    "Post a message on a task. This is how the next session on that task finds out what was decided.",
+  endpoint: "POST /tasks/:taskId/messages",
+  input: Schema.Struct({ body: TaskMessagePost.fields.body, taskId: TaskId }),
+  name: "messages_post",
   run: ({ client, input }) =>
-    client.comments.append({
+    client.messages.post({
       params: { taskId: input.taskId },
       payload: { body: input.body },
     }),
@@ -386,7 +394,7 @@ const clip = (text: string, maxChars: number) =>
 
 /**
  * Every tool an agent holds, in the order a reader should meet them: projects,
- * then the board, then a task's comment thread, then the runs, then what they
+ * then the board, then a task's message thread, then the runs, then what they
  * left behind, then the conversations with the manager.
  */
 export const AGENT_TOOLS: readonly AgentTool[] = [
@@ -398,8 +406,8 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   tasksEdit,
   tasksMove,
   tasksDelete,
-  commentsList,
-  commentsAdd,
+  messagesList,
+  messagesPost,
   runsStatus,
   runsStop,
   runsRerun,

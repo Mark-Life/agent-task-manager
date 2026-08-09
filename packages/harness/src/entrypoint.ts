@@ -63,9 +63,9 @@ import { ProviderRegistry } from "./provider";
 import { readStdin as readStdinRaw } from "./stdin";
 import {
   ALLOW_TURN_END,
-  commentMarkerPath,
-  commentRuleApplies,
   decideStop,
+  messageMarkerPath,
+  messageRuleApplies,
   parseStopHookPayload,
   STOP_HOOK_COMMAND_ENV_VAR,
   stopHookResponseOf,
@@ -506,12 +506,12 @@ const runSpec = (input: {
     // environment as the provider builds its options, not from `RunOptions.env`.
     // The hook names this bundle in its other mode; the CLI is the image's own.
     yield* useImageClaudeCli(spec.provider);
-    // A turn with no task has no comment to enforce, and the variable is
+    // A turn with no task has no message to enforce, and the variable is
     // cleared rather than left alone: the image or the host may already carry
     // one, and inheriting it is a manager turn refused by a rule about a card
     // it does not have.
     yield* Effect.sync(() => {
-      if (commentRuleApplies(spec.identity)) {
+      if (messageRuleApplies(spec.identity)) {
         process.env[STOP_HOOK_COMMAND_ENV_VAR] = containerStopHookCommand();
         return;
       }
@@ -644,9 +644,9 @@ const readStdin = Effect.sync(readStdinRaw);
  *
  * On the critical path of every turn ending, so it stays a filesystem check and
  * a `switch`; the rule is `decideStop` and the only fact it gathers is whether
- * the run's comment marker exists. Every failure allows the ending — a hook that
+ * the run's message marker exists. Every failure allows the ending — a hook that
  * throws is a run that cannot finish, which is far worse than a run that
- * finishes without a comment.
+ * finishes without a message.
  */
 export const runStopHook = Effect.fn("Turn.stopHook")(function* () {
   const decide = Effect.gen(function* () {
@@ -658,10 +658,10 @@ export const runStopHook = Effect.fn("Turn.stopHook")(function* () {
         try: () => JSON.parse(raw) as unknown,
       }).pipe(Effect.orElseSucceed(() => null))
     );
-    const commentPosted = yield* fs
-      .exists(commentMarkerPath(process.env))
+    const messagePosted = yield* fs
+      .exists(messageMarkerPath(process.env))
       .pipe(Effect.orElseSucceed(() => false));
-    return stopHookResponseOf(decideStop({ commentPosted, payload }));
+    return stopHookResponseOf(decideStop({ messagePosted, payload }));
   });
   // `catchCause` rather than a typed recovery: a hook that throws must still
   // answer, and a defect is exactly the case a typed recovery would miss.

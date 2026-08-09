@@ -15,8 +15,8 @@
 
 import { Layer } from "effect";
 import { artifactsHandlers } from "./artifacts";
-import { commentsHandlers } from "./comments";
 import { healthHandlers } from "./health";
+import { messagesHandlers } from "./messages";
 import { projectsHandlers } from "./projects";
 import { runCommandsHandlers } from "./run-commands";
 import { runsHandlers } from "./runs";
@@ -30,7 +30,7 @@ export const handlersLayer = Layer.mergeAll(
   healthHandlers,
   projectsHandlers,
   tasksHandlers,
-  commentsHandlers,
+  messagesHandlers,
   sessionsHandlers,
   runsHandlers,
   runCommandsHandlers,

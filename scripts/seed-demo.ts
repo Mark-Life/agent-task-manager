@@ -22,12 +22,12 @@ import {
   AgentSessionRepo,
   ChatMessageRepo,
   ChatThreadRepo,
-  CommentRepo,
   ProjectRepo,
   RunEventRepo,
   RunRepo,
   storeLayer,
   type TaskCreate,
+  TaskMessageRepo,
   TaskRepo,
   withActor,
 } from "@workspace/db";
@@ -177,7 +177,7 @@ const tasksOf = (options: Projects & { readonly workspaceId: WorkspaceId }) => {
       workspaceId,
     },
     {
-      brief: "Title, brief and comment bodies, ranked by recency.",
+      brief: "Title, brief and message bodies, ranked by recency.",
       prUrl: `${PR_BASE}/38`,
       status: "review",
       title: "Search across tasks",
@@ -346,13 +346,13 @@ const liveAttempt = (options: {
     });
   });
 
-/** An attempt that ran to a clean finish, with the comment a worker leaves behind. */
+/** An attempt that ran to a clean finish, with the message a worker leaves behind. */
 const finishedAttempt = (options: {
   readonly taskId: Task["id"];
   readonly workspaceId: WorkspaceId;
 }) =>
   Effect.gen(function* () {
-    const comments = yield* CommentRepo;
+    const messages = yield* TaskMessageRepo;
     const runs = yield* RunRepo;
     const sessions = yield* AgentSessionRepo;
 
@@ -377,13 +377,13 @@ const finishedAttempt = (options: {
       id: session.id,
       workspaceId: options.workspaceId,
     });
-    yield* comments.append({
+    yield* messages.post({
       author: { kind: "agent", runId: run.id, sessionId: session.id },
       body: "Pushed `atm/demo-branch` and opened the pull request. The error copy is in one place now, so a new field inherits it.",
       taskId: options.taskId,
       workspaceId: options.workspaceId,
     });
-    yield* comments.append({
+    yield* messages.post({
       author: { kind: "agent", runId: run.id, sessionId: session.id },
       body: "Done. Tests pass locally.",
       kind: "fallback",
@@ -399,7 +399,7 @@ const failedAttempt = (options: {
   readonly workspaceId: WorkspaceId;
 }) =>
   Effect.gen(function* () {
-    const comments = yield* CommentRepo;
+    const messages = yield* TaskMessageRepo;
     const runs = yield* RunRepo;
     const sessions = yield* AgentSessionRepo;
 
@@ -423,7 +423,7 @@ const failedAttempt = (options: {
       id: session.id,
       workspaceId: options.workspaceId,
     });
-    yield* comments.append({
+    yield* messages.post({
       author: { kind: "orchestrator", runId: run.id },
       body: "The run exited 137 before writing a result. Container out of memory during the install step.",
       kind: "run_error",
@@ -555,8 +555,8 @@ const seedDemo = Effect.gen(function* () {
 
   yield* asHuman(
     Effect.gen(function* () {
-      const comments = yield* CommentRepo;
-      yield* comments.append({
+      const messages = yield* TaskMessageRepo;
+      yield* messages.post({
         author: { kind: "human", userId: owner },
         body: "Read the PR. The empty state still shows the spinner for a beat — worth a look before this merges.",
         taskId: reviewed.id,

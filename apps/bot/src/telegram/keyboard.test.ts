@@ -83,10 +83,10 @@ describe("makeKeyboardRefresh", () => {
 
 describe("taskKeyboard", () => {
   test.each([
-    ["ideas", ["Start", "Comment"]],
-    ["backlog", ["Start", "Comment"]],
-    ["review", ["Approve", "Rerun", "Comment"]],
-    ["done", ["Rerun", "Comment"]],
+    ["ideas", ["Start", "Message"]],
+    ["backlog", ["Start", "Message"]],
+    ["review", ["Approve", "Rerun", "Message"]],
+    ["done", ["Rerun", "Message"]],
   ] as const)("offers %s the moves it allows", (status, expected) => {
     const keyboard = taskKeyboard({
       hasLiveRun: false,
@@ -105,7 +105,7 @@ describe("taskKeyboard", () => {
           taskId: TASK_ID,
         })
       )
-    ).toEqual(["Stop", "Review", "Comment"]);
+    ).toEqual(["Stop", "Review", "Message"]);
     expect(
       labels(
         taskKeyboard({
@@ -114,7 +114,7 @@ describe("taskKeyboard", () => {
           taskId: TASK_ID,
         })
       )
-    ).toEqual(["Review", "Rerun", "Comment"]);
+    ).toEqual(["Review", "Rerun", "Message"]);
   });
 
   test("adds the link only when there is one", () => {
@@ -164,7 +164,7 @@ describe("runNoticeKeyboard", () => {
     expect(labels(runNoticeKeyboard({ taskId: TASK_ID }))).toEqual([
       "Stop",
       "Rerun",
-      "Comment",
+      "Message",
     ]);
   });
 });

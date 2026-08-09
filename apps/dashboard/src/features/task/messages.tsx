@@ -1,6 +1,6 @@
 import {
-  Comment01Icon,
   Layers01Icon,
+  Message01Icon,
   Robot01Icon,
   SparklesIcon,
   User03Icon,
@@ -8,8 +8,8 @@ import {
 import type { IconSvgElement } from "@hugeicons/react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useQuery } from "@tanstack/react-query";
-import type { Comment } from "@workspace/api";
-import type { CommentAuthorKind, TaskId } from "@workspace/domain";
+import type { TaskMessage } from "@workspace/api";
+import type { TaskId, TaskMessageAuthorKind } from "@workspace/domain";
 import { Bubble, BubbleContent } from "@workspace/ui/components/bubble";
 import { Button } from "@workspace/ui/components/button";
 import {
@@ -36,7 +36,7 @@ import {
 } from "@workspace/ui/components/message-scroller";
 import { Skeleton } from "@workspace/ui/components/skeleton";
 import { useMemo } from "react";
-import { commentsQuery, useAppendComment } from "@/api/comments";
+import { taskMessagesQuery, usePostTaskMessage } from "@/api/messages";
 import {
   type ComposerSend,
   MessageComposer,
@@ -71,7 +71,7 @@ interface Author {
  * stopped, which is a note about the conversation rather than a turn in it, and
  * it goes down the middle like a date.
  *
- * When a comment carries a specific agent or a named person, the label is the
+ * When a message carries a specific agent or a named person, the label is the
  * only thing that has to change.
  */
 const AUTHORS = {
@@ -83,18 +83,18 @@ const AUTHORS = {
     label: "Orchestrator",
     placement: "system",
   },
-} as const satisfies Record<CommentAuthorKind, Author>;
+} as const satisfies Record<TaskMessageAuthorKind, Author>;
 
 /**
- * The surface a comment is drawn on.
+ * The surface a message is drawn on.
  *
  * A crash is destructive whoever reported it: it is usually the reason the
  * panel was opened, and it must not have to be told apart from an ordinary
  * report by reading it. Otherwise the operator's own words are accented and
  * everyone else's are quiet, which is the only cue a reader needs at a glance.
  */
-const bubbleVariant = (comment: Comment, placement: Placement) => {
-  if (comment.kind === "run_error") {
+const bubbleVariant = (message: TaskMessage, placement: Placement) => {
+  if (message.kind === "run_error") {
     return "destructive" as const;
   }
   return placement === "operator" ? ("default" as const) : ("muted" as const);
@@ -117,10 +117,10 @@ const bubbleVariant = (comment: Comment, placement: Placement) => {
  * scrolled away — which is why nothing here touches scroll position.
  */
 export const TaskMessages = ({ taskId }: { readonly taskId: TaskId }) => {
-  const comments = useQuery(commentsQuery(taskId));
+  const messages = useQuery(taskMessagesQuery(taskId));
   const rows = useMemo(
-    () => withDayMarkers(comments.data ?? []),
-    [comments.data]
+    () => withDayMarkers(messages.data ?? []),
+    [messages.data]
   );
 
   return (
@@ -129,8 +129,8 @@ export const TaskMessages = ({ taskId }: { readonly taskId: TaskId }) => {
         <MessageScroller className="min-w-0 flex-1">
           <MessageScrollerViewport className="py-4">
             <MessageScrollerContent className="gap-5">
-              {comments.isPending ? <Skeleton className="h-24 w-full" /> : null}
-              {comments.data?.length === 0 ? <NothingSaid /> : null}
+              {messages.isPending ? <Skeleton className="h-24 w-full" /> : null}
+              {messages.data?.length === 0 ? <NothingSaid /> : null}
               {rows.map((row) => (
                 <MessageScrollerItem key={row.item.id} messageId={row.item.id}>
                   {row.day === null ? null : (
@@ -138,7 +138,7 @@ export const TaskMessages = ({ taskId }: { readonly taskId: TaskId }) => {
                       <MarkerContent>{row.day}</MarkerContent>
                     </Marker>
                   )}
-                  <CommentRow comment={row.item} />
+                  <MessageRow message={row.item} />
                 </MessageScrollerItem>
               ))}
             </MessageScrollerContent>
@@ -164,7 +164,7 @@ const NothingSaid = () => (
   <div className="flex flex-1 flex-col items-center justify-center gap-2 py-10 text-muted-foreground">
     <HugeiconsIcon
       className="size-5 opacity-60"
-      icon={Comment01Icon}
+      icon={Message01Icon}
       strokeWidth={2}
     />
     <p className="text-xs">Nothing said yet</p>
@@ -178,11 +178,11 @@ const NothingSaid = () => (
  * the run already said and would otherwise be the loudest thing on the panel.
  * A crash never folds, for the same reason in reverse.
  */
-const CommentRow = ({ comment }: { readonly comment: Comment }) => {
-  const author = AUTHORS[comment.authorKind];
+const MessageRow = ({ message }: { readonly message: TaskMessage }) => {
+  const author = AUTHORS[message.authorKind];
 
   if (author.placement === "system") {
-    return <SystemRow author={author} comment={comment} />;
+    return <SystemRow author={author} message={message} />;
   }
 
   const operator = author.placement === "operator";
@@ -199,21 +199,21 @@ const CommentRow = ({ comment }: { readonly comment: Comment }) => {
       <MessageContent>
         <MessageHeader className="gap-2">
           <span>{author.label}</span>
-          <span>{formatRelative(comment.createdAt)}</span>
-          {comment.kind === "run_error" ? (
+          <span>{formatRelative(message.createdAt)}</span>
+          {message.kind === "run_error" ? (
             <span className="text-destructive">crashed</span>
           ) : null}
         </MessageHeader>
-        <Bubble variant={bubbleVariant(comment, author.placement)}>
+        <Bubble variant={bubbleVariant(message, author.placement)}>
           <BubbleContent className="px-3 py-2 text-[0.8125rem]/relaxed">
-            {comment.kind === "fallback" ? (
-              <FoldedBody body={comment.body} />
+            {message.kind === "fallback" ? (
+              <FoldedBody body={message.body} />
             ) : (
-              <Body body={comment.body} plain={operator} />
+              <Body body={message.body} plain={operator} />
             )}
           </BubbleContent>
         </Bubble>
-        <Provenance comment={comment} />
+        <Provenance message={message} />
       </MessageContent>
     </Message>
   );
@@ -225,17 +225,17 @@ const CommentRow = ({ comment }: { readonly comment: Comment }) => {
  */
 const SystemRow = ({
   author,
-  comment,
+  message,
 }: {
   readonly author: Author;
-  readonly comment: Comment;
+  readonly message: TaskMessage;
 }) => (
   <Marker
-    className={comment.kind === "run_error" ? "text-destructive" : undefined}
+    className={message.kind === "run_error" ? "text-destructive" : undefined}
   >
     <HugeiconsIcon icon={author.icon} strokeWidth={2} />
-    <MarkerContent>{comment.body}</MarkerContent>
-    <span className="shrink-0">{formatRelative(comment.createdAt)}</span>
+    <MarkerContent>{message.body}</MarkerContent>
+    <span className="shrink-0">{formatRelative(message.createdAt)}</span>
   </Marker>
 );
 
@@ -284,20 +284,20 @@ const FoldedBody = ({ body }: { readonly body: string }) => (
  * run — enough to match a message to a row on the Runs tab without turning
  * every line into a pair of uuids. Nothing at all for a message a person typed.
  */
-const Provenance = ({ comment }: { readonly comment: Comment }) => {
-  if (comment.agentSessionId === null && comment.runId === null) {
+const Provenance = ({ message }: { readonly message: TaskMessage }) => {
+  if (message.agentSessionId === null && message.runId === null) {
     return null;
   }
 
   return (
     <MessageFooter className="gap-2 font-mono">
-      {comment.agentSessionId === null ? null : (
-        <span title={comment.agentSessionId}>
-          session {shortId(comment.agentSessionId)}
+      {message.agentSessionId === null ? null : (
+        <span title={message.agentSessionId}>
+          session {shortId(message.agentSessionId)}
         </span>
       )}
-      {comment.runId === null ? null : (
-        <span title={comment.runId}>run {shortId(comment.runId)}</span>
+      {message.runId === null ? null : (
+        <span title={message.runId}>run {shortId(message.runId)}</span>
       )}
     </MessageFooter>
   );
@@ -310,13 +310,13 @@ const Provenance = ({ comment }: { readonly comment: Comment }) => {
  * typed here can be signed as somebody else.
  */
 const TaskComposer = ({ taskId }: { readonly taskId: TaskId }) => {
-  const append = useAppendComment();
-  const { mutate } = append;
+  const post = usePostTaskMessage();
+  const { mutate } = post;
 
   const send = useMemo(
     () =>
       ({ body, sent }: ComposerSend) => {
-        mutate({ comment: { body }, taskId }, { onSuccess: sent });
+        mutate({ message: { body }, taskId }, { onSuccess: sent });
       },
     [mutate, taskId]
   );
@@ -327,8 +327,8 @@ const TaskComposer = ({ taskId }: { readonly taskId: TaskId }) => {
     // rule across the sheet rather than as the thing to type into.
     <MessageComposer
       className="mb-1 overflow-hidden rounded-xl border"
-      error={failureText(append.error)}
-      isPending={append.isPending}
+      error={failureText(post.error)}
+      isPending={post.isPending}
       onSend={send}
       placeholder="Say something the next session should read"
     />

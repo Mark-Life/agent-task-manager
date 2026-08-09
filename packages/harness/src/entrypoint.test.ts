@@ -198,7 +198,7 @@ describe("runTurn", () => {
 
   /**
    * The bug this pair is about: a manager turn answering in a conversation was
-   * handed the worker's stop hook, refused for not commenting on a task it does
+   * handed the worker's stop hook, refused for not posting on a task it does
    * not have, and spent its next turn saying so to the person in the chat.
    */
   it("registers the stop hook for a turn that has a task", async () => {

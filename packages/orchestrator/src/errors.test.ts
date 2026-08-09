@@ -76,7 +76,7 @@ describe("runOutcomeOfClass", () => {
 });
 
 describe("describeFailure", () => {
-  test("gives a crash comment its class, its message and its outcome", () => {
+  test("gives a crash message its class, its message and its outcome", () => {
     expect(
       describeFailure(new LeaseLost({ detail: "reclaimed", runId, subject }))
     ).toEqual({

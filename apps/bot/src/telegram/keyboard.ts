@@ -127,7 +127,7 @@ export const rewriteButtonCommands = (ctx: BotContext, next: NextFunction) => {
  * The buttons a task gets, given where it sits and whether a run is live.
  *
  * Read as a table rather than as branching logic: each column of the board
- * offers the move that column actually allows, plus *Comment*, which is the one
+ * offers the move that column actually allows, plus *Message*, which is the one
  * action that is legal everywhere.
  */
 const taskActions = (options: {
@@ -160,7 +160,7 @@ const taskActions = (options: {
 
 /**
  * The inline keyboard under a message about one task: the moves its status
- * allows, *Comment*, and a link into the dashboard when there is a public URL
+ * allows, *Message*, and a link into the dashboard when there is a public URL
  * to link to.
  *
  * The link is a `url` button rather than a line of text because Telegram's own
@@ -182,7 +182,7 @@ export const taskKeyboard = (options: {
       )
     ),
     InlineKeyboard.text(
-      "Comment",
+      "Message",
       encodeCallbackData({ kind: "task", taskId, verb: "cadd" })
     )
   );
@@ -212,7 +212,7 @@ export const runNoticeKeyboard = (options: {
       encodeCallbackData({ kind: "task", taskId, verb: "rrun" })
     ),
     InlineKeyboard.text(
-      "Comment",
+      "Message",
       encodeCallbackData({ kind: "task", taskId, verb: "cadd" })
     )
   );

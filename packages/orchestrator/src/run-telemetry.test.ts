@@ -236,8 +236,8 @@ const lost = lostTerminus({
 const CLOSED_OUT: Partial<RunProgress> = {
   artifactsWritten: 3,
   branch: "atm/task-1",
-  commentFallback: true,
   eventsSeen: 84,
+  messageFallback: true,
   promptChars: 1200,
 };
 
@@ -361,7 +361,7 @@ describe("withRunEvent", () => {
     expect(end.providerSessionId).toBe("provider-sess-2");
     // what the loop accumulated
     expect(end.artifactsWritten).toBe(3);
-    expect(end.commentFallback).toBe(true);
+    expect(end.messageFallback).toBe(true);
     expect(end.eventsSeen).toBe(84);
     expect(end.promptChars).toBe(1200);
     expect(end.branch).toBe("atm/task-1");
@@ -702,8 +702,8 @@ describe("observeRunProgress", () => {
     expect(progress).toEqual({
       artifactsWritten: 0,
       branch: "atm/task-1",
-      commentFallback: false,
       eventsSeen: 84,
+      messageFallback: false,
       parked: false,
       promptChars: 1200,
       prUrl: null,

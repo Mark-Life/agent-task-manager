@@ -21,20 +21,20 @@ import {
   terminusWithBoardAccess,
 } from "./turn-progress";
 
-const COMMENTS_ADD = `${AGENT_TOOL_PREFIX}comments_add`;
+const MESSAGES_POST = `${AGENT_TOOL_PREFIX}messages_post`;
 
 const EXPIRED = describeFailure(new Unauthorized({ reason: "token_expired" }));
 
 /** The run's last words, which on this path are a narration of the failure. */
 const FINAL_TEXT =
-  "I cannot post the task comment — every comments_add call returns Unauthorized.";
+  "I cannot post the task message — every messages_post call returns Unauthorized.";
 
 const boardCall: AgentEvent = {
   callId: "call-1",
   inputChars: 400,
   kind: "tool_call",
-  summary: "post a comment",
-  toolName: COMMENTS_ADD,
+  summary: "post a message",
+  toolName: MESSAGES_POST,
 };
 
 const boardRefused: AgentEvent = {
@@ -103,16 +103,16 @@ describe("observeTurn", () => {
     expect(watch([boardCall, boardAnswered]).boardAccess.lost).toBe(false);
   });
 
-  test("does not count a refused comment as a comment posted", () => {
+  test("does not count a refused message as a message posted", () => {
     // The two facts are read together at the close — a run refused on the
     // credential has to still be owed its fallback.
     const progress = watch([boardCall, boardRefused]);
-    expect(progress.commentPosted).toBe(false);
+    expect(progress.messagePosted).toBe(false);
   });
 
-  test("still counts the comment a run did post", () => {
+  test("still counts the message a run did post", () => {
     const progress = watch([boardCall, boardAnswered]);
-    expect(progress.commentPosted).toBe(true);
+    expect(progress.messagePosted).toBe(true);
     expect(progress.boardAccess.lost).toBe(false);
   });
 });

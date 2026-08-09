@@ -121,7 +121,7 @@ export const DEFAULT_CLAUDE_SETTINGS: Settings = {
 /**
  * The event the stop hook is registered on. Only `Stop`: `SubagentStop` fires
  * when a delegated subagent finishes, and refusing that would hold a subagent
- * open over a comment the parent turn has not had a chance to post yet.
+ * open over a message the parent turn has not had a chance to post yet.
  */
 const STOP_HOOK_EVENT = "Stop";
 
@@ -132,7 +132,7 @@ const STOP_HOOK_EVENT = "Stop";
  * Nothing is what an unsandboxed run gets, and it is a real configuration rather
  * than a broken one: the command is a path inside the image, so only the party
  * that built the image can name it. A run without it simply ends when the model
- * decides to, and the orchestrator's own fallback comment covers the same rule
+ * decides to, and the orchestrator's own fallback message covers the same rule
  * from the other side.
  *
  * No `matcher` is set, because a stop event has no tool name to match on and a

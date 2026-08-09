@@ -1,7 +1,7 @@
 /**
  * The pull request a run's branch has, asked of GitHub rather than of the agent.
  *
- * A worker that opens a pull request says so in its comment, and that comment is
+ * A worker that opens a pull request says so in its message, and that message is
  * the detail — what it did, what it decided, what it could not do. What it is
  * not is a structured field: the link lives inside prose, so the board cannot
  * render it, sort on it, or tell a card with a change waiting from a card with a
@@ -9,10 +9,10 @@
  *
  * **Asked, not told.** The alternative was a line in the worker's prompt telling
  * it to call `tasks_edit` with the URL after opening the pull request. That is
- * one more step at the end of a long turn, in the same paragraph as the comment
+ * one more step at the end of a long turn, in the same paragraph as the message
  * rule the stop hook exists to enforce — and the one thing already known about
  * that paragraph is that models drop the end of it, which is why the hook and
- * the fallback comment are both there. So the loop asks instead. The branch a
+ * the fallback message are both there. So the loop asks instead. The branch a
  * task's runs push is `branchForTask`, decided by this system and keyed on the
  * task alone, so "is there a pull request for this task" is a question with an
  * exact answer that no model has to remember to give.
@@ -28,7 +28,7 @@
  * followed by a second attempt leaves two more. The field holds the one review
  * happens on now — the open one, or the most recent when none is open — because
  * that is the question a person clicking the link is asking. The others are not
- * lost: every run's comment carries the link it opened, so the thread keeps the
+ * lost: every run's message carries the link it opened, so the thread keeps the
  * whole history and the column keeps the current answer.
  *
  * Total, like `./committer` and `./scopes`. Every failure — no credential, a
@@ -70,7 +70,7 @@ const API_VERSION = "2022-11-28";
  * How long the lookup gets. It runs once per worker run that had a checkout, on
  * the closing path, so a GitHub that is not answering costs the run this much
  * delay and a task whose field stays null — never a run that does not close. The
- * comment is already posted by then, so the link is on the card either way.
+ * message is already posted by then, so the link is on the card either way.
  */
 const LOOKUP_TIMEOUT = "10 seconds";
 

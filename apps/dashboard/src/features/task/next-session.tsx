@@ -14,7 +14,7 @@ import {
 } from "@/features/task/property-select";
 import { formatRelative } from "@/lib/format";
 
-/** Enough of a session id to recognise it beside a comment that names it. */
+/** Enough of a session id to recognise it beside a message that names it. */
 const ID_PREFIX = 8;
 
 /** Where the named sessions sit, under the two choices that are not one session. */

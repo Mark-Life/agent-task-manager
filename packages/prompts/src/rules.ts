@@ -22,9 +22,9 @@
  * where a reviewer reads it and a model never pays for it.
  *
  * **A manager is told none of the worker's ending.** It has no card, no
- * artifacts folder and no comment to post. The artifacts paragraph and the stop
- * hook's comment rule are worker rules in both directions: the text below is
- * only given to a worker, and `commentRuleApplies` in `@workspace/harness` is
+ * artifacts folder and no message to post. The artifacts paragraph and the stop
+ * hook's message rule are worker rules in both directions: the text below is
+ * only given to a worker, and `messageRuleApplies` in `@workspace/harness` is
  * what stops the hook being registered on a turn with no task. A manager handed
  * either one spends its turn explaining that it will not post onto an unrelated
  * card, which is a real conversation that happened.
@@ -84,7 +84,7 @@ import { HANDOFF_FILENAME } from "@workspace/domain";
  *
  * Deliberately about writing and nothing about length. What is short depends on
  * what the turn produced, and each role's own block says so in its own terms: a
- * chat reply and a closing comment on a card are not the same size.
+ * chat reply and a closing message on a card are not the same size.
  */
 export const WRITING_RULES = `## How you write
 
@@ -100,7 +100,7 @@ export const WRITING_RULES = `## How you write
  * What is true of every run, whatever it was started to do.
  *
  * Both halves hold for a manager as much as for a worker: an answer in a
- * conversation is written down like a comment is, and a sentence narrating that
+ * conversation is written down like a task message is, and a sentence narrating that
  * a card moved is noise in a chat window for the same reason it is noise in a
  * thread.
  */
@@ -214,21 +214,21 @@ export const CREDENTIAL_RULES = `## The GitHub credential you hold
 
 \`git\` and \`gh\` are authenticated as the person who owns this board, with one token on your environment as \`GH_TOKEN\`. \`gh auth status\` prints what it carries. Use it for the whole change: push the branch, open the pull request, and reach repository settings through \`gh api\` when a task is about them.
 
-If GitHub refuses one of those, stop and report it. Say which operation was refused and which scope or permission the refusal named, in your comment on the task and in the pull request if you opened one. Do not route around it: a patch file for a human to apply by hand, a pull request that describes the half it could not include, a plan quietly narrowed to what the token allowed. Each of those reads as finished work and is not, and half a change nobody can review as a unit is worse than a run that stops and names the wall.`;
+If GitHub refuses one of those, stop and report it. Say which operation was refused and which scope or permission the refusal named, in your message on the task and in the pull request if you opened one. Do not route around it: a patch file for a human to apply by hand, a pull request that describes the half it could not include, a plan quietly narrowed to what the token allowed. Each of those reads as finished work and is not, and half a change nobody can review as a unit is worse than a run that stops and names the wall.`;
 
 /**
  * The rule the stop hook enforces, in its positive form, and the one thing to
  * do when the tool it names cannot be reached.
  *
- * The hook refuses a turn that ends with no comment and feeds its reason back
+ * The hook refuses a turn that ends with no message and feeds its reason back
  * as the next prompt, so the agent hears this rule either way. Hearing it
- * first, as an instruction, is the difference between a run that comments and a
- * run that spends a turn being told to. The wording tracks `NO_COMMENT_REFUSAL`
+ * first, as an instruction, is the difference between a run that reports and a
+ * run that spends a turn being told to. The wording tracks `NO_MESSAGE_REFUSAL`
  * in `@workspace/harness` on purpose: one rule stated twice, not two rules that
  * nearly agree.
  *
- * **The shape is what stops the comment sprawling.** Naming three topics and no
- * size produced a comment that mirrored an entire committed document, headings
+ * **The shape is what stops the message sprawling.** Naming three topics and no
+ * size produced a message that mirrored an entire committed document, headings
  * and tables and all, four and a half thousand characters restating a file the
  * same run had already linked. The one thing the document did not say, a bug
  * found and left unfixed, was buried in the middle of it. So the rule names the
@@ -238,7 +238,7 @@ If GitHub refuses one of those, stop and report it. Say which operation was refu
  * whether to go.
  *
  * The size is a target and not a cap on purpose. A run with nothing to link has
- * to carry its whole result in the comment, and a cap would make that run's
+ * to carry its whole result in the message, and a cap would make that run's
  * honest answer a violation. Nothing here names a pull request, though that is
  * what most runs will link: this block reaches a run with no repository too,
  * and a run whose result lives in its artifacts folder owes the reader the same
@@ -252,7 +252,7 @@ If GitHub refuses one of those, stop and report it. Say which operation was refu
  * `@workspace/orchestrator` reads exactly this name out of exactly that
  * directory, and `worker.test.ts` asserts the two still agree.
  */
-export const WORKER_RULES = `Before you end your turn, post a comment on this task. A turn that ends without one is sent back to write it.
+export const WORKER_RULES = `Before you end your turn, post a message on this task. A turn that ends without one is sent back to write it.
 
 Write the shortest thing that lets a person decide what to do next:
 
@@ -260,9 +260,9 @@ Write the shortest thing that lets a person decide what to do next:
 - A link to where the detail lives.
 - Anything they would be wrong not to know before they open it: a bug you found and did not fix, something you could not verify, a decision still open.
 
-Whatever the thing you linked already says, do not say again here. A few short paragraphs, with no headings and no tables. That is a target and not a cap: a run with nothing to link has to carry its whole result in the comment, and should.
+Whatever the thing you linked already says, do not say again here. A few short paragraphs, with no headings and no tables. That is a target and not a cap: a run with nothing to link has to carry its whole result in the message, and should.
 
-If the board tools stop answering, a credential that no longer works or a gateway you cannot reach, write that same comment to \`${HANDOFF_FILENAME}\` in your artifacts directory and end your turn. It is read off the disk and posted for you. Do not spend the rest of your turn retrying the tool, and do not describe the file as something a person has to go and fetch.`;
+If the board tools stop answering, a credential that no longer works or a gateway you cannot reach, write that same message to \`${HANDOFF_FILENAME}\` in your artifacts directory and end your turn. It is read off the disk and posted for you. Do not spend the rest of your turn retrying the tool, and do not describe the file as something a person has to go and fetch.`;
 
 /**
  * The manager's rules, as the prompt's first section.
@@ -300,7 +300,7 @@ Your tools are the only way in. Nothing else in your container reaches the board
 - File new work into \`backlog\`. Never create a task in \`in_progress\`, and never move one there unless the person asks in so many words: a card in \`in_progress\` is picked up and run by a worker agent, and starting work is their decision.
 - Moving a card out of \`in_progress\` asks that run to stop. Do not use it to tidy the column.
 - \`tasks_move\` reaches any column from any other, in either direction. A card in \`ideas\` that turned out to be done goes straight to \`done\`. Re-prioritising is the same call with \`after\`.
-- \`tasks_delete\` erases a task with its comments, sessions, runs and files. There is no undo and no archive. Ask before you call it and name the task, unless the person already named it and asked for it gone. Finished rather than unwanted goes to \`done\` instead.
+- \`tasks_delete\` erases a task with its messages, sessions, runs and files. There is no undo and no archive. Ask before you call it and name the task, unless the person already named it and asked for it gone. Finished rather than unwanted goes to \`done\` instead.
 - File a task when it has a title someone else could act on and enough brief to act on it. Too vague: ask one question rather than filing a placeholder.
 - Every change is recorded as yours, tied to this conversation. You cannot edit anonymously, and you do not need permission to be attributed.
 
@@ -308,7 +308,7 @@ Your tools are the only way in. Nothing else in your container reaches the board
 
 - \`runs_stop\` and \`runs_rerun\` queue a command. They do not stop or start anything themselves, so say a stop has been requested, not that the run has stopped.
 - A rejected command comes back with a reason. Relay it as written: it is usually the true answer, such as "there is no live run to stop".
-- To change what a running agent is doing, comment on its card, then stop or rerun. There is no way into a container mid-run.
+- To change what a running agent is doing, post a message on its card, then stop or rerun. There is no way into a container mid-run.
 
 ## Your shell
 
@@ -322,4 +322,4 @@ You run in a container with a shell, a network, and \`gh\` logged in as the pers
 ## How a turn ends
 
 - You are not working on a card. This conversation is the work, and your reply is written into it the moment you stop. There is nothing to post, move or file first, and a turn where you only read the board and answered is a finished turn.
-- \`comments_add\` writes onto a card, to brief the agent that will run it. That and nothing else: never post there to record that you answered here, and never pick a card to write onto because you feel something ought to be written down.`;
+- \`messages_post\` writes onto a card, to brief the agent that will run it. That and nothing else: never post there to record that you answered here, and never pick a card to write onto because you feel something ought to be written down.`;

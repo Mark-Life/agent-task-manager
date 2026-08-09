@@ -6,14 +6,14 @@
  * to, the checkout it was given, and the standing rules about where output
  * goes. A resumed session already holds every one of those in its own history,
  * so it is given exactly what has arrived since it last read the thread — every
- * comment past its watermark, each labelled with who wrote it. That single
+ * message past its watermark, each labelled with who wrote it. That single
  * mechanism covers the whole review loop with no special-casing: the
  * implementation session comes back and reads "the review session found X" and
  * "you said Y", and it works unchanged for two sessions or ten.
  *
  * A fresh session takes the same path with a null watermark, which reads as
  * "has seen nothing" and yields the thread from the beginning. That is
- * deliberate: a human who files a task, adds "also do X" as a comment, and
+ * deliberate: a human who files a task, adds "also do X" as a message, and
  * drags the card into *in progress* has said something the first run must hear,
  * and one code path is what guarantees it does.
  *
@@ -24,10 +24,10 @@
 
 import type {
   AgentSessionId,
-  Comment,
-  CommentKind,
   Project,
   Task,
+  TaskMessage,
+  TaskMessageKind,
 } from "@workspace/domain";
 import {
   conversation,
@@ -55,7 +55,7 @@ import {
 const SESSION_LABEL_CHARS = 8;
 
 /**
- * What each kind of comment is, appended to its author's label. `message` says
+ * What each kind of message is, appended to its author's label. `message` says
  * nothing extra because it is the ordinary case; the other two are worth
  * flagging, since one is a machine's summary of a turn and the other is an
  * epitaph the orchestrator wrote for a run that died.
@@ -64,17 +64,17 @@ const KIND_NOTE = {
   fallback: " (auto-appended final message)",
   message: "",
   run_error: " (that run crashed)",
-} as const satisfies Record<CommentKind, string>;
+} as const satisfies Record<TaskMessageKind, string>;
 
-/** A comment, and the session reading it — which is what "you" means. */
-export interface CommentLabelInput {
-  readonly comment: Comment;
+/** A message, and the session reading it — which is what "you" means. */
+export interface MessageLabelInput {
+  readonly message: TaskMessage;
   /** The session this run is, so its own earlier output reads as its own. */
   readonly readerSessionId: AgentSessionId;
 }
 
 /**
- * Who wrote a comment, in the words the reader needs.
+ * Who wrote a message, in the words the reader needs.
  *
  * Attribution is the thing that makes several sessions on one task readable: an
  * agent that cannot tell "the human asked for X" from "another session claims
@@ -82,41 +82,41 @@ export interface CommentLabelInput {
  * earlier words are labelled as its own, and any other session carries a short
  * id so two of them do not blur into one.
  */
-export const commentLabelOf = ({
-  comment,
+export const messageLabelOf = ({
+  message,
   readerSessionId,
-}: CommentLabelInput) => {
-  const note = KIND_NOTE[comment.kind];
-  if (comment.authorKind === "human") {
+}: MessageLabelInput) => {
+  const note = KIND_NOTE[message.kind];
+  if (message.authorKind === "human") {
     return `the human said${note}:`;
   }
-  if (comment.authorKind === "manager") {
+  if (message.authorKind === "manager") {
     return `the manager agent said${note}:`;
   }
-  if (comment.authorKind === "orchestrator") {
+  if (message.authorKind === "orchestrator") {
     return `the orchestrator said${note}:`;
   }
-  if (comment.agentSessionId === readerSessionId) {
+  if (message.agentSessionId === readerSessionId) {
     return `you said${note}:`;
   }
   const named =
-    comment.agentSessionId === null
+    message.agentSessionId === null
       ? "another session on this task"
-      : `another session on this task (${comment.agentSessionId.slice(0, SESSION_LABEL_CHARS)})`;
+      : `another session on this task (${message.agentSessionId.slice(0, SESSION_LABEL_CHARS)})`;
   return `${named} said${note}:`;
 };
 
-/** One comment as the agent reads it: who said it, then what they said. */
-export const renderComment = (input: CommentLabelInput) =>
-  speech({ body: input.comment.body, label: commentLabelOf(input) });
+/** One message as the agent reads it: who said it, then what they said. */
+export const renderMessage = (input: MessageLabelInput) =>
+  speech({ body: input.message.body, label: messageLabelOf(input) });
 
 /** The thread, oldest first, blank line between speakers. */
 const renderThread = (
-  comments: readonly Comment[],
+  messages: readonly TaskMessage[],
   readerSessionId: AgentSessionId
 ) =>
   conversation(
-    comments.map((comment) => renderComment({ comment, readerSessionId }))
+    messages.map((message) => renderMessage({ message, readerSessionId }))
   );
 
 /** The project a task belongs to, as one line of context. */
@@ -129,13 +129,13 @@ const projectSection = (project: WorkerPromptInput["project"]) => {
     : `${project.name} — ${project.description}`;
 };
 
-/** What the assembly needs: the task, where it runs, and the comments it has not seen. */
+/** What the assembly needs: the task, where it runs, and the messages it has not seen. */
 export interface WorkerPromptInput {
   /**
-   * Every comment after the session's watermark, oldest first. Empty is an
+   * Every message after the session's watermark, oldest first. Empty is an
    * ordinary case — a rerun with nothing added — and reads as such.
    */
-  readonly comments: readonly Comment[];
+  readonly messages: readonly TaskMessage[];
   readonly mode: PromptMode;
   readonly placement: RunPlacement;
   readonly project: Pick<Project, "description" | "name"> | null;
@@ -165,23 +165,23 @@ const freshPrompt = (input: WorkerPromptInput) => {
     SHARED_RULES,
     section(
       "The conversation on this task so far",
-      renderThread(input.comments, input.readerSessionId)
+      renderThread(input.messages, input.readerSessionId)
     ),
     section("Before you finish", WORKER_RULES),
   ]);
 };
 
 /**
- * What a session that has run before gets: the new comments and nothing else.
+ * What a session that has run before gets: the new messages and nothing else.
  *
  * Nothing else is the point. The task, its brief, the paths and the rules are
  * all in this session's own history, and restating them is how a resumed run
  * ends up re-reading its instructions as though they had changed. The one rule
- * repeated is the comment one, because it is enforced per turn and the enforcer
+ * repeated is the message one, because it is enforced per turn and the enforcer
  * has no memory of this session either.
  */
 const resumedPrompt = (input: WorkerPromptInput) => {
-  const thread = renderThread(input.comments, input.readerSessionId);
+  const thread = renderThread(input.messages, input.readerSessionId);
   return joinSections([
     `# ${input.task.title} — continued`,
     "You have worked on this task before and your session history is intact. What follows is everything added to the task's conversation since you last read it.",

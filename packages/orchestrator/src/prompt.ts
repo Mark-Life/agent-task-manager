@@ -9,14 +9,14 @@
  * Both halves of {@link buildRunPrompt} are one operation because they are one
  * claim: these rows have been handed over. The advance happens at prompt-build
  * time rather than after the run, and that is what stops a resumed run from
- * reading its own auto-appended fallback comment back as new input — the
+ * reading its own auto-appended fallback message back as new input — the
  * session's own previous output is in the conversation like anything else, and
  * a watermark that only moved on rows written by other people would hand the
  * agent its own words as instructions. It advances to the last row actually
  * rendered rather than to the newest row, so a message that lands between the
  * read and the write stays unread instead of being skipped forever.
  *
- * **One watermark, two conversations.** A worker reads comments on its task and
+ * **One watermark, two conversations.** A worker reads messages on its task and
  * a manager reads messages in its thread; both are "what has arrived since this
  * session last looked", answered over the same `(createdAt, id)` tuple by the
  * same `unreadOf`. The branch below is the whole of the difference, and it is
@@ -32,11 +32,11 @@
 import {
   AgentSessionRepo,
   ChatMessageRepo,
-  CommentRepo,
+  TaskMessageRepo,
   withActor,
 } from "@workspace/db";
 import type { AgentSession } from "@workspace/domain";
-import { ChatMessageId, CommentId } from "@workspace/domain";
+import { ChatMessageId, TaskMessageId } from "@workspace/domain";
 import {
   buildManagerPrompt,
   buildWorkerPrompt,
@@ -130,7 +130,7 @@ interface PromptRead {
   readonly rowsRead: number;
   readonly watermark: {
     readonly createdAt: Watermark["createdAt"];
-    readonly id: ChatMessageId | CommentId;
+    readonly id: ChatMessageId | TaskMessageId;
   } | null;
 }
 
@@ -156,16 +156,16 @@ export const buildRunPrompt = Effect.fn("Prompt.build")(function* (
   const failed = (cause: unknown) => new PromptBuildFailed({ cause, subject });
 
   const sessionRepo = yield* AgentSessionRepo;
-  const comments = yield* CommentRepo;
-  const messages = yield* ChatMessageRepo;
+  const taskMessages = yield* TaskMessageRepo;
+  const chatMessages = yield* ChatMessageRepo;
 
   const watermarkRead = watermarkOf(context.session.session);
 
   /** Everything said on the task since this session last read it. */
-  const fromComments = Effect.fnUntraced(function* (
+  const fromTaskThread = Effect.fnUntraced(function* (
     attachment: Extract<typeof attached, { role: "worker" }>
   ) {
-    const returned = yield* comments
+    const returned = yield* taskMessages
       .since({
         taskId: attachment.task.id,
         watermark:
@@ -173,7 +173,7 @@ export const buildRunPrompt = Effect.fn("Prompt.build")(function* (
             ? null
             : {
                 createdAt: watermarkRead.createdAt,
-                id: CommentId.make(watermarkRead.id),
+                id: TaskMessageId.make(watermarkRead.id),
               },
         workspaceId,
       })
@@ -181,7 +181,7 @@ export const buildRunPrompt = Effect.fn("Prompt.build")(function* (
     const unread = unreadOf({ rows: returned, watermark: watermarkRead });
     return {
       prompt: buildWorkerPrompt({
-        comments: unread,
+        messages: unread,
         mode: context.session.mode,
         placement: request.placement,
         project: context.project,
@@ -195,10 +195,10 @@ export const buildRunPrompt = Effect.fn("Prompt.build")(function* (
   });
 
   /** Everything said in the thread since this session last read it. */
-  const fromMessages = Effect.fnUntraced(function* (
+  const fromChatThread = Effect.fnUntraced(function* (
     attachment: Extract<typeof attached, { role: "manager" }>
   ) {
-    const returned = yield* messages
+    const returned = yield* chatMessages
       .since({
         threadId: attachment.thread.id,
         watermark:
@@ -224,8 +224,8 @@ export const buildRunPrompt = Effect.fn("Prompt.build")(function* (
   });
 
   const built = yield* attached.role === "worker"
-    ? fromComments(attached)
-    : fromMessages(attached);
+    ? fromTaskThread(attached)
+    : fromChatThread(attached);
 
   if (built.watermark !== null) {
     yield* sessionRepo

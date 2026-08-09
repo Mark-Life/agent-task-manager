@@ -50,5 +50,5 @@ export {
 } from "./rules";
 export type { UnreadInput, Watermark } from "./unread";
 export { isAfterWatermark, nextWatermarkOf, unreadOf } from "./unread";
-export type { CommentLabelInput, WorkerPromptInput } from "./worker";
-export { buildWorkerPrompt, commentLabelOf, renderComment } from "./worker";
+export type { MessageLabelInput, WorkerPromptInput } from "./worker";
+export { buildWorkerPrompt, messageLabelOf, renderMessage } from "./worker";

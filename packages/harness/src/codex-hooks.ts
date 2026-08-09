@@ -38,7 +38,7 @@ export const CODEX_HOOKS_FILE = "hooks.json";
 
 /**
  * The event the hook is registered on. Only `Stop`, matching the Claude side:
- * `SubagentStop` would hold a delegated subagent open over a comment the parent
+ * `SubagentStop` would hold a delegated subagent open over a message the parent
  * turn has not had a chance to post yet.
  */
 const STOP_HOOK_EVENT = "Stop";
@@ -62,7 +62,7 @@ export interface CodexHooksFile {
 }
 
 /** What the file says about itself, wherever Codex lists its hooks. */
-const HOOKS_DESCRIPTION = "Agent task manager: a run must post a comment.";
+const HOOKS_DESCRIPTION = "Agent task manager: a run must post a message.";
 
 /**
  * The hook definition for a run, or null when the environment names no

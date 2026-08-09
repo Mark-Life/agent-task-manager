@@ -135,7 +135,7 @@ export const restoreBoards = (
 /**
  * Refresh what a write to one task can have changed: every board, every flat
  * list, and that task's own detail. The detail is invalidated exactly, because
- * its key is the prefix of the task's comments, runs, sessions and artifacts and
+ * its key is the prefix of the task's messages, runs, sessions and artifacts and
  * none of those are affected by where the card sits.
  */
 export const settleTask = (queryClient: QueryClient, taskId: TaskId) =>

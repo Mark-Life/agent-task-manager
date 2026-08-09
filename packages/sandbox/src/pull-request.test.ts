@@ -178,7 +178,7 @@ describe("pullRequestForBranch", () => {
 
   /**
    * The three ways GitHub can refuse. Each leaves the task's field null and the
-   * run closing normally — the link is in the run's comment either way.
+   * run closing normally — the link is in the run's message either way.
    */
   test("answers null when GitHub refuses, answers oddly, or is unreachable", async () => {
     const refused = servePulls(

@@ -218,8 +218,8 @@ export type RunTerminusKind = (typeof RUN_TERMINUS_KINDS)[number];
  * The economics are nullable throughout and stay null on a degraded ending: an
  * interrupted run did not cost $0.00 and did not take 0ms, and a fabricated
  * zero is a number someone later averages. `finalText` is the last assistant
- * message and is what the comment fallback appends when the run posted no
- * comment of its own; it is empty rather than null when the run said nothing,
+ * message and is what the message fallback appends when the run posted no
+ * message of its own; it is empty rather than null when the run said nothing,
  * because "said nothing" is a length, not an absence.
  */
 interface RunTerminusBase {
@@ -253,7 +253,7 @@ export interface RunFailed extends RunTerminusBase {
 /**
  * The process went away without a terminus. Its own ending rather than a
  * failure, because the two are answered differently: a failure has a reason to
- * put in the crash comment, and this one has only a count of how far the stream
+ * put in the crash message, and this one has only a count of how far the stream
  * got before it stopped — which is what distinguishes a container that never
  * started from one that died halfway.
  */

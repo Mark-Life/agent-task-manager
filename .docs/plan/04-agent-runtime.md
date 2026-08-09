@@ -63,7 +63,7 @@ behaviour there, the model is wrong, not the check.
 
 | | Worker | Manager |
 | --- | --- | --- |
-| System prompt | task brief, acceptance, unread comments | thread history, unread messages |
+| System prompt | task brief, acceptance, unread messages | thread history, unread messages |
 | Tool credential | actor `worker_run`, bound to one task id | actor `manager`, bound to the workspace |
 | Container image | repo images (`base` / `browser`) | no repo |
 | Attachment | `task_id` | `thread_id` |

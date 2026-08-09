@@ -48,7 +48,7 @@ import {
   showCompose,
 } from "./compose";
 import type { BotContext } from "./context";
-import type { PendingComments } from "./dispatch";
+import type { PendingMessages } from "./dispatch";
 import { bold, code, italic } from "./format";
 import { escapeHtml, formatRelativeTime } from "./helpers";
 import { type KeyboardRefresh, mainKeyboard } from "./keyboard";
@@ -159,8 +159,8 @@ export interface CommandOptions {
   readonly compose: ComposeBuffers;
   /** Which chats still hold a menu from before this process started. */
   readonly keyboards: KeyboardRefresh;
-  /** The armed comments, which opening compose spends. */
-  readonly pending: PendingComments;
+  /** The armed messages, which opening compose spends. */
+  readonly pending: PendingMessages;
 }
 
 /** What the command handlers need from the layer stack. */
@@ -379,7 +379,7 @@ export const registerCommands = Effect.fnUntraced(function* (
         if (chatId === undefined) {
           return;
         }
-        // An armed *Comment* would otherwise consume the first message of the
+        // An armed *Message* would otherwise consume the first message of the
         // batch, or worse, the one sent after it was released.
         pending.take(chatId);
 

@@ -4,7 +4,7 @@
  * Proves the harness does the four things the orchestrator is allowed to assume:
  * a prompt handed to a provider comes back as normalized events, the provider
  * writes its transcript where the reader looks for it, the stop hook refuses a
- * turn that has posted no comment, and the invocation leaves exactly one
+ * turn that has posted no message, and the invocation leaves exactly one
  * `atm.turn` row on disk where the host can find it.
  *
  * It is a script rather than a test because three of those four claims are about
@@ -61,12 +61,12 @@ import {
   AGENT_HOME_DIR_ENV_VAR,
   type AgentEvent,
   agentHomeLoginHint,
-  COMMENT_MARKER_ENV_VAR,
-  commentMarkerPathOf,
   defaultAgentHomeDirOf,
   findTranscript,
   hostRunLayout,
-  NO_COMMENT_REFUSAL,
+  MESSAGE_MARKER_ENV_VAR,
+  messageMarkerPathOf,
+  NO_MESSAGE_REFUSAL,
   ProviderRegistry,
   providerRegistryLayer,
   readTranscript,
@@ -106,7 +106,7 @@ const FINAL_MESSAGE_CHARS = 160;
  * transcript is how a forced second turn is told from a talkative one.
  */
 const ANCHOR_CHARS = 48;
-const REFUSAL_ANCHOR = NO_COMMENT_REFUSAL.slice(0, ANCHOR_CHARS);
+const REFUSAL_ANCHOR = NO_MESSAGE_REFUSAL.slice(0, ANCHOR_CHARS);
 
 /** Width of the provider column in the capability table. */
 const PROVIDER_COLUMN = 6;
@@ -175,7 +175,7 @@ const askStopHook = (input: {
 }) =>
   Effect.promise(async () => {
     const child = spawn(["bun", STOP_HOOK_SCRIPT], {
-      env: { ...process.env, [COMMENT_MARKER_ENV_VAR]: input.markerPath },
+      env: { ...process.env, [MESSAGE_MARKER_ENV_VAR]: input.markerPath },
       stdin: new TextEncoder().encode(JSON.stringify(input.payload)),
       stdout: "pipe",
     });
@@ -284,7 +284,7 @@ const streamTurn = (input: {
     const stream = harness.run({
       agentHomeDir: input.agentHomeDir,
       effort: null,
-      env: { [COMMENT_MARKER_ENV_VAR]: input.markerPath },
+      env: { [MESSAGE_MARKER_ENV_VAR]: input.markerPath },
       mcpServers: null,
       model: null,
       prompt: PROMPT,
@@ -376,7 +376,7 @@ const checkLiveTurn = Effect.fnUntraced(function* (input: LiveTurnInput) {
     `      ${
       forced
         ? "the stop hook refused an ending and the model was sent back for another turn"
-        : "no refusal in the transcript: this provider registered no stop hook, or the run posted a comment"
+        : "no refusal in the transcript: this provider registered no stop hook, or the run posted a message"
     }`
   );
 });
@@ -496,7 +496,7 @@ const checkStopHook = Effect.fnUntraced(function* (input: {
   yield* check({
     detail: `the hook answered ${JSON.stringify(refused)}`,
     ok: refused.decision === "block" && (refused.reason?.length ?? 0) > 0,
-    step: "the stop hook refuses a turn that has posted no comment",
+    step: "the stop hook refuses a turn that has posted no message",
   });
 
   const spent = yield* askStopHook({
@@ -517,7 +517,7 @@ const checkStopHook = Effect.fnUntraced(function* (input: {
   yield* check({
     detail: `the hook answered ${JSON.stringify(allowed)}`,
     ok: allowed.decision === undefined,
-    step: "a run that posted a comment ends when it wants to",
+    step: "a run that posted a message ends when it wants to",
   });
   rmSync(markerPath, { force: true });
 });
@@ -566,7 +566,7 @@ const harnessCheck = Effect.gen(function* () {
   const runId = newRunId();
   const layout = hostRunLayout({ dataRoot, runId });
   const workspaceDir = join(layout.runDir, "workspace");
-  const markerPath = commentMarkerPathOf(layout);
+  const markerPath = messageMarkerPathOf(layout);
 
   mkdirSync(workspaceDir, { recursive: true });
   writeFileSync(

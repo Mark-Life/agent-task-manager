@@ -14,12 +14,12 @@ than the wrong one. One invocation leaves exactly one `atm.turn` row in the ledg
 exit path including an interrupt.
 
 A stop hook (`packages/harness/scripts/stop-hook.ts`) refuses a turn that tries to end without
-having posted a comment, capped at one retry; the refusal is fed back to the model as its next
-prompt. The sandbox names the executable through `ATM_STOP_HOOK_COMMAND` and the run's comment
-marker through `ATM_COMMENT_MARKER`.
+having posted a task message, capped at one retry; the refusal is fed back to the model as its next
+prompt. The sandbox names the executable through `ATM_STOP_HOOK_COMMAND` and the run's message
+marker through `ATM_MESSAGE_MARKER`.
 
 **It is only registered on a turn that has a task.** A manager turn answers in a conversation
-and has no card to comment on, so the entrypoint asks `commentRuleApplies(spec.identity)` before
+and has no card to post on, so the entrypoint asks `messageRuleApplies(spec.identity)` before
 it names the command — and clears the variable when the answer is no, since the image may carry
 one. A manager handed this hook is refused by a rule about a card it does not have, and spends
 the turn it was given telling the person so.

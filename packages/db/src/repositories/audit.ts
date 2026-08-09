@@ -465,9 +465,9 @@ const transaction =
  *
  * The three chat tables are here for a different reason: a conversation is not
  * board state. The audit log records what happened to a project, a task, a
- * comment, a session, a run or an artifact, and a chat only ever causes those
- * through the gateway — where the manager's actor carries the thread id, so the
- * conversation is already named on the row it caused. Auditing the conversation
+ * task message, a session, a run or an artifact, and a chat only ever causes
+ * those through the gateway — where the manager's actor carries the thread id,
+ * so the conversation is already named on the row it caused. Auditing the conversation
  * as well would double every message with a row saying a message was written.
  */
 export type UnauditedTable =

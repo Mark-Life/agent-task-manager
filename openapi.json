@@ -1692,12 +1692,12 @@
         }
       }
     },
-    "/tasks/{taskId}/comments": {
+    "/tasks/{taskId}/messages": {
       "get": {
         "tags": [
-          "comments"
+          "messages"
         ],
-        "operationId": "comments.list",
+        "operationId": "messages.list",
         "parameters": [
           {
             "name": "taskId",
@@ -1733,7 +1733,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Comment"
+                    "$ref": "#/components/schemas/TaskMessage"
                   }
                 }
               }
@@ -1784,9 +1784,9 @@
       },
       "post": {
         "tags": [
-          "comments"
+          "messages"
         ],
-        "operationId": "comments.append",
+        "operationId": "messages.post",
         "parameters": [
           {
             "name": "taskId",
@@ -1816,11 +1816,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Comment",
+            "description": "TaskMessage",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Comment"
+                  "$ref": "#/components/schemas/TaskMessage"
                 }
               }
             }
@@ -1876,12 +1876,12 @@
             }
           }
         },
-        "summary": "Post a comment on a task",
+        "summary": "Post a message on a task",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CommentAppend"
+                "$ref": "#/components/schemas/TaskMessagePost"
               }
             }
           },
@@ -5553,7 +5553,7 @@
         ],
         "additionalProperties": false
       },
-      "Comment": {
+      "TaskMessage": {
         "type": "object",
         "properties": {
           "createdAt": {
@@ -5671,7 +5671,7 @@
         ],
         "additionalProperties": false
       },
-      "CommentAppend": {
+      "TaskMessagePost": {
         "type": "object",
         "properties": {
           "body": {
@@ -7773,6 +7773,9 @@
               "secondary"
             ]
           },
+          "label": {
+            "type": "string"
+          },
           "remainingPercent": {
             "anyOf": [
               {
@@ -7797,9 +7800,6 @@
                 "type": "null"
               }
             ]
-          },
-          "label": {
-            "type": "string"
           },
           "usedPercent": {
             "anyOf": [
@@ -7829,9 +7829,9 @@
         },
         "required": [
           "kind",
+          "label",
           "remainingPercent",
           "resetsAt",
-          "label",
           "usedPercent",
           "windowSeconds"
         ],
@@ -7982,8 +7982,8 @@
       "description": "Tasks: the board, and the moves a card can make on it."
     },
     {
-      "name": "comments",
-      "description": "Comments: the task's conversation, across every session on it."
+      "name": "messages",
+      "description": "Task messages: the task's conversation, across every session on it. Renamed from `comments` on 2026-08-08 — a clean break, with no alias on the old paths or operation ids."
     },
     {
       "name": "sessions",

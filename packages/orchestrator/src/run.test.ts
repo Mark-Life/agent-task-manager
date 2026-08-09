@@ -11,13 +11,13 @@
  * shape a real turn produces.
  *
  * One test per claim: a clean run lands the task in *review* with a run row and
- * a timeline; a failing run posts the crash comment, fails the session, and
+ * a timeline; a failing run posts the crash message, fails the session, and
  * still lands in *review*; a stream that stops without a terminus is treated as
  * a failure in its own right; a provider that dies mid-stream is another; and
- * the fallback comment appears only when the run posted none of its own.
+ * the fallback message appears only when the run posted none of its own.
  *
  * Rows are cleaned up by deleting the task, which cascades its sessions, runs,
- * events and comments. The audit entries stay, because that table is
+ * events and messages. The audit entries stay, because that table is
  * append-only by design and the whole claim of the store is that its trail
  * survives.
  */
@@ -41,10 +41,10 @@ import { Unauthorized } from "@workspace/api";
 import {
   AgentSessionRepo,
   Auth,
-  CommentRepo,
   RunEventRepo,
   RunRepo,
   storeLayer,
+  TaskMessageRepo,
   TaskRepo,
   WorkspaceRepo,
   withActor,
@@ -62,9 +62,9 @@ import {
 import {
   type AgentEvent,
   type AgentProvider,
-  commentMarkerPathOf,
   hostRunLayout,
   makeProviderRegistry,
+  messageMarkerPathOf,
   ProviderCrashed,
   ProviderRegistry,
   type ProviderTable,
@@ -346,7 +346,7 @@ const runOnce = (input: {
       timeoutMs: input.timeoutMs ?? TURN_TIMEOUT_MS,
     });
 
-    const comments = yield* CommentRepo;
+    const messages = yield* TaskMessageRepo;
     const runEvents = yield* RunEventRepo;
     const runs = yield* RunRepo;
     const sessions = yield* AgentSessionRepo;
@@ -354,12 +354,12 @@ const runOnce = (input: {
 
     const { id: taskId, workspaceId } = task;
     return {
-      comments: yield* comments.forTask({ taskId, workspaceId }),
       context: outcome.context,
       events: yield* runEvents.listByRun({
         runId: outcome.context.runId,
         workspaceId,
       }),
+      messages: yield* messages.forTask({ taskId, workspaceId }),
       report: outcome.report,
       run: yield* runs.byId({ id: outcome.context.runId, workspaceId }),
       session: yield* sessions.byId({
@@ -398,15 +398,15 @@ const assistant = (text: string): AgentEvent => ({
   text,
 });
 
-const commentCall: AgentEvent = {
+const messageCall: AgentEvent = {
   callId: "call-1",
   inputChars: 12,
   kind: "tool_call",
-  summary: "post a comment",
-  toolName: "atm_add_comment",
+  summary: "post a message",
+  toolName: "atm_post_message",
 };
 
-const commentResult: AgentEvent = {
+const messageResult: AgentEvent = {
   callId: "call-1",
   kind: "tool_result",
   ok: true,
@@ -436,15 +436,15 @@ const EXPIRED_TOKEN_TEXT = describeFailure(
   new Unauthorized({ reason: "token_expired" })
 );
 
-const expiredCommentCall: AgentEvent = {
+const expiredMessageCall: AgentEvent = {
   callId: "call-9",
   inputChars: 800,
   kind: "tool_call",
-  summary: "post a comment",
-  toolName: `${AGENT_TOOL_PREFIX}comments_add`,
+  summary: "post a message",
+  toolName: `${AGENT_TOOL_PREFIX}messages_post`,
 };
 
-const expiredCommentResult: AgentEvent = {
+const expiredMessageResult: AgentEvent = {
   callId: "call-9",
   kind: "tool_result",
   ok: false,
@@ -465,12 +465,12 @@ const strandedResult: AgentEvent = {
   kind: "result",
   outcome: "done",
   providerSessionId: "provider-session-1",
-  text: "I cannot post the task comment — the run's atm MCP token expired.",
+  text: "I cannot post the task message — the run's atm MCP token expired.",
   totalTokens: 900,
   turns: 3,
 };
 
-/** The comment the worker could not post, written where it could write. */
+/** The message the worker could not post, written where it could write. */
 const HANDOFF_BODY =
   "## What I did\n\nRewrote the lease handling and opened the pull request.";
 
@@ -572,8 +572,8 @@ test("a failing run posts the error, fails the session, and still lands in revie
   expect(seen.session.status).toBe("failed");
   expect(seen.session.errorMessage).toContain("provider died");
 
-  const errors = seen.comments.filter(
-    (comment) => comment.kind === "run_error"
+  const errors = seen.messages.filter(
+    (message) => message.kind === "run_error"
   );
   expect(errors).toHaveLength(1);
   expect(errors[0]?.authorKind).toBe("orchestrator");
@@ -597,7 +597,7 @@ test("a stream that stops without a terminus is a failure of its own", async () 
   expect(seen.run.errorClass).toBe("NoTerminalEvent");
   expect(seen.session.status).toBe("failed");
   expect(
-    seen.comments.filter((comment) => comment.kind === "run_error")
+    seen.messages.filter((message) => message.kind === "run_error")
   ).toHaveLength(1);
 });
 
@@ -620,7 +620,7 @@ test("a turn that outlives its cap is closed as a timeout", async () => {
   // thread: a run that hung after doing work did the work.
   expect(seen.events).toHaveLength(2);
   expect(
-    seen.comments.filter((comment) => comment.kind === "fallback")
+    seen.messages.filter((message) => message.kind === "fallback")
   ).toHaveLength(1);
 });
 
@@ -642,15 +642,15 @@ test("a provider that dies mid-stream closes the run as failed", async () => {
   expect(seen.session.status).toBe("failed");
 });
 
-test("the fallback comment appears only when the run posted none", async () => {
+test("the fallback message appears only when the run posted none", async () => {
   const silent = await provide(
     runOnce({
       events: [sessionInit, assistant("working"), doneResult],
       title: "silent run",
     })
   );
-  const fallbacks = silent.comments.filter(
-    (comment) => comment.kind === "fallback"
+  const fallbacks = silent.messages.filter(
+    (message) => message.kind === "fallback"
   );
   expect(fallbacks).toHaveLength(1);
   expect(fallbacks[0]?.body).toBe("I opened the pull request.");
@@ -659,18 +659,18 @@ test("the fallback comment appears only when the run posted none", async () => {
 
   const spoke = await provide(
     runOnce({
-      events: [sessionInit, commentCall, commentResult, doneResult],
+      events: [sessionInit, messageCall, messageResult, doneResult],
       title: "talkative run",
     })
   );
   expect(
-    spoke.comments.filter((comment) => comment.kind === "fallback")
+    spoke.messages.filter((message) => message.kind === "fallback")
   ).toHaveLength(0);
-  expect(spoke.report?.commentPosted).toBe(true);
+  expect(spoke.report?.messagePosted).toBe(true);
   // The marker the stop hook reads, created by the loop on the tool result.
   expect(
     existsSync(
-      commentMarkerPathOf(
+      messageMarkerPathOf(
         hostRunLayout({ dataRoot, runId: spoke.context.runId })
       )
     )
@@ -683,8 +683,8 @@ test("a run that lost the board ends visibly failed, with the reason on the card
       events: [
         sessionInit,
         assistant("writing it up"),
-        expiredCommentCall,
-        expiredCommentResult,
+        expiredMessageCall,
+        expiredMessageResult,
         strandedResult,
       ],
       title: "stranded run",
@@ -700,8 +700,8 @@ test("a run that lost the board ends visibly failed, with the reason on the card
   expect(seen.run.errorClass).toBe(BOARD_ACCESS_ERROR_CLASS);
   expect(seen.session.status).toBe("failed");
 
-  const errors = seen.comments.filter(
-    (comment) => comment.kind === "run_error"
+  const errors = seen.messages.filter(
+    (message) => message.kind === "run_error"
   );
   expect(errors).toHaveLength(1);
   expect(errors[0]?.authorKind).toBe("orchestrator");
@@ -718,8 +718,8 @@ test("the handoff a stranded run left on disk is attached without anyone copying
     runOnce({
       events: [
         sessionInit,
-        expiredCommentCall,
-        expiredCommentResult,
+        expiredMessageCall,
+        expiredMessageResult,
         strandedResult,
       ],
       onSeeded: writeHandoff,
@@ -727,8 +727,8 @@ test("the handoff a stranded run left on disk is attached without anyone copying
     })
   );
 
-  const fallbacks = seen.comments.filter(
-    (comment) => comment.kind === "fallback"
+  const fallbacks = seen.messages.filter(
+    (message) => message.kind === "fallback"
   );
   expect(fallbacks).toHaveLength(1);
   expect(fallbacks[0]?.body).toContain(HANDOFF_BODY);
@@ -741,7 +741,7 @@ test("the handoff a stranded run left on disk is attached without anyone copying
 
   // The handoff wins over the final message, which on this path is the model
   // narrating the failure rather than reporting the work.
-  expect(fallbacks[0]?.body).not.toContain("I cannot post the task comment");
+  expect(fallbacks[0]?.body).not.toContain("I cannot post the task message");
 });
 
 test("the handoff is left on disk for the artifact index to find", async () => {
@@ -749,8 +749,8 @@ test("the handoff is left on disk for the artifact index to find", async () => {
     runOnce({
       events: [
         sessionInit,
-        expiredCommentCall,
-        expiredCommentResult,
+        expiredMessageCall,
+        expiredMessageResult,
         strandedResult,
       ],
       onSeeded: writeHandoff,
@@ -758,7 +758,7 @@ test("the handoff is left on disk for the artifact index to find", async () => {
     })
   );
 
-  // Attaching it as a comment must not consume it: it is the run's only
+  // Attaching it as a message must not consume it: it is the run's only
   // surviving output, and the rescan indexes it as an artifact too.
   const path = join(
     taskArtifactsDirOf({ dataRoot, taskId: seen.task.id }),
@@ -770,7 +770,7 @@ test("the handoff is left on disk for the artifact index to find", async () => {
 test("a run that kept the board is untouched by any of it", async () => {
   const seen = await provide(
     runOnce({
-      events: [sessionInit, commentCall, commentResult, doneResult],
+      events: [sessionInit, messageCall, messageResult, doneResult],
       // A handoff from an earlier attempt, which this run does not need.
       onSeeded: writeHandoff,
       title: "healthy run with an old handoff",
@@ -780,10 +780,10 @@ test("a run that kept the board is untouched by any of it", async () => {
   expect(seen.terminus.kind).toBe("finished");
   expect(seen.run.outcome).toBe("done");
   expect(seen.run.errorClass).toBeNull();
-  // The run commented for itself, so nothing is attached on its behalf — a
+  // The run posted for itself, so nothing is attached on its behalf — a
   // stale file from a previous attempt must not become this run's report.
   expect(
-    seen.comments.filter((comment) => comment.kind === "fallback")
+    seen.messages.filter((message) => message.kind === "fallback")
   ).toHaveLength(0);
   expect(seen.report?.handoffAttached).toBe(false);
 });

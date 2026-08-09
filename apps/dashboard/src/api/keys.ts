@@ -30,7 +30,7 @@ type ThreadListQuery = Parameters<
  * Every cache key the app uses, in one place.
  *
  * The shape is deliberately hierarchical: everything a task owns sits under
- * `[TASKS, taskId, ...]`, so invalidating one task also refreshes its comments,
+ * `[TASKS, taskId, ...]`, so invalidating one task also refreshes its messages,
  * runs, sessions and artifacts, and invalidating `[TASKS]` refreshes the board
  * with it. Keys are `as const` tuples so a typo is a type error rather than a
  * query that silently never matches an invalidation.
@@ -42,12 +42,6 @@ export const keys = {
   /** The board, optionally narrowed to one project. */
   board: (projectId: ProjectId | null = null) =>
     [TASKS, "board", projectId] as const,
-
-  /** A task's conversation. */
-  comments: (taskId: TaskId) => [TASKS, taskId, "comments"] as const,
-
-  /** One page-independent list of a conversation's messages. */
-  messages: (threadId: ThreadId) => [THREADS, threadId, "messages"] as const,
 
   /** One project. */
   project: (projectId: ProjectId) => [PROJECTS, projectId] as const,
@@ -84,11 +78,18 @@ export const keys = {
   /** One task's detail, and the prefix of everything that task owns. */
   task: (taskId: TaskId) => [TASKS, taskId] as const,
 
+  /** A task's conversation. */
+  taskMessages: (taskId: TaskId) => [TASKS, taskId, "messages"] as const,
+
   /** The flat task list under whatever filters are in effect. */
   tasks: (query: TaskListQuery = {}) => [TASKS, "list", query] as const,
 
   /** One conversation with the manager. */
   thread: (threadId: ThreadId) => [THREADS, threadId] as const,
+
+  /** One page-independent list of a chat conversation's messages. */
+  threadMessages: (threadId: ThreadId) =>
+    [THREADS, threadId, "messages"] as const,
 
   /** The conversation list under whatever filters are in effect. */
   threads: (query: ThreadListQuery = {}) => [THREADS, "list", query] as const,

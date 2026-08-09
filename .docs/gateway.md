@@ -1,7 +1,7 @@
 # Gateway (`bun run gateway:start`, `bun run gateway:check`)
 
 **One typed contract, four consumers.** `packages/api` declares every operation — projects,
-tasks, comments, sessions, runs, run commands, artifacts, conversations, provider usage — as an Effect `HttpApi` and holds no
+tasks, task messages, sessions, runs, run commands, artifacts, conversations, provider usage — as an Effect `HttpApi` and holds no
 handlers at all. `apps/gateway` implements it group by group over the repositories, and
 `openapi.json` falls out of the same value. That derivation is the whole reason this is HttpApi
 rather than RPC: an external agent reaching the board through [Executor](https://executor.sh)
@@ -88,7 +88,7 @@ bun run gateway:check   # own data root and port, seconds, no model calls
 ```
 
 `gateway:check` starts the gateway as a child process, drives a whole task lifecycle over a real
-socket — file a project, file a task, comment, walk it `ideas → backlog → in progress → review →
+socket — file a project, file a task, post a message, walk it `ideas → backlog → in progress → review →
 done`, list its runs, queue a run command, upload and read an artifact, stream a run's timeline,
 then open a conversation belonging to no chat, say something into it, read it and its turns
 back, force-send and archive it — then stops it with `SIGTERM` and audits the ledger it flushed: every request left exactly one

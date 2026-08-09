@@ -5,7 +5,6 @@ import { AuditLogRepo } from "./repositories/audit-log";
 import { ChatMessageRepo } from "./repositories/chat-message";
 import { ChatNotificationRepo } from "./repositories/chat-notification";
 import { ChatThreadRepo } from "./repositories/chat-thread";
-import { CommentRepo } from "./repositories/comment";
 import { ProjectRepo } from "./repositories/project";
 import { ProjectEnvFileRepo } from "./repositories/project-env";
 import { RunRepo } from "./repositories/run";
@@ -13,6 +12,7 @@ import { RunCommandRepo } from "./repositories/run-command";
 import { RunEventRepo } from "./repositories/run-event";
 import { AgentSessionRepo } from "./repositories/session";
 import { TaskRepo } from "./repositories/task";
+import { TaskMessageRepo } from "./repositories/task-message";
 import { WorkspaceRepo } from "./repositories/workspace";
 
 /**
@@ -36,7 +36,7 @@ export const repositoriesLayer = Layer.mergeAll(
   ChatMessageRepo.layer,
   ChatNotificationRepo.layer,
   ChatThreadRepo.layer,
-  CommentRepo.layer,
+  TaskMessageRepo.layer,
   ProjectEnvFileRepo.layer,
   ProjectRepo.layer,
   RunCommandRepo.layer,

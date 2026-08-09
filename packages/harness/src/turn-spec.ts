@@ -14,12 +14,12 @@
  * variable and not on an event. `docker inspect` prints a container's whole
  * environment to anyone who can reach the daemon, `ps` prints an argv to every
  * process on the host, and a prompt carries a task's brief and its entire
- * comment thread. A file on a mount the container already has is read by the
+ * message thread. A file on a mount the container already has is read by the
  * container and by nothing else.
  *
  * **Both sides spell the paths with the same function.** {@link turnSpecPathOf}
  * and {@link turnResultPathOf} take a {@link RunLayout}, exactly as
- * `commentMarkerPathOf` does, so the host applies them to the run's directory
+ * `messageMarkerPathOf` does, so the host applies them to the run's directory
  * under the data root and the container applies them to `containerRunLayout` —
  * the same algebra over two roots. A path written twice is a spec the container
  * never finds.
@@ -52,7 +52,7 @@ export const TURN_RESULT_FILE = "turn-result.json";
 
 /**
  * The spec for a run, under whichever root is looking. It sits in the run
- * directory rather than in the agent home for the same reason the comment
+ * directory rather than in the agent home for the same reason the message
  * marker does: the agent home belongs to a vendor that rewrites it, and the run
  * directory is ours.
  */

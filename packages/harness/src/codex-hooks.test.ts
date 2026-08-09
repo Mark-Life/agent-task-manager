@@ -14,7 +14,7 @@ import { Effect } from "effect";
 import { codexArgs } from "./codex";
 import { codexHooksFile, codexHooksPath, writeCodexHooks } from "./codex-hooks";
 import type { RunOptions } from "./provider";
-import { NO_COMMENT_REFUSAL, STOP_HOOK_COMMAND_ENV_VAR } from "./stop-hook";
+import { NO_MESSAGE_REFUSAL, STOP_HOOK_COMMAND_ENV_VAR } from "./stop-hook";
 
 let root: string;
 
@@ -34,7 +34,7 @@ describe("codexHooksFile", () => {
     ).toStrictEqual({
       description: expect.any(String),
       // `SubagentStop` is deliberately absent: it would hold a subagent open
-      // over a comment the parent turn has not had a chance to post.
+      // over a message the parent turn has not had a chance to post.
       hooks: { Stop: [{ hooks: [{ command, type: "command" }] }] },
     });
   });
@@ -122,18 +122,18 @@ const describeCli = which("codex") === null ? describe.skip : describe;
 describeCli("codex exec with the registered stop hook", () => {
   const stopHookScript = join(import.meta.dir, "..", "scripts", "stop-hook.ts");
 
-  const runTurn = async (input: { readonly commentPosted: boolean }) => {
+  const runTurn = async (input: { readonly messagePosted: boolean }) => {
     const asked: string[] = [];
     const server = startStubModel(asked);
     const agentHomeDir = join(root, "codex");
     const workspaceDir = join(root, "workspace");
     mkdirSync(workspaceDir, { recursive: true });
-    const marker = join(root, "comment-posted");
-    if (input.commentPosted) {
+    const marker = join(root, "message-posted");
+    if (input.messagePosted) {
       writeFileSync(marker, "");
     }
     const env = {
-      ATM_COMMENT_MARKER: marker,
+      ATM_MESSAGE_MARKER: marker,
       ATM_STUB_MODEL_KEY: "stub-key",
       [STOP_HOOK_COMMAND_ENV_VAR]: `bun ${stopHookScript}`,
     };
@@ -174,17 +174,17 @@ describeCli("codex exec with the registered stop hook", () => {
     }
   };
 
-  test("sends a turn that posted no comment back exactly once", async () => {
-    const { asked, stdout } = await runTurn({ commentPosted: false });
+  test("sends a turn that posted no message back exactly once", async () => {
+    const { asked, stdout } = await runTurn({ messagePosted: false });
     expect(stdout).toContain('"turn.completed"');
     // Two model calls: the turn, and the one the refusal forced. A third
     // would mean `stop_hook_active` was ignored, and Codex caps nothing.
     expect(asked).toHaveLength(2);
-    expect(asked[1]).toContain(NO_COMMENT_REFUSAL);
+    expect(asked[1]).toContain(NO_MESSAGE_REFUSAL);
   }, 120_000);
 
   test("lets a turn that posted one end on its first attempt", async () => {
-    const { asked } = await runTurn({ commentPosted: true });
+    const { asked } = await runTurn({ messagePosted: true });
     expect(asked).toHaveLength(1);
   }, 120_000);
 });

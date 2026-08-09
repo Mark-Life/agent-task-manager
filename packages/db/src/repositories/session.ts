@@ -1,10 +1,10 @@
 import type {
   AgentSession,
   ChatMessageId,
-  CommentId,
   RunSubject,
   SessionProvider,
   TaskId,
+  TaskMessageId,
   ThreadId,
   Timestamp,
   WorkspaceId,
@@ -100,13 +100,13 @@ interface OpenInput extends SubjectRef {
 }
 
 /**
- * How far a session has been read into its conversation. The id is a comment's
- * on a task's session and a chat message's on a thread's — one position, over
+ * How far a session has been read into its conversation. The id is a task
+ * message's on a task's session and a chat message's on a thread's — one position, over
  * whichever table the session's subject reads from.
  */
 interface WatermarkInput extends SessionRef {
   readonly unreadAt: Timestamp;
-  readonly unreadId: ChatMessageId | CommentId;
+  readonly unreadId: ChatMessageId | TaskMessageId;
 }
 
 /** The one of the two columns this subject is stored in. */
@@ -307,7 +307,7 @@ const make = Effect.gen(function* () {
   /**
    * Moves the session's reading of its conversation forward. Done at
    * prompt-build time and past this session's own previous output — a resumed
-   * run that re-read its own fallback comment would treat its own words as new
+   * run that re-read its own fallback message would treat its own words as new
    * instructions.
    *
    * Both halves move together, because the comparison is a `(createdAt, id)`

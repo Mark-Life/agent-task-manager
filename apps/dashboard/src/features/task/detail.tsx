@@ -17,7 +17,7 @@ import {
   TabsTrigger,
 } from "@workspace/ui/components/tabs";
 import { artifactsQuery } from "@/api/artifacts";
-import { commentsQuery } from "@/api/comments";
+import { taskMessagesQuery } from "@/api/messages";
 import { runsQuery } from "@/api/runs";
 import { sessionsQuery } from "@/api/sessions";
 import { taskQuery } from "@/api/tasks";
@@ -57,7 +57,7 @@ const isUnsettled = (detail: TaskDetail) =>
  * How much is behind each tab.
  *
  * A row of names says nothing about which of them is worth opening — whether
- * this task has one comment or forty, whether anything ever ran on it. The
+ * this task has one message or forty, whether anything ever ran on it. The
  * counts are read here, above the tabs, which also means the panel a reader
  * switches to is already in the cache and draws without a skeleton. Undefined
  * until the list arrives, so a count never flashes zero on the way to five.
@@ -67,13 +67,13 @@ const isUnsettled = (detail: TaskDetail) =>
  */
 const useTabCounts = (taskId: TaskId): Partial<Record<TaskTab, number>> => {
   const artifacts = useQuery(artifactsQuery(taskId));
-  const comments = useQuery(commentsQuery(taskId));
+  const messages = useQuery(taskMessagesQuery(taskId));
   const runs = useQuery(runsQuery(taskId));
   const sessions = useQuery(sessionsQuery(taskId));
 
   return {
     artifacts: artifacts.data?.length,
-    messages: comments.data?.length,
+    messages: messages.data?.length,
     runs: runs.data?.length,
     sessions: sessions.data?.length,
   };

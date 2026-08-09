@@ -418,8 +418,8 @@ const make = Effect.gen(function* () {
           yield* observeRunProgress(progress, {
             artifactsWritten: artifacts?.indexed ?? 0,
             branch: turn.branch,
-            commentFallback: report.fallbackCommented,
             eventsSeen: events?.lines ?? turn.eventsSeen,
+            messageFallback: report.fallbackPosted,
             parked: ladder?.kind === "park",
             promptChars: turn.promptChars,
             prUrl: report.prUrl,
@@ -462,7 +462,7 @@ const make = Effect.gen(function* () {
         }),
         // Caught after the event, so the row still reports the failure, and
         // caught at all because the close hook above has already answered it:
-        // the run row, the crash comment, the column and the ladder are all
+        // the run row, the crash message, the column and the ladder are all
         // decided by the time this is reached. Letting it reach the claim's own
         // handler would stamp a second rung for one failed attempt. An
         // interrupt is not caught here — a stop is the caller's to see.
@@ -837,7 +837,7 @@ const make = Effect.gen(function* () {
    * the way a run that died in front of the loop would be.
    *
    * Three reads rather than a second terminal path, because the alternative is
-   * a crash comment, a session ending and a move to *review* written twice from
+   * a crash message, a session ending and a move to *review* written twice from
    * two places — and two implementations of "how a run ends" is how they come
    * to disagree.
    */
@@ -969,7 +969,7 @@ const make = Effect.gen(function* () {
   }).pipe(Effect.withSpan("Orchestrator.recover"));
 
   /**
-   * Finishes what a killed process started: the crash comment, the failed
+   * Finishes what a killed process started: the crash message, the failed
    * session, the move to *review*, and the terminus row that turns a start with
    * no ending into a countable `lost` run.
    */
@@ -999,13 +999,13 @@ const make = Effect.gen(function* () {
       // the move to *review* are what is actually left to do.
       yield* closeRun({
         branch: null,
-        commentPosted: false,
         context,
         // A run whose loop process died is the case with the most to salvage:
-        // it wrote no comment, and whatever it left in its artifacts directory
+        // it wrote no message, and whatever it left in its artifacts directory
         // is all there is of it. The handoff is read here for the same reason
         // it is read on the ordinary path.
         dataRoot: config.dataRoot,
+        messagePosted: false,
         terminus,
       });
       yield* emitLostRun({

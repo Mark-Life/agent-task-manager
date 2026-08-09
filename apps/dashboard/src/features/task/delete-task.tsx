@@ -29,7 +29,7 @@ interface DeleteTaskProps {
  * this is the one control on the task whose damage cannot be undone, so it is
  * reached deliberately and reads as what it is before it is pressed.
  *
- * The confirmation says what goes with the task — its comments, sessions, runs
+ * The confirmation says what goes with the task — its messages, sessions, runs
  * and artifacts, the evidence of what happened, not just the card — rather than
  * asking "are you sure", which tells a reader nothing they did not know.
  */
@@ -59,7 +59,7 @@ export const DeleteTask = ({ onDeleted, task }: DeleteTaskProps) => {
         <AlertDialogHeader>
           <AlertDialogTitle>Delete “{task.title}”?</AlertDialogTitle>
           <AlertDialogDescription>
-            Its comments, sessions, runs and artifacts go with it. There is no
+            Its messages, sessions, runs and artifacts go with it. There is no
             undo.
           </AlertDialogDescription>
         </AlertDialogHeader>

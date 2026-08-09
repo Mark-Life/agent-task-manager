@@ -27,7 +27,7 @@ interface EmptyStateProps {
  * with no border width — so every bare use of it renders as a paragraph
  * floating in the middle of the panel, indistinguishable from content that
  * failed to arrive. Drawing the outline and the icon once means an empty
- * Comments panel and an empty Files panel read as the same kind of nothing,
+ * Messages panel and an empty Files panel read as the same kind of nothing,
  * and neither reads as a bug.
  */
 export const EmptyState = ({

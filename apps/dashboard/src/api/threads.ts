@@ -93,7 +93,7 @@ export const threadMessagesQuery = (threadId: ThreadId) =>
   apiInfiniteQuery({
     cursorOf: (page: MessagePage) => page.nextOffset ?? undefined,
     from: 0,
-    queryKey: keys.messages(threadId),
+    queryKey: keys.threadMessages(threadId),
     request: (offset: number, client: ApiClientShape) =>
       client.threads.messages({
         params: { threadId },
@@ -119,7 +119,7 @@ export const useThreadMessages = (threadId: ThreadId) => {
  */
 const settleThread = (queryClient: QueryClient, threadId: ThreadId) =>
   Promise.all([
-    queryClient.invalidateQueries({ queryKey: keys.messages(threadId) }),
+    queryClient.invalidateQueries({ queryKey: keys.threadMessages(threadId) }),
     queryClient.invalidateQueries({
       exact: true,
       queryKey: keys.thread(threadId),

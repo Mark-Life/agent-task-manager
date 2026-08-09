@@ -354,7 +354,7 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Erases a task and everything hanging off it — comments, sessions, runs, run
+   * Erases a task and everything hanging off it — messages, sessions, runs, run
    * events and its artifact index rows all cascade. That is what the verb
    * means, and it is why deleting is an operation of its own rather than a
    * sixth column: nothing on the board archives.

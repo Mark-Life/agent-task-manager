@@ -51,7 +51,7 @@ stopped: a live run is allowance already committed, and killing it wastes what i
 is unreadable before a blank dashboard does.
 
 **Every ending lands the task in *review*, failures included.** A crashed run posts its error
-into the thread as a comment, marks its session failed, and moves the card to the human gate;
+into the thread as a message, marks its session failed, and moves the card to the human gate;
 there is no failed column and no auto-retry. The backoff ladder and the park stamp
 (`task.parked_until`) apply to the two failures that leave the card in the column, where the
 next sweep would otherwise try again forever: a dispatch that never became a run, and a run
@@ -82,7 +82,7 @@ run's board credential is minted for that same span plus five minutes, because a
 expires under a live run is a `401` per tool call that the agent narrates instead of failing
 on.
 
-**A run that posted no comment gets its last message appended as one**, flagged
+**A run that posted no message gets its last message appended as one**, flagged
 `fallback` so the UI can collapse it. After the turn the loop reads the run's directory back:
 the normalized event file into `run_events` (idempotently — `seq` is the file's line ordinal),
 the transcript into the session, and the task's artifacts folder into the artifact index.
@@ -95,7 +95,7 @@ is rejected with its reason on the row rather than consumed in silence.
 
 **Kill it and it recovers.** A lease file per claimed task is heartbeated under
 `${DATA_ROOT}/leases`; at boot the loop reclaims every lease whose holder is gone and closes
-every run row still marked live behind it as `lost` — posting the comment, ending the session,
+every run row still marked live behind it as `lost` — posting the message, ending the session,
 moving the task, and writing the terminus row the killed process could not. A run leaves two
 `atm.run` rows sharing one `runId`: a `start` when it is claimed and a terminus on every exit
 path, so a start with no end is a countable `lost` run rather than silence.

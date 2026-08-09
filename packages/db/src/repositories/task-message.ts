@@ -1,31 +1,31 @@
 /**
  * The task's conversation, and the only channel that crosses sessions.
  *
- * Transcripts are captured wholesale and say what happened; a comment is the
+ * Transcripts are captured wholesale and say what happened; a task message is the
  * short deliberate thing the next reader needs. Attribution is what makes
  * several sessions on one task readable — the UI can say "from the review
  * session" instead of presenting one undifferentiated voice — so the author is
  * a union here rather than four loose nullable columns, and the combinations
  * the database's CHECKs allow are the only ones that can be expressed.
  *
- * Append only: nothing edits or deletes a comment, which is why there is no
+ * Append only: nothing edits or deletes a task message, which is why there is no
  * update here and no `editedAt` on the row.
  */
 
 import {
   type AgentSessionId,
-  type Comment,
-  type CommentKind,
-  newCommentId,
+  newTaskMessageId,
   type RunId,
   type TaskId,
+  type TaskMessage,
+  type TaskMessageKind,
   type UserId,
   type WorkspaceId,
 } from "@workspace/domain";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { Context, DateTime, Effect, Layer } from "effect";
 import { Database } from "../client";
-import { CommentInsert, decodeComment } from "../rows";
+import { decodeTaskMessage, TaskMessageInsert } from "../rows";
 import { comment } from "../schema/comment";
 import { task } from "../schema/task";
 import {
@@ -42,6 +42,10 @@ import {
 /** Reads addressed by id match one row; the limit says so to the planner. */
 const ONE = 1;
 
+/**
+ * The table, and the entity an audit row names. Still `comment`: the rename to
+ * task message stops at this layer, so the rows already written stay readable.
+ */
 const ENTITY = "comment";
 
 /** A person, in the dashboard or the bot. */
@@ -77,7 +81,7 @@ export interface OrchestratorAuthor {
 }
 
 /** Who is speaking, in the combinations the row's CHECKs allow. */
-export type CommentAuthor =
+export type TaskMessageAuthor =
   | AgentAuthor
   | HumanAuthor
   | ManagerAuthor
@@ -87,7 +91,7 @@ export type CommentAuthor =
  * Spreads an author across the four columns. One place, so a new kind of writer
  * is a compile error here rather than a row that attributes itself to nobody.
  */
-const authorColumns = (author: CommentAuthor) => {
+const authorColumns = (author: TaskMessageAuthor) => {
   if (author.kind === "agent") {
     return {
       agentSessionId: author.sessionId,
@@ -112,24 +116,25 @@ const authorColumns = (author: CommentAuthor) => {
   };
 };
 
-/** What posting a comment needs. */
-export interface CommentAppend
-  extends Pick<Comment, "body" | "taskId" | "workspaceId"> {
-  readonly author: CommentAuthor;
+/** What posting a task message needs. */
+export interface TaskMessagePost
+  extends Pick<TaskMessage, "body" | "taskId" | "workspaceId"> {
+  readonly author: TaskMessageAuthor;
   /**
    * `message` unless said otherwise. `fallback` is the auto-appended final
    * assistant message — the auto-generated flag, which the UI collapses — and
    * `run_error` is a crash, which it never does.
    */
-  readonly kind?: CommentKind;
+  readonly kind?: TaskMessageKind;
 }
 
 /**
  * How far through a task's thread something has read. A position, compared as
  * the `(createdAt, id)` tuple the thread is ordered by, so a same-millisecond
- * tie cannot skip a comment.
+ * tie cannot skip a message.
  */
-export interface CommentWatermark extends Pick<Comment, "createdAt" | "id"> {}
+export interface TaskMessageWatermark
+  extends Pick<TaskMessage, "createdAt" | "id"> {}
 
 /** What identifies a thread. */
 export interface ThreadRef {
@@ -151,19 +156,19 @@ const make = Effect.gen(function* () {
    * Everything after a position in the thread. The comparison is one row-wise
    * `>` rather than a timestamp test with a tiebreaker bolted on, because that
    * is the shape of the `(task_id, created_at, id)` index and the shape that
-   * cannot drop a comment written in the same millisecond as the watermark.
+   * cannot drop a message written in the same millisecond as the watermark.
    */
-  const after = (watermark: CommentWatermark) =>
+  const after = (watermark: TaskMessageWatermark) =>
     sql`(${comment.createdAt}, ${comment.id}) > (${DateTime.toDate(watermark.createdAt)}::timestamptz, ${watermark.id}::uuid)`;
 
   /**
-   * Posts a comment, and refuses one on a task this workspace does not have.
+   * Posts a message, and refuses one on a task this workspace does not have.
    * The composite foreign key would refuse it too, but as a constraint
    * violation — a caller can do something with a missing task and nothing with
    * that.
    */
-  const append = Effect.fn("CommentRepo.append")(function* (
-    input: CommentAppend
+  const post = Effect.fn("TaskMessageRepo.post")(function* (
+    input: TaskMessagePost
   ) {
     yield* Effect.annotateCurrentSpan({
       taskId: input.taskId,
@@ -172,11 +177,11 @@ const make = Effect.gen(function* () {
 
     const values = yield* encodeWrite({
       entity: ENTITY,
-      schema: CommentInsert,
+      schema: TaskMessageInsert,
       value: {
         ...authorColumns(input.author),
         body: input.body,
-        id: newCommentId(),
+        id: newTaskMessageId(),
         kind: input.kind ?? "message",
         taskId: input.taskId,
         workspaceId: input.workspaceId,
@@ -186,7 +191,7 @@ const make = Effect.gen(function* () {
     return yield* write(({ tx }) =>
       Effect.gen(function* () {
         const owner = yield* execute(
-          "CommentRepo.append",
+          "TaskMessageRepo.post",
           tx
             .select({ id: task.id })
             .from(task)
@@ -202,14 +207,14 @@ const make = Effect.gen(function* () {
         yield* firstRow({ entity: "task", id: input.taskId, rows: owner });
 
         const rows = yield* execute(
-          "CommentRepo.append",
+          "TaskMessageRepo.post",
           tx.insert(comment).values(values).returning()
         );
 
         const posted = yield* decodeWritten({
-          decode: decodeComment,
+          decode: decodeTaskMessage,
           entity: ENTITY,
-          operation: "CommentRepo.append",
+          operation: "TaskMessageRepo.post",
           rows,
         });
 
@@ -227,7 +232,7 @@ const make = Effect.gen(function* () {
   });
 
   /** The whole thread, oldest first — the order it is read in. */
-  const forTask = Effect.fn("CommentRepo.forTask")(function* (
+  const forTask = Effect.fn("TaskMessageRepo.forTask")(function* (
     options: ThreadRef
   ) {
     yield* Effect.annotateCurrentSpan({
@@ -236,7 +241,7 @@ const make = Effect.gen(function* () {
     });
 
     const rows = yield* execute(
-      "CommentRepo.forTask",
+      "TaskMessageRepo.forTask",
       db
         .select()
         .from(comment)
@@ -244,17 +249,21 @@ const make = Effect.gen(function* () {
         .orderBy(asc(comment.createdAt), asc(comment.id))
     );
 
-    return yield* decodeMany({ decode: decodeComment, entity: ENTITY, rows });
+    return yield* decodeMany({
+      decode: decodeTaskMessage,
+      entity: ENTITY,
+      rows,
+    });
   });
 
   /**
-   * What a resuming session has not read yet: every comment added after its
+   * What a resuming session has not read yet: every message added after its
    * watermark, oldest first, ready to become the next prompt. A session with no
    * watermark has read nothing, so it gets the thread from the beginning —
    * which is what a session resumed for the first time wants.
    */
-  const since = Effect.fn("CommentRepo.since")(function* (
-    options: ThreadRef & { readonly watermark: CommentWatermark | null }
+  const since = Effect.fn("TaskMessageRepo.since")(function* (
+    options: ThreadRef & { readonly watermark: TaskMessageWatermark | null }
   ) {
     yield* Effect.annotateCurrentSpan({
       taskId: options.taskId,
@@ -264,7 +273,7 @@ const make = Effect.gen(function* () {
     const scope = threadOf(options);
 
     const rows = yield* execute(
-      "CommentRepo.since",
+      "TaskMessageRepo.since",
       db
         .select()
         .from(comment)
@@ -276,16 +285,20 @@ const make = Effect.gen(function* () {
         .orderBy(asc(comment.createdAt), asc(comment.id))
     );
 
-    return yield* decodeMany({ decode: decodeComment, entity: ENTITY, rows });
+    return yield* decodeMany({
+      decode: decodeTaskMessage,
+      entity: ENTITY,
+      rows,
+    });
   });
 
   /**
-   * The newest comment on the task, or null on a silent one. This is the
+   * The newest message on the task, or null on a silent one. This is the
    * position a session's watermark advances to when its prompt is built —
-   * including past comments its own previous run posted, otherwise a resumed
-   * run reads its own fallback comment back as new input.
+   * including past messages its own previous run posted, otherwise a resumed
+   * run reads its own fallback message back as new input.
    */
-  const newest = Effect.fn("CommentRepo.newest")(function* (
+  const newest = Effect.fn("TaskMessageRepo.newest")(function* (
     options: ThreadRef
   ) {
     yield* Effect.annotateCurrentSpan({
@@ -294,7 +307,7 @@ const make = Effect.gen(function* () {
     });
 
     const rows = yield* execute(
-      "CommentRepo.newest",
+      "TaskMessageRepo.newest",
       db
         .select()
         .from(comment)
@@ -309,20 +322,20 @@ const make = Effect.gen(function* () {
     }
 
     return yield* decodeWritten({
-      decode: decodeComment,
+      decode: decodeTaskMessage,
       entity: ENTITY,
-      operation: "CommentRepo.newest",
+      operation: "TaskMessageRepo.newest",
       rows,
     });
   });
 
-  return { append, forTask, newest, since } as const;
+  return { forTask, newest, post, since } as const;
 });
 
 /** The task's conversation. Append only, and every append is audited. */
-export class CommentRepo extends Context.Service<
-  CommentRepo,
+export class TaskMessageRepo extends Context.Service<
+  TaskMessageRepo,
   Effect.Success<typeof make>
->()("@workspace/db/CommentRepo") {
-  static readonly layer = Layer.effect(CommentRepo, make);
+>()("@workspace/db/TaskMessageRepo") {
+  static readonly layer = Layer.effect(TaskMessageRepo, make);
 }

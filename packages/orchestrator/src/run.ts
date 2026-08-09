@@ -44,10 +44,10 @@ import type { EnvFileWrite } from "@workspace/domain";
 import {
   type AgentEvent,
   AgentEventRecord,
-  COMMENT_MARKER_ENV_VAR,
-  commentMarkerPathOf,
   entrypointBundlePathOf,
+  MESSAGE_MARKER_ENV_VAR,
   mcpServersPathOf,
+  messageMarkerPathOf,
   ProviderRegistry,
   TimedOut,
 } from "@workspace/harness";
@@ -98,8 +98,8 @@ import {
 import { buildRunPrompt, placementOf } from "./prompt";
 import {
   closeRun,
-  commentMarkerSeen,
-  markCommentPosted,
+  markMessagePosted,
+  messageMarkerSeen,
   type TerminalReport,
 } from "./terminal";
 import {
@@ -447,11 +447,11 @@ export const executeRun = (input: ExecuteRunInput) =>
           );
         }
 
-        // The marker the stop hook reads. Written the moment the comment tool
+        // The marker the stop hook reads. Written the moment the message tool
         // answers, so a turn ending in the same second is not refused for a
-        // comment it has already posted.
-        if (after.commentPosted && !before.commentPosted) {
-          yield* markCommentPosted(context);
+        // message it has already posted.
+        if (after.messagePosted && !before.messagePosted) {
+          yield* markMessagePosted(context);
         }
       });
 
@@ -460,7 +460,7 @@ export const executeRun = (input: ExecuteRunInput) =>
      *
      * The event is redacted here, on the way in, rather than at each of the
      * three places it is later written down. Everything below this line — the
-     * timeline row, the final text a fallback comment carries, the accumulated
+     * timeline row, the final text a fallback message carries, the accumulated
      * progress — is built from the same value, so redacting once at the
      * boundary is what keeps them from disagreeing about what the run said.
      */
@@ -498,7 +498,7 @@ export const executeRun = (input: ExecuteRunInput) =>
             ...made.cacheEnv,
             // The hook runs outside a container here, so it is told where the
             // marker really is rather than assuming the container's own path.
-            [COMMENT_MARKER_ENV_VAR]: commentMarkerPathOf(context.layout),
+            [MESSAGE_MARKER_ENV_VAR]: messageMarkerPathOf(context.layout),
           },
           mcpServers: servers,
           model: null,
@@ -755,7 +755,7 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
         // A turn that ended cleanly having lost the board did not end cleanly,
         // and this is the one place that can say so: the model never failed,
         // so nothing below the close will ever raise it. Applied before the
-        // close so the run row, the crash comment and the wide event all read
+        // close so the run row, the crash message and the wide event all read
         // the same ending.
         const ending = terminusWithBoardAccess({
           progress: state,
@@ -763,14 +763,14 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
         });
         yield* Ref.set(filed, ending);
         // Two authors for one fact: the loop watching the stream, and a
-        // provider that wires the comment tool in-process and creates the
+        // provider that wires the message tool in-process and creates the
         // marker itself. Either is enough to spend the fallback.
-        const marked = yield* commentMarkerSeen(context);
+        const marked = yield* messageMarkerSeen(context);
         const report = yield* closeRun({
           branch: state.branch,
-          commentPosted: state.commentPosted || marked,
           context,
           dataRoot: input.dataRoot,
+          messagePosted: state.messagePosted || marked,
           terminus: ending,
         });
         yield* Ref.set(closed, report);

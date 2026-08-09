@@ -21,7 +21,7 @@ import {
 } from "./board-access";
 import type { RunTerminus } from "./dispatch-context";
 import { describeFailure } from "./errors";
-import { isCommentTool } from "./terminal";
+import { isMessageTool } from "./terminal";
 
 /** What the harness calls an error it could not name. Used where a result reports none. */
 const UNNAMED_ERROR = "Unknown";
@@ -38,14 +38,14 @@ export interface TurnProgress {
   readonly boardAccess: BoardAccess;
   /** The branch the checkout pushed, learned at materialization. */
   readonly branch: string | null;
-  /** True once a comment tool has answered successfully. */
-  readonly commentPosted: boolean;
   /** The next line ordinal, which is the next `seq`. */
   readonly eventsSeen: number;
-  /** The last assistant message, which is what the fallback comment appends. */
+  /** The last assistant message, which is what the fallback message appends. */
   readonly finalText: string;
-  /** Comment-tool calls still waiting on their result, by call id. */
-  readonly pendingComments: readonly string[];
+  /** True once a message tool has answered successfully. */
+  readonly messagePosted: boolean;
+  /** Message-tool calls still waiting on their result, by call id. */
+  readonly pendingMessages: readonly string[];
   /**
    * How much prompt this turn was given. Measured here rather than recomputed
    * later because the prompt is built inside the run's own scope and never
@@ -63,10 +63,10 @@ export interface TurnProgress {
 export const EMPTY_TURN_PROGRESS: TurnProgress = {
   boardAccess: BOARD_ACCESS_HELD,
   branch: null,
-  commentPosted: false,
   eventsSeen: 0,
   finalText: "",
-  pendingComments: [],
+  messagePosted: false,
+  pendingMessages: [],
   promptChars: null,
   providerSessionId: null,
   terminus: null,
@@ -131,7 +131,7 @@ export const terminusOfFailure = (
  * `done`: the model was never blocked, it simply narrated the refusals and
  * stopped. That is the failure this whole path exists to stop being invisible,
  * so a clean finish with no board access is rewritten as the failure it was —
- * which is what puts the reason on the card, through the same crash comment
+ * which is what puts the reason on the card, through the same crash message
  * every other failure takes.
  *
  * Only a clean finish is rewritten. A run that already failed has a reason of
@@ -166,9 +166,9 @@ export const observeTurn = (
   const seen = {
     ...progress,
     // Folded on every event rather than in the `tool_result` branch below,
-    // because that branch is about the comment tool specifically and this is
+    // because that branch is about the message tool specifically and this is
     // about all of them — including the calls a run makes after it has already
-    // commented, which are exactly the ones a late expiry takes out.
+    // posted, which are exactly the ones a late expiry takes out.
     boardAccess: observeBoardAccess(progress.boardAccess, event),
     eventsSeen: progress.eventsSeen + 1,
   };
@@ -178,18 +178,18 @@ export const observeTurn = (
     case "assistant_text":
       return { ...seen, finalText: event.text };
     case "tool_call":
-      return isCommentTool(event.toolName)
+      return isMessageTool(event.toolName)
         ? {
             ...seen,
-            pendingComments: [...seen.pendingComments, event.callId],
+            pendingMessages: [...seen.pendingMessages, event.callId],
           }
         : seen;
     case "tool_result":
-      return event.ok && seen.pendingComments.includes(event.callId)
+      return event.ok && seen.pendingMessages.includes(event.callId)
         ? {
             ...seen,
-            commentPosted: true,
-            pendingComments: seen.pendingComments.filter(
+            messagePosted: true,
+            pendingMessages: seen.pendingMessages.filter(
               (callId) => callId !== event.callId
             ),
           }

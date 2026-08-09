@@ -8,7 +8,7 @@ import { defineConfig, loadEnv, type ProxyOptions } from "vite";
  *
  * The contract is mounted at the gateway root rather than under an `/api`
  * prefix, so each group's own top-level segment has to be forwarded by name:
- * `/tasks` carries tasks and everything nested beneath one (comments, sessions,
+ * `/tasks` carries tasks and everything nested beneath one (messages, sessions,
  * runs, run commands, artifacts), while `/projects`, `/threads` and `/health`
  * carry the rest. `/api/auth` is Better Auth's own mount, and the only path
  * that does sit under `/api`.
@@ -30,7 +30,7 @@ const DEFAULT_GATEWAY = "http://localhost:3100";
  * Sharing an origin in development means sharing an address space, and two of
  * the dashboard's screens sit exactly where the contract answers: a task's page
  * is the path the contract reads that task from, and the project list is the
- * path it lists projects from. Deeper paths — a comment, an artifact's bytes —
+ * path it lists projects from. Deeper paths — a task message, an artifact's bytes —
  * are the gateway's alone and are not listed.
  */
 const APP_PAGES = [/^\/tasks\/[^/]+\/?$/, /^\/projects\/?$/];

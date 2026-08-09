@@ -243,8 +243,8 @@ export const boardClaims = (caller: Caller, token: string) =>
     return { created: filed.traceId, projectId, taskId };
   });
 
-/** The thread, and who a comment is attributed to. */
-export const commentClaims = (input: {
+/** The thread, and who a message is attributed to. */
+export const taskMessageClaims = (input: {
   readonly caller: Caller;
   readonly taskId: TaskId;
   readonly token: string;
@@ -254,18 +254,18 @@ export const commentClaims = (input: {
     const posted = yield* input.caller.call({
       body: { body: "said over HTTP" },
       method: "POST",
-      path: `/tasks/${input.taskId}/comments`,
+      path: `/tasks/${input.taskId}/messages`,
       token: input.token,
     });
     const author = (posted.body as { authorUserId?: string }).authorUserId;
     yield* check({
       detail: `${posted.status}, authored by ${author ?? "nobody"}`,
       ok: posted.status === OK && author === input.userId,
-      step: "a comment is attributed to the credential, never to the body",
+      step: "a message is attributed to the credential, never to the body",
     });
 
     const thread = yield* input.caller.call({
-      path: `/tasks/${input.taskId}/comments`,
+      path: `/tasks/${input.taskId}/messages`,
       token: input.token,
     });
     yield* check({
@@ -634,7 +634,7 @@ export const bindingClaims = (input: {
     const own = yield* input.caller.call({
       body: { body: "reported from inside the run" },
       method: "POST",
-      path: `/tasks/${input.taskId}/comments`,
+      path: `/tasks/${input.taskId}/messages`,
       token: input.workerToken,
     });
     yield* check({
@@ -646,7 +646,7 @@ export const bindingClaims = (input: {
     const other = yield* input.caller.call({
       body: { body: "should never land" },
       method: "POST",
-      path: `/tasks/${input.otherTaskId}/comments`,
+      path: `/tasks/${input.otherTaskId}/messages`,
       token: input.workerToken,
     });
     yield* check({

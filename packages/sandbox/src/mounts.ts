@@ -13,7 +13,7 @@
  * directory and one when it runs our own entrypoint, and the reasons are each
  * their own.
  *
- * The run directory carries the run's comment marker, its turn spec and its
+ * The run directory carries the run's message marker, its turn spec and its
  * event ledger, and it is mounted whole at {@link CONTAINER_RUN_DIR} rather than
  * as three separate binds. That is what makes the container's view and
  * `@workspace/harness`'s `containerRunLayout` the same layout applied to two
@@ -272,7 +272,7 @@ export interface MountSources {
   readonly globalArtifactsDir: string;
   /** The project's promoted folder, or null for a task with no project. */
   readonly projectArtifactsDir: string | null;
-  /** The run's own directory: agent home, comment marker, event ledger. */
+  /** The run's own directory: agent home, message marker, event ledger. */
   readonly runDir: string;
   /** The task's own artifacts folder. The only artifact folder a run may write. */
   readonly taskArtifactsDir: string;

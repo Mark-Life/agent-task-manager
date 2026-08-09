@@ -10,7 +10,7 @@
  * or a fake index would be asserting the fake.
  *
  * The fixtures are two real tasks with real sessions and runs, and they are
- * deleted afterwards — a task delete cascades to its comments, sessions, runs,
+ * deleted afterwards — a task delete cascades to its messages, sessions, runs,
  * run events and artifact index rows, so the tree goes with it. The audit rows
  * stay, which is what append-only means.
  */

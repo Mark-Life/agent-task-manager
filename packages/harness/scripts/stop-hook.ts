@@ -6,21 +6,21 @@
  * It runs inside the sandbox container, on the critical path of every turn
  * ending, so it stays a filesystem read and a `switch`. No database, no
  * gateway call, no telemetry — the rule it enforces is decided in
- * `src/stop-hook.ts` and the only fact it gathers is whether the run's comment
+ * `src/stop-hook.ts` and the only fact it gathers is whether the run's message
  * marker exists.
  *
  * Every failure allows the turn to end. A hook that throws, hangs or writes
  * nothing is a run that cannot finish, which is a far worse outcome than a run
- * that finishes without a comment — the orchestrator appends the final message
- * as a fallback comment in exactly that case.
+ * that finishes without a message — the orchestrator appends the final message
+ * as a fallback message in exactly that case.
  */
 
 import { existsSync } from "node:fs";
 import { readStdin } from "../src/stdin";
 import {
   ALLOW_TURN_END,
-  commentMarkerPath,
   decideStop,
+  messageMarkerPath,
   parseStopHookPayload,
   stopHookResponseOf,
 } from "../src/stop-hook";
@@ -42,7 +42,7 @@ const respond = (response: unknown) => {
 try {
   const payload = parseStopHookPayload(parseJson(readStdin()));
   const decision = decideStop({
-    commentPosted: existsSync(commentMarkerPath(process.env)),
+    messagePosted: existsSync(messageMarkerPath(process.env)),
     payload,
   });
   respond(stopHookResponseOf(decision));

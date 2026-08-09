@@ -2,7 +2,7 @@
  * What a manager turn is told: the rules, and the conversation it has not read.
  *
  * The same two shapes the worker has, over `chat_message` rather than over
- * comments. A fresh session is given the rules and the tail of the thread; a
+ * task messages. A fresh session is given the rules and the tail of the thread; a
  * resumed one is given only what has been said since its watermark — which is
  * also how several messages that arrived while a turn was running become one
  * prompt on the next turn. Coalescing is not built here; it is what a watermark

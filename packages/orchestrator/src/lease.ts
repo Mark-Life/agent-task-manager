@@ -540,7 +540,7 @@ const eventsSeenOf = (input: { dataRoot: string; runId: RunId }) =>
  * would make the ordering a convention somebody eventually gets wrong.
  *
  * Closing the run row is the whole of the job. Moving the task to *review*,
- * posting the crash comment and emitting the `atm.run` row for the ending are
+ * posting the crash message and emitting the `atm.run` row for the ending are
  * the terminal path's, which is why the closed runs come back rather than being
  * quietly filed: the caller runs each of them through the same terminus
  * handling a run that died in front of it would get.

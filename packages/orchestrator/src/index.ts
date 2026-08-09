@@ -40,7 +40,7 @@
  *
  * **The typed failures.** `DispatchFailed`, `LeaseLost`, `IngestFailed` and the
  * rest are what the loop catches from itself; neither of the two operations
- * below can fail with one. A run's failure is a row on the run, a comment on
+ * below can fail with one. A run's failure is a row on the run, a message on
  * the task and an `errorClass` on the event — not something a host process
  * handles.
  *

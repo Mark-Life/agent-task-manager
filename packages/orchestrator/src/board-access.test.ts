@@ -10,7 +10,7 @@
  * assertion.
  *
  * The name of the failing tool is built from `AGENT_TOOL_PREFIX` for the same
- * reason, so `mcp__atm__comments_add` in the reported bug and the string
+ * reason, so `mcp__atm__messages_post` in the reported bug and the string
  * matched here cannot drift apart.
  */
 
@@ -27,7 +27,7 @@ import {
 } from "./board-access";
 
 /** The three board tools the reporting run lost at once. */
-const COMMENTS_ADD = `${AGENT_TOOL_PREFIX}comments_add`;
+const MESSAGES_POST = `${AGENT_TOOL_PREFIX}messages_post`;
 const ARTIFACTS_LIST = `${AGENT_TOOL_PREFIX}artifacts_list`;
 const TASKS_MOVE = `${AGENT_TOOL_PREFIX}tasks_move`;
 
@@ -90,7 +90,7 @@ const watch = (events: readonly AgentEvent[]) =>
 
 describe("isBoardTool", () => {
   test("knows the board's own tools from everything else the agent holds", () => {
-    expect(isBoardTool(COMMENTS_ADD)).toBe(true);
+    expect(isBoardTool(MESSAGES_POST)).toBe(true);
     expect(isBoardTool("Write")).toBe(false);
     expect(isBoardTool("Bash")).toBe(false);
     // A different MCP server on the same run is not the board.
@@ -106,7 +106,7 @@ describe("a run watching its own board calls", () => {
 
   test("holds the board while its calls are answered", () => {
     const access = watch([
-      ...answered({ callId: "a", toolName: COMMENTS_ADD }),
+      ...answered({ callId: "a", toolName: MESSAGES_POST }),
       ...answered({ callId: "b", toolName: ARTIFACTS_LIST }),
     ]);
     expect(access.lost).toBe(false);
@@ -116,7 +116,7 @@ describe("a run watching its own board calls", () => {
   test("sees the credential go, and says which one and how often", () => {
     const access = watch([
       ...answered({ callId: "a", toolName: ARTIFACTS_LIST }),
-      ...refused({ callId: "b", toolName: COMMENTS_ADD }),
+      ...refused({ callId: "b", toolName: MESSAGES_POST }),
       ...refused({ callId: "c", toolName: TASKS_MOVE }),
     ]);
 
@@ -130,7 +130,7 @@ describe("a run watching its own board calls", () => {
     // reason added later is caught here rather than the day it happens.
     for (const reason of ["token_expired", "token_bad_signature"]) {
       const access = watch(
-        refused({ callId: "a", reason, toolName: COMMENTS_ADD })
+        refused({ callId: "a", reason, toolName: MESSAGES_POST })
       );
       expect(access.lost).toBe(true);
     }
@@ -140,8 +140,8 @@ describe("a run watching its own board calls", () => {
     // The board answered — it said no. The agent asked for a task that is not
     // there, which says nothing at all about whether the next call will land.
     const access = watch([
-      ...answered({ callId: "a", toolName: COMMENTS_ADD }),
-      call({ callId: "b", toolName: COMMENTS_ADD }),
+      ...answered({ callId: "a", toolName: MESSAGES_POST }),
+      call({ callId: "b", toolName: MESSAGES_POST }),
       result({
         callId: "b",
         ok: false,
@@ -168,8 +168,8 @@ describe("a run watching its own board calls", () => {
     // board, and failing it over that would be a worse bug than the one this
     // detector exists for.
     const access = watch([
-      ...refused({ callId: "a", toolName: COMMENTS_ADD }),
-      ...answered({ callId: "b", toolName: COMMENTS_ADD }),
+      ...refused({ callId: "a", toolName: MESSAGES_POST }),
+      ...answered({ callId: "b", toolName: MESSAGES_POST }),
     ]);
 
     expect(access.lost).toBe(false);
@@ -180,8 +180,8 @@ describe("a run watching its own board calls", () => {
 
   test("holds no call it has already seen the result of", () => {
     const access = watch([
-      ...answered({ callId: "a", toolName: COMMENTS_ADD }),
-      ...refused({ callId: "b", toolName: COMMENTS_ADD }),
+      ...answered({ callId: "a", toolName: MESSAGES_POST }),
+      ...refused({ callId: "b", toolName: MESSAGES_POST }),
     ]);
     expect(access.pending).toEqual([]);
   });
@@ -190,7 +190,7 @@ describe("a run watching its own board calls", () => {
 describe("boardFailureOf", () => {
   test("names the failure and says what it cost", () => {
     const access = watch([
-      ...refused({ callId: "a", toolName: COMMENTS_ADD }),
+      ...refused({ callId: "a", toolName: MESSAGES_POST }),
       ...refused({ callId: "b", toolName: ARTIFACTS_LIST }),
       ...refused({ callId: "c", toolName: TASKS_MOVE }),
     ]);
@@ -207,7 +207,7 @@ describe("boardFailureOf", () => {
 
   test("counts one refusal in the singular, because a person reads it", () => {
     const failure = boardFailureOf(
-      watch(refused({ callId: "a", toolName: COMMENTS_ADD }))
+      watch(refused({ callId: "a", toolName: MESSAGES_POST }))
     );
     expect(failure?.errorMessage).toContain("1 board call was refused");
   });
