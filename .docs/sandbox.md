@@ -65,7 +65,7 @@ stores are content-addressed and sharing is where the dedupe comes from; a sibli
 `workspaces/` under one root, because pnpm hardlinks out of its store into `node_modules` and a
 hardlink cannot cross a filesystem. `node_modules` is still per run — the cache makes the install
 fast, it does not remove it. Nothing evicts: `du` it when the disk gets tight, delete it, and
-take one cold install. A poisoned cache spreads to later runs, which is accepted — the agent
+take one cold install — [disk](./disk.md) says at what size and with what running. A poisoned cache spreads to later runs, which is accepted — the agent
 already has network access and push rights. Only worker runs get it.
 
 **The project's environment files land in the checkout.** After the clone returns, before the
@@ -105,9 +105,11 @@ nothing ever owned the schedule, so mirrors were fetched once and every later ru
 a base frozen on the day the repo was first seen. It is bounded (3 minutes) and retried past the
 ref-lock race two concurrent dispatches cause, and a fetch that still fails **fails the run** —
 there is no fallback to the stale mirror, because a silently old base is the bug this prevents.
-A task with no repo gets an empty scratch directory and the same machinery. Artifacts live under
-`${DATA_ROOT}/artifacts/{global,projects/<id>,tasks/<id>}`; Postgres holds an index of them,
-never the bytes.
+A task with no repo gets an empty scratch directory and the same machinery. A mirror is a cache
+with one owner check: the loop's boot reconcile removes any that no project and no task still
+names, which is what stops a deleted project's bare clone from sitting there forever. Artifacts
+live under `${DATA_ROOT}/artifacts/{global,projects/<id>,tasks/<id>}`; Postgres holds an index of
+them, never the bytes.
 
 Every container leaves exactly one `atm.sandbox` row: image, mounts counted, exit code, OOM
 flag, peak memory, wall clock, pull-vs-cached, teardown outcome. The `atm.turn` rows the

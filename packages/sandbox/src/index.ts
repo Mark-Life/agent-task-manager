@@ -115,6 +115,7 @@ export {
   type ComposedSkill,
   type ComposedSkills,
   composedSkillsDirOf,
+  composedSkillsRootOf,
   composeSkills,
   composeSkillsScoped,
   releaseComposedSkills,
@@ -285,8 +286,10 @@ export {
   cloneIntoWorkspace,
   DEFAULT_COMMITTER,
   FALLBACK_BASE_REF,
+  MIRROR_SUFFIX,
   MIRRORS_SEGMENT,
   mirrorDirOf,
+  mirrorsRootOf,
   type RepoSourceInput,
   repoLabelOf,
   repoSourceFor,
@@ -374,6 +377,19 @@ export {
   Workspace,
   type WorkspaceInterface,
 } from "./spec";
+// The directories a killed process left behind. Exported for the orchestrator's
+// boot reconcile, which holds the database half of every join below — this
+// package lists and removes, and decides nothing.
+export {
+  checkoutsOf,
+  compositionsOf,
+  mirrorKeyOf,
+  mirrorsOf,
+  removeStrays,
+  runDirectoriesOf,
+  type StrayDirectory,
+  strandedOf,
+} from "./sweep";
 export {
   CACHES_SEGMENT,
   type CachesDirInput,
@@ -388,4 +404,5 @@ export {
   type WorkspaceDirInput,
   workspaceDirOf,
   workspaceLayer,
+  workspacesRootOf,
 } from "./workspace";

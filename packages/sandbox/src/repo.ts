@@ -44,6 +44,14 @@
  * onto the dispatch path makes that concurrent repack likelier, not rarer, which
  * is the second reason this stays a copy.
  *
+ * **A mirror is a cache, and `./sweep` is what finally gives it a lifetime.**
+ * One bare clone per repo the board has ever touched used to be forever:
+ * deleting the project in the dashboard left its mirror on disk with nothing
+ * that would ever look at it again. The boot sweep removes a mirror no project
+ * and no task still names, and the asymmetry is what makes that safe — the cost
+ * of removing one somebody wants back is the cold clone {@link ensureMirror}
+ * already does on first use, and never a byte of anybody's work.
+ *
  * **No worktrees.** The previous generation of this machinery gave each task a
  * `git worktree` off one shared checkout, and carried the tax that implies: a
  * teardown that must run or the slot leaks, an orphan sweep for the teardowns
@@ -126,17 +134,29 @@ export const DEFAULT_COMMITTER: Committer = {
 /** A single trailing `.git`, stripped from a mirror directory to recover its name. */
 const TRAILING_GIT_RE = /\.git$/;
 
+/**
+ * The suffix a bare mirror directory carries, and the whole of what tells one
+ * apart from the staging directory a killed `clone --mirror` leaves beside it.
+ */
+export const MIRROR_SUFFIX = ".git";
+
+/**
+ * The directory every mirror is nested under. Read by `./sweep`, which is the
+ * one caller that walks the tree instead of composing a path into it.
+ */
+export const mirrorsRootOf = (dataRoot: string) =>
+  join(dataRoot, MIRRORS_SEGMENT);
+
 /** Where a repo's bare mirror lives on the host. Pure; the path encodes the slug. */
 export const mirrorDirOf = (input: {
   readonly dataRoot: string;
   readonly repo: RepoIdentity;
 }) =>
   join(
-    input.dataRoot,
-    MIRRORS_SEGMENT,
+    mirrorsRootOf(input.dataRoot),
     input.repo.host,
     input.repo.owner,
-    `${input.repo.name}.git`
+    `${input.repo.name}${MIRROR_SUFFIX}`
   );
 
 /**

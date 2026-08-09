@@ -35,6 +35,12 @@
  * and the artifact folders outlive it because they are the point. So does the
  * package store: a cache released with the run is a cache that is cold every
  * time, which is the cost this whole mount exists to remove.
+ *
+ * The release below is what takes the checkout back on every ordinary ending,
+ * and it cannot survive its own process being killed — the same gap `./reap`
+ * describes for containers. `./sweep` is the boot pass behind it, and the two
+ * halves have to stay in step: a directory this file creates and lets the scope
+ * remove is one that sweep has to be able to attribute to a run.
  */
 
 import { join } from "node:path";
@@ -82,9 +88,12 @@ export interface CachesDirInput {
  * a filesystem. One root means the link works and the install is near instant;
  * two disks means pnpm silently copies instead.
  *
- * Nothing evicts from it. When the disk gets tight the answer is to delete the
- * directory and take one cold install, which is why there is no per-run or
- * per-project scoping to unpick first.
+ * Nothing evicts from it, and `./sweep` deliberately does not either: a store
+ * shared by every run has no orphan to find. When the disk gets tight the answer
+ * is to delete the directory and take one cold install, which is why there is no
+ * per-run or per-project scoping to unpick first. `.docs/disk.md` is that
+ * sentence written where an operator will actually meet it, with the size that
+ * should make them act.
  */
 export const cachesDirOf = (input: CachesDirInput) =>
   join(input.dataRoot, CACHES_SEGMENT);
@@ -114,9 +123,17 @@ export interface WorkspaceDirInput {
   readonly runId: RunId;
 }
 
+/**
+ * The directory every checkout is a child of. Read by the boot sweep in
+ * `./sweep`, which is the only party interested in the parent: a checkout that
+ * is still somebody's is one its own run took and will give back.
+ */
+export const workspacesRootOf = (dataRoot: string) =>
+  join(dataRoot, WORKSPACES_SEGMENT);
+
 /** The run's checkout on the host, sibling to its run directory. */
 export const workspaceDirOf = (input: WorkspaceDirInput) =>
-  join(input.dataRoot, WORKSPACES_SEGMENT, input.runId);
+  join(workspacesRootOf(input.dataRoot), input.runId);
 
 /** What a clone is asked to produce. */
 export interface CloneWorkspaceInput {

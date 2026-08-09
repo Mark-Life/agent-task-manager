@@ -84,6 +84,7 @@ export {
   type RunEventOutcome,
 } from "./run-telemetry";
 export {
+  type DirectorySweep,
   Orchestrator,
   type OrchestratorInterface,
   type RecoveryReport,

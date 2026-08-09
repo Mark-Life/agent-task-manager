@@ -33,6 +33,7 @@ import {
   eventLogDirOf,
   SANDBOX_EVENT_MARKER,
   SandboxEvent,
+  workspaceDirOf,
 } from "@workspace/sandbox";
 import { Effect, type Option, Schema } from "effect";
 
@@ -138,6 +139,24 @@ export const turnRows = (input: {
     path: join(eventLogDirOf(runDirOf(input)), `${TURN_LEDGER_SERVICE}.jsonl`),
     runId: input.runId,
   });
+
+/**
+ * Whether a run's checkout is still on disk, and where it would be.
+ *
+ * Read either side of a recover, which is the only way the boot sweep can be
+ * proved: the killed loop's release never ran, so the directory is there while
+ * nothing is left that would remove it, and gone once a fresh loop has joined
+ * the disk against the database. A checkout rather than a run directory because
+ * this is the one of the two that is meant to disappear — a run directory
+ * outlives its run on purpose.
+ */
+export const checkoutLeftBehind = (input: {
+  readonly dataRoot: string;
+  readonly runId: RunId;
+}) => {
+  const path = workspaceDirOf(input);
+  return { path, present: existsSync(path) };
+};
 
 /** What a provider's config directory holds that must never survive the run. */
 const CREDENTIAL_NAMES = [".credentials.json", ".claude.json", "auth.json"];

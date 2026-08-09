@@ -41,8 +41,18 @@ import {
 } from "./audit";
 import { subjectColumns } from "./subject";
 
-/** Nothing in here reads more than one row by id, and a subject has at most one live run. */
+/** A read addressed by one id matches one row, and a subject has at most one live run. */
 const ONE = 1;
+
+/**
+ * How many ids one existence read carries.
+ *
+ * {@link make}'s `existing` is asked about whatever the boot sweep found on
+ * disk, which nothing bounds, and a driver has a ceiling on bound parameters.
+ * Well under it, and the cost of the split is one extra round trip per thousand
+ * directories, once per boot.
+ */
+const EXISTENCE_CHUNK = 1000;
 
 /** The table these rows live in, and what an error names them as. */
 const ENTITY = "run";
@@ -525,6 +535,50 @@ const make = Effect.gen(function* () {
     return yield* decodeMany({ decode: decodeRun, entity: ENTITY, rows });
   });
 
+  /**
+   * Which of these run ids the database still has rows for, live or finished a
+   * month ago.
+   *
+   * The database half of "is this run directory still anybody's". A run
+   * directory holds the transcript at full length and the event ledger the
+   * timeline is rebuilt from, so what keeps it on disk is the row and not the
+   * run's liveness — and a task deleted takes its runs with it, which is how a
+   * directory comes to have no row at all.
+   *
+   * Asked about the ids the caller found rather than answered with every id in
+   * the table: the read is then bounded by what is on disk, which is the thing
+   * being decided about, and a board with a hundred thousand runs behind it does
+   * not pay for them at every boot.
+   */
+  const existing = Effect.fn("RunRepo.existing")(function* (input: {
+    readonly ids: readonly RunId[];
+    readonly workspaceId: WorkspaceId;
+  }) {
+    yield* Effect.annotateCurrentSpan({
+      asked: input.ids.length,
+      workspaceId: input.workspaceId,
+    });
+    const found: RunId[] = [];
+    for (let from = 0; from < input.ids.length; from += EXISTENCE_CHUNK) {
+      const rows = yield* execute(
+        "RunRepo.existing",
+        db
+          .select({ id: run.id })
+          .from(run)
+          .where(
+            and(
+              eq(run.workspaceId, input.workspaceId),
+              inArray(run.id, input.ids.slice(from, from + EXISTENCE_CHUNK))
+            )
+          )
+      );
+      for (const row of rows) {
+        found.push(row.id);
+      }
+    }
+    return found as readonly RunId[];
+  });
+
   const listOn = (operation: string, input: SubjectRef) =>
     Effect.gen(function* () {
       const rows = yield* execute(
@@ -569,6 +623,7 @@ const make = Effect.gen(function* () {
     byId,
     close,
     create,
+    existing,
     listByTask,
     listByThread,
     listLive,

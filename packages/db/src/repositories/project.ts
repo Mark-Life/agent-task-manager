@@ -269,7 +269,31 @@ const make = Effect.gen(function* () {
     return yield* decodeMany({ decode: decodeProject, entity: ENTITY, rows });
   });
 
-  return { byId, create, delete: remove, list, update } as const;
+  /**
+   * Every repository this workspace's projects name, once each.
+   *
+   * Read at boot by the mirror sweep, which needs the set of repos something
+   * still points at. Urls rather than rows: a project's name and its default
+   * branch say nothing about which bare clone on disk is still wanted, and the
+   * caller turns each url into a path with the same function that created it.
+   */
+  const repoUrls = Effect.fn("ProjectRepo.repoUrls")(function* (options: {
+    readonly workspaceId: WorkspaceId;
+  }) {
+    yield* Effect.annotateCurrentSpan({ workspaceId: options.workspaceId });
+
+    const rows = yield* execute(
+      "ProjectRepo.repoUrls",
+      db
+        .selectDistinct({ repoUrl: project.repoUrl })
+        .from(project)
+        .where(eq(project.workspaceId, options.workspaceId))
+    );
+
+    return rows.flatMap((row) => (row.repoUrl === null ? [] : [row.repoUrl]));
+  });
+
+  return { byId, create, delete: remove, list, repoUrls, update } as const;
 });
 
 /** Projects. Every mutation writes its audit row in the same transaction. */

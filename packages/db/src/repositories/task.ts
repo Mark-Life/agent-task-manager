@@ -462,6 +462,30 @@ const make = Effect.gen(function* () {
   });
 
   /**
+   * Every repository this workspace's tasks name for themselves, once each.
+   *
+   * The other half of what the mirror sweep keeps, beside the projects'. A task
+   * may override its project's repository or carry one with no project at all,
+   * so a keep set built from projects alone would delete the bare clone a card
+   * on the board is about to be run against.
+   */
+  const repoUrls = Effect.fn("TaskRepo.repoUrls")(function* (options: {
+    readonly workspaceId: WorkspaceId;
+  }) {
+    yield* Effect.annotateCurrentSpan({ workspaceId: options.workspaceId });
+
+    const rows = yield* execute(
+      "TaskRepo.repoUrls",
+      db
+        .selectDistinct({ repoUrl: task.repoUrl })
+        .from(task)
+        .where(eq(task.workspaceId, options.workspaceId))
+    );
+
+    return rows.flatMap((row) => (row.repoUrl === null ? [] : [row.repoUrl]));
+  });
+
+  /**
    * Moves a card within its column. Dragging it up the board and asking the
    * manager agent to run something next are this one write: the orchestrator
    * spends its next slot on the top of `in_progress`, so position in the
@@ -547,6 +571,7 @@ const make = Effect.gen(function* () {
     create,
     delete: remove,
     place,
+    repoUrls,
     selectNextSession,
     transition,
     update,
