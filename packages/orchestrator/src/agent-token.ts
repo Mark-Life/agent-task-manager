@@ -40,8 +40,14 @@
  *
  * Which actor the token speaks as is {@link bindingOf} and nothing else: a
  * worker is bound to its one task, a manager to its conversation. That single
- * difference is the whole of it: the manager's reach is a wider binding of the
- * same credential, not a second tool list.
+ * difference is the whole of what either may *do*: the manager's reach is a
+ * wider binding of the same credential, not a second tool list.
+ *
+ * The role travels beside it, in {@link scopedMcpServersFile}, and buys one
+ * thing that is not authorization: the server lists a worker only the tools its
+ * binding can succeed at, instead of three it is refused on every call. The
+ * table is still one table and the refusals are still the gateway's — see the
+ * note on `AGENT_ROLE_ENV_VAR` in `@workspace/agent-tools`.
  */
 
 import {
@@ -49,7 +55,7 @@ import {
   agentMcpServersFile,
   CONTAINER_AGENT_TOKEN_PATH,
 } from "@workspace/agent-tools";
-import type { WorkspaceId } from "@workspace/domain";
+import type { RunRole, WorkspaceId } from "@workspace/domain";
 import { CONTAINER_AGENT_MCP_PATH } from "@workspace/harness";
 import {
   type AgentBinding,
@@ -218,11 +224,13 @@ export const scopedRollingToken = Effect.fnUntraced(function* (
   return input.path;
 });
 
-/** What the servers file names: where to reach the board, and as whom. */
+/** What the servers file names: where to reach the board, as whom, and doing which job. */
 export interface McpServersFileInput {
   readonly gatewayUrl: string;
   /** `mcpServersPathOf` applied to the run's layout. */
   readonly path: string;
+  /** {@link roleOf} for this run. Decides which tools it is listed, not what it may do. */
+  readonly role: RunRole;
 }
 
 /**
@@ -254,6 +262,7 @@ export const scopedMcpServersFile = Effect.fnUntraced(function* (
     bundlePath: CONTAINER_AGENT_MCP_PATH,
     credential: { kind: "file", path: CONTAINER_AGENT_TOKEN_PATH },
     gatewayUrl: input.gatewayUrl,
+    role: input.role,
   });
   return yield* Effect.acquireRelease(
     fs

@@ -26,7 +26,7 @@ import { makeManagerMcpServer, serveOverStdio } from "./server";
 export const runAgentMcpServer = Effect.gen(function* () {
   const config = yield* readGatewayConfig;
   const client = yield* makeGatewayClient(config);
-  yield* serveOverStdio(makeManagerMcpServer(client));
+  yield* serveOverStdio(makeManagerMcpServer({ client, role: config.role }));
 }).pipe(Effect.provide(FetchHttpClient.layer));
 
 if (import.meta.main) {

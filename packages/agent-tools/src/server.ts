@@ -24,11 +24,12 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import type { RunRole } from "@workspace/domain";
 import { Cause, Effect, Exit } from "effect";
 import type { GatewayClient } from "./client";
 import { AGENT_SERVER_NAME } from "./provider-config";
-import type { ToolFailed } from "./tool";
-import { AGENT_TOOLS, agentToolByName } from "./tools";
+import type { AgentTool, ToolFailed } from "./tool";
+import { agentToolByName, agentToolsFor } from "./tools";
 
 /**
  * What this server calls itself to an MCP client. Its own number, not the
@@ -38,7 +39,7 @@ import { AGENT_TOOLS, agentToolByName } from "./tools";
 export const AGENT_MCP_VERSION = "1.0.0";
 
 /** One tool as an MCP client is told about it. */
-const listedTool = (tool: (typeof AGENT_TOOLS)[number]) => ({
+const listedTool = (tool: AgentTool) => ({
   description: tool.description,
   inputSchema: tool.inputJsonSchema,
   name: tool.name,
@@ -59,18 +60,28 @@ const toolResult = (options: {
  * A tool the client does not know about is answered rather than thrown: MCP
  * clients cache tool listings, and a model calling a name that has moved
  * deserves to be told which names exist.
+ *
+ * **The role narrows what is listed and never what is called.** A name in the
+ * table is looked up and run whatever role asked for it, so a worker that calls
+ * a tool its listing left out gets the gateway's own refusal — `Forbidden:
+ * unscoped_route`, which says what the rule is — rather than this file's "no
+ * such tool", which would say the board had changed. The names offered back
+ * after a genuine miss are that role's, because those are the ones worth
+ * trying.
  */
 export const callAgentTool = (options: {
   readonly args: unknown;
   readonly client: GatewayClient;
   readonly name: string;
+  readonly role: RunRole;
 }) => {
   const tool = agentToolByName(options.name);
   if (tool === undefined) {
+    const offered = agentToolsFor(options.role).map((each) => each.name);
     return Effect.succeed(
       toolResult({
         isError: true,
-        text: `no such tool: ${options.name}. Available: ${AGENT_TOOLS.map((each) => each.name).join(", ")}`,
+        text: `no such tool: ${options.name}. Available: ${offered.join(", ")}`,
       })
     );
   }
@@ -90,23 +101,33 @@ const describeCause = (cause: Cause.Cause<ToolFailed>) => {
 };
 
 /**
- * The server, wired to one client. Pure construction — the transport is
- * connected by the entrypoint, so a test can drive the handlers directly.
+ * The server, wired to one client and one role. Pure construction — the
+ * transport is connected by the entrypoint, so a test can drive the handlers
+ * directly.
+ *
+ * The role reaches this process in its environment and nowhere else
+ * (`AGENT_ROLE_ENV_VAR` in `./config`), because nothing else here knows it: the
+ * credential says which task a run may write, not which job the turn is doing.
  */
-export const makeManagerMcpServer = (client: GatewayClient) => {
+export const makeManagerMcpServer = (options: {
+  readonly client: GatewayClient;
+  readonly role: RunRole;
+}) => {
   const server = new Server(
     { name: AGENT_SERVER_NAME, version: AGENT_MCP_VERSION },
     { capabilities: { tools: {} } }
   );
+  const listed = agentToolsFor(options.role).map(listedTool);
   server.setRequestHandler(ListToolsRequestSchema, () =>
-    Promise.resolve({ tools: AGENT_TOOLS.map(listedTool) })
+    Promise.resolve({ tools: listed })
   );
   server.setRequestHandler(CallToolRequestSchema, (request) =>
     Effect.runPromise(
       callAgentTool({
         args: request.params.arguments,
-        client,
+        client: options.client,
         name: request.params.name,
+        role: options.role,
       })
     )
   );

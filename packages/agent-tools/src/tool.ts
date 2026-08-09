@@ -46,7 +46,75 @@ export interface AgentTool {
   /** The same schema as JSON Schema, which is what an MCP client is handed. */
   readonly inputJsonSchema: JsonSchema.JsonSchema;
   readonly name: string;
+  /**
+   * Whether a worker's credential can ever succeed at this operation. Derived
+   * from {@link withinWorkerBinding} and the one refusal that lives past the
+   * binding; see the note there.
+   */
+  readonly reachedByWorker: boolean;
 }
+
+/** How a `$ref` names something in the document's own definitions, in Draft 2020-12. */
+const DEFINITION_REF = "#/$defs/";
+
+/**
+ * The definitions named by `$ref` anywhere inside one schema node.
+ *
+ * One level only — the closure over what those definitions themselves reference
+ * is {@link referencedDefinitions}. Walks arrays and objects alike because a
+ * `$ref` is legal wherever a schema is, which in practice is inside
+ * `properties`, `items`, `anyOf` and `$defs`.
+ */
+const refNamesIn = (node: unknown, into: Set<string>): Set<string> => {
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      refNamesIn(item, into);
+    }
+    return into;
+  }
+  if (typeof node !== "object" || node === null) {
+    return into;
+  }
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "$ref" && typeof value === "string") {
+      if (value.startsWith(DEFINITION_REF)) {
+        into.add(value.slice(DEFINITION_REF.length));
+      }
+    } else {
+      refNamesIn(value, into);
+    }
+  }
+  return into;
+};
+
+/**
+ * The definitions this root actually reaches, following `$ref`s through the
+ * definitions themselves.
+ *
+ * Transitive rather than one pass: a kept definition may `$ref` a second one,
+ * and shipping the first without the second is a listing with a dangling
+ * pointer — worse than the duplication this removes.
+ */
+const referencedDefinitions = (
+  root: JsonSchema.JsonSchema,
+  definitions: JsonSchema.Definitions
+): JsonSchema.Definitions => {
+  const kept: Record<string, JsonSchema.JsonSchema> = {};
+  const pending = [...refNamesIn(root, new Set<string>())];
+  while (pending.length > 0) {
+    const name = pending.pop();
+    if (name === undefined || name in kept) {
+      continue;
+    }
+    const definition = definitions[name];
+    if (definition === undefined) {
+      continue;
+    }
+    kept[name] = definition;
+    pending.push(...refNamesIn(definition, new Set<string>()));
+  }
+  return kept;
+};
 
 /**
  * A schema as the JSON Schema an MCP client reads.
@@ -55,7 +123,18 @@ export interface AgentTool {
  * its own definition, and MCP requires the root of a tool's input to be an
  * object — a client that reads `{ $ref: … }` rejects the tool. And the
  * definitions live beside the document, with nowhere to be resolved from once
- * the tool listing is on the wire, so they are carried inside it under `$defs`.
+ * the tool listing is on the wire, so the ones the root still points at are
+ * carried inside it under `$defs`.
+ *
+ * **Only the ones it still points at.** Resolving the top-level `$ref` inlines
+ * the named definition into the root and leaves the definition itself in the
+ * pool with nothing referring to it — an exact second copy of the schema
+ * directly above it. Two tools generated that way, and their orphans were
+ * 1,409 of the tool table's 13,513 characters, `tasks_create` alone 1,068 of
+ * them. Every one of those characters is in the prompt of every turn, and none
+ * of them can be reached by a client reading the listing. So the pool is pruned
+ * to what the root can follow, which is a no-op for a schema that genuinely
+ * shares a definition and removes the whole of it for one that does not.
  */
 export const toolInputJsonSchema = (
   schema: Schema.Top
@@ -64,9 +143,8 @@ export const toolInputJsonSchema = (
     Schema.toJsonSchemaDocument(schema)
   );
   const root = objectRoot(document.schema);
-  return Object.keys(document.definitions).length === 0
-    ? root
-    : { ...root, $defs: document.definitions };
+  const carried = referencedDefinitions(root, document.definitions);
+  return Object.keys(carried).length === 0 ? root : { ...root, $defs: carried };
 };
 
 /**
@@ -114,6 +192,36 @@ const jsonFieldsOf = (failure: object) => {
   }
 };
 
+/** The method whose endpoints ask for `read`, which a run's token holds over the whole board. */
+const READ_METHOD = "GET ";
+
+/** The path parameter the contract nests every task-owned route below. */
+const TASK_PARAM = ":taskId";
+
+/** Where a tool that is two endpoints separates them, as `endpoint` spells it. */
+const ENDPOINT_SEPARATOR = " | ";
+
+/**
+ * Whether a worker's binding lets this endpoint through, read off the endpoint
+ * the tool already declares.
+ *
+ * Derived rather than listed, because the gateway's own check is exactly this
+ * shape: `checkBinding` in `apps/gateway/src/auth/principal.ts` lets a bound
+ * token through when the scope required is `read`, refuses `unscoped_route` on
+ * a write with no `:taskId` in the path, and compares the two ids otherwise. So
+ * a `GET` is reachable, a write nested under `:taskId` is reachable on the
+ * run's own task, and a write that is not about one task never is. A tool that
+ * is two endpoints has to clear both, since either one may be the call.
+ *
+ * The per-call half — a write aimed at *somebody else's* task — is not a
+ * property of the tool and is not decided here. It stays where it is, on the
+ * request.
+ */
+const withinWorkerBinding = (endpoint: string) =>
+  endpoint
+    .split(ENDPOINT_SEPARATOR)
+    .every((one) => one.startsWith(READ_METHOD) || one.includes(TASK_PARAM));
+
 /** How many spaces the rendered JSON is indented by — read by a model, not a parser. */
 const RESULT_INDENT = 2;
 
@@ -137,6 +245,12 @@ export const defineTool = <
   readonly endpoint: string;
   readonly input: S;
   readonly name: string;
+  /**
+   * A refusal a worker meets *past* the binding, which the endpoint therefore
+   * cannot show. Set on the one operation the domain answers on the actor
+   * rather than on the task; everything else leaves it alone.
+   */
+  readonly refusedToWorker?: boolean;
   readonly run: (call: {
     readonly client: GatewayClient;
     readonly input: S["Type"];
@@ -159,4 +273,6 @@ export const defineTool = <
   input: options.input,
   inputJsonSchema: toolInputJsonSchema(options.input),
   name: options.name,
+  reachedByWorker:
+    withinWorkerBinding(options.endpoint) && options.refusedToWorker !== true,
 });

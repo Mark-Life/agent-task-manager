@@ -623,10 +623,21 @@ export const artifactClaims = (input: {
     });
   });
 
-/** A run's token writes on its own task and nowhere else. */
+/**
+ * A run's token writes on its own task and nowhere else.
+ *
+ * The last three claims are what the worker's tool listing is filtered on. A
+ * tool the board refuses on every call a worker could write is a schema in
+ * every worker's prompt bought with a `403`, so `agentToolsFor` in
+ * `@workspace/agent-tools` leaves those three out — and it derives which ones
+ * from the endpoint each declares rather than being told. These are the
+ * refusals that derivation claims exist, made here against a real token so the
+ * filter rests on the gateway's behaviour and not on a reading of it.
+ */
 export const bindingClaims = (input: {
   readonly caller: Caller;
   readonly otherTaskId: TaskId;
+  readonly projectId: string;
   readonly taskId: TaskId;
   readonly workerToken: string;
 }) =>
@@ -665,6 +676,49 @@ export const bindingClaims = (input: {
       detail: `${read.status} reading the neighbouring task`,
       ok: read.status === OK,
       step: "and still reads the rest of the board",
+    });
+
+    const filed = yield* input.caller.call({
+      body: { projectId: input.projectId, title: "should never be filed" },
+      method: "POST",
+      path: "/tasks",
+      token: input.workerToken,
+    });
+    yield* check({
+      detail: `${filed.status} ${failureOf(filed.body).reason ?? "no reason"}`,
+      ok:
+        filed.status === FORBIDDEN &&
+        failureOf(filed.body).reason === "unscoped_route",
+      step: "a run's token cannot file a task, because a new task is nobody's task",
+    });
+
+    const project = yield* input.caller.call({
+      body: { name: "should never be filed" },
+      method: "POST",
+      path: "/projects",
+      token: input.workerToken,
+    });
+    yield* check({
+      detail: `${project.status} ${failureOf(project.body).reason ?? "no reason"}`,
+      ok:
+        project.status === FORBIDDEN &&
+        failureOf(project.body).reason === "unscoped_route",
+      step: "nor a project, for the same reason",
+    });
+
+    // Its own task on purpose: the binding would refuse any other one first,
+    // and what is being claimed is the refusal that comes *after* the binding.
+    const erased = yield* input.caller.call({
+      method: "DELETE",
+      path: `/tasks/${input.taskId}`,
+      token: input.workerToken,
+    });
+    yield* check({
+      detail: `${erased.status} ${failureOf(erased.body)._tag ?? "no tag"}`,
+      ok:
+        erased.status === FORBIDDEN &&
+        failureOf(erased.body)._tag === "IllegalDeletion",
+      step: "and cannot erase the task it was dispatched for, though it may write to it",
     });
 
     return other.traceId;
