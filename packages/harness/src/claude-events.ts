@@ -55,20 +55,36 @@ type ToolResultBlock = Extract<
  * Which field of a tool's input reads as its summary. Anything absent from this
  * map summarizes as nothing at all — an unknown tool's input is an unknown
  * shape, and guessing at it is how a credential ends up on the timeline.
+ *
+ * `Skill` is on the list because a skill name is not caller text: it is a slug
+ * off the repository's own skill directory, a closed vocabulary a reader can
+ * enumerate. Without it every skill call summarized as nothing and which
+ * skills a run actually used could not be counted at all.
  */
 const TOOL_SUMMARY_FIELD: Readonly<Record<string, string>> = {
   Edit: "file_path",
   Glob: "pattern",
   Grep: "pattern",
   Read: "file_path",
+  Skill: "skill",
   Task: "description",
   WebFetch: "url",
   WebSearch: "query",
   Write: "file_path",
 };
 
-/** Leading words of a shell command kept as its label. */
-const COMMAND_LABEL_WORDS = 2;
+/**
+ * Leading words of a shell command kept as its label.
+ *
+ * Three, because two is the width of a runner and not of a command: `bun run`,
+ * `npm run` and `git submodule` all say nothing about what ran, and every
+ * `bun run <script>` in the repository collapsed into one indistinguishable
+ * row. The third word is what a reader is actually grouping by. It costs
+ * nothing in safety — the bare-word rule below still stops at the first word
+ * that could hold a value, and a positional secret in third place would already
+ * have been reachable in second.
+ */
+const COMMAND_LABEL_WORDS = 3;
 
 /** A word safe to show: no quotes, no separators, nothing that holds a value. */
 const BARE_WORD = /^[\w./-]+$/;
@@ -91,8 +107,8 @@ const stringOf = (value: unknown) => (typeof value === "string" ? value : "");
 /**
  * A shell command reduced to its verb. The argv never travels: a `git push` or
  * a `gh api` line carries a token often enough that the only safe rule is to
- * keep the program and its subcommand and stop at the first word that is not a
- * bare one.
+ * keep the program and what it was asked to do — {@link COMMAND_LABEL_WORDS}
+ * words at most — and stop at the first word that is not a bare one.
  */
 const commandLabel = (command: string) => {
   const kept: string[] = [];

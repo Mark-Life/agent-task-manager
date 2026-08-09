@@ -56,8 +56,9 @@ interface EventRow {
   event?: string;
   outcome?: string | null;
   phase?: string;
-  project?: string;
+  projectId?: string | null;
   provider?: string;
+  repo?: string | null;
   runId?: string | null;
   totalTokens?: number | null;
   ts?: string;
@@ -183,6 +184,14 @@ const fmtDur = (ms?: number | null) => {
 const fmtInt = (n?: number | null) =>
   typeof n === "number" ? n.toLocaleString() : "-";
 
+/**
+ * What the row was working on. `atm.run` carries both `repo` (`owner/name`,
+ * parsed out of the URL) and `projectId` (a uuid), and the repository is the
+ * one a reader recognizes, so it wins and the id is the fallback for a project
+ * with no repository set. Markers that name neither get `-`.
+ */
+const fmtProject = (r: EventRow) => r.repo ?? r.projectId ?? "-";
+
 /** One aligned `runs` / `follow` row. */
 const runLine = (r: EventRow) => {
   const mark = MARK[r.outcome ?? ""] ?? "?";
@@ -193,7 +202,7 @@ const runLine = (r: EventRow) => {
     pad(fmtDur(r.durationMs), DUR_W, true),
     pad(fmtInt(r.turns), TURNS_W, true),
     pad(fmtInt(r.totalTokens), TOK_W, true),
-    r.project ?? "-",
+    fmtProject(r),
   ].join(" ");
 };
 
@@ -212,7 +221,7 @@ const errorLine = (r: EventRow) =>
   [
     pad(fmtTime(r.ts), TIME_W),
     pad(MARK[r.outcome ?? ""] ?? "?", MARK_W),
-    pad(r.project ?? "-", PROJECT_W),
+    pad(fmtProject(r), PROJECT_W),
     pad(r.errorClass ?? "-", CLASS_W),
     r.errorMessage ?? "-",
   ].join(" ");

@@ -17,6 +17,16 @@ Each view reads one marker (default `atm.run`) so counts stay about one kind of 
 unit that writes both a `start` row and a terminus, the pair is collapsed to the terminus; a
 start with no terminus is reported as `lost` rather than disappearing.
 
+The PROJECT column is a run's `repo` (`owner/name`), falling back to its `projectId` when the
+project has no repository; a marker carrying neither shows `-`. The views group by outcome and
+nothing else, so any other question is one `jq` away over the same files — the gateway's 404s by
+how far they got into the contract, for instance:
+
+```bash
+jq -r 'select(.event == "atm.request" and .route == "unmatched") | .pathShape' \
+  .data/events/gateway.jsonl | sort | uniq -c | sort -rn
+```
+
 A missing `EVENT_LOG_DIR` prints an empty table / zeroed stats instead of crashing. Blank reads
 as unset, matching `Config`, so the viewer and the sink always agree on the directory. No
 running service required; it only reads files on disk.

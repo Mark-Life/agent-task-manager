@@ -21,6 +21,7 @@ import {
   REQUEST_EVENT_MARKER,
   requestEventLayer,
 } from "./request-event";
+import { pathShapeOf } from "./request-metrics";
 
 const SERVICE = "gateway-test";
 const COUNTER = "atm_requests_total";
@@ -306,7 +307,29 @@ describe("the atm.request row", () => {
     // the platform's message for this failure is the request line: the class
     // says everything it would, and the path never reaches a durable sink
     expect(row.errorMessage).toBeNull();
+    // what the suppressed message was wanted for, bounded: this one got nowhere
+    expect(row.pathShape).toBe("/*");
     expect(JSON.stringify(row)).not.toContain("7f3a9c2e1b4d8a6f");
+  });
+
+  test("a 404 on a real endpoint is a different shape from a probe", async () => {
+    // the contract declares /tasks/:taskId/comments; this router does not mount
+    // it, so the request 404s exactly as a wrong method on it would
+    await get("/tasks/019a4c48-1f0f-7000-8000-000000000001/comments");
+
+    const row = await onlyRow();
+    expect(row.route).toBe("unmatched");
+    expect(row.pathShape).toBe("/tasks/:taskId/comments");
+    // the id it asked for is still identity, not shape
+    expect(JSON.stringify({ pathShape: row.pathShape })).not.toContain("019a");
+  });
+
+  test("a matched route leaves no shape, since the pattern already says it", async () => {
+    await get("/tasks/task-42");
+
+    const row = await onlyRow();
+    expect(row.route).toBe("/tasks/:taskId");
+    expect(row.pathShape).toBeNull();
   });
 
   test("a defect is a 500 and an errored row, with its text sanitized", async () => {
@@ -471,6 +494,30 @@ describe("the gateway metrics", () => {
     await drained;
     await waitForRows(1);
     expect(gaugeFor(await seriesOf(GAUGE)).state.value).toBe(0);
+  });
+});
+
+describe("pathShapeOf", () => {
+  test("describes a path only as far as the contract can, then stops", () => {
+    // a probe gets nowhere at all, however many segments it has
+    expect(pathShapeOf("/wp-admin/setup.php")).toBe("/*");
+    expect(pathShapeOf("/.env")).toBe("/*");
+    // a real endpoint asked for the wrong way keeps its whole pattern
+    expect(pathShapeOf("/tasks/t1/runs/r1/events/stream")).toBe(
+      "/tasks/:taskId/runs/:runId/events/stream"
+    );
+    // a near miss says where it went wrong, and the rest is one mark
+    expect(pathShapeOf("/tasks/t1/comment")).toBe("/tasks/:taskId/*");
+    expect(pathShapeOf("/tasks/t1/runs/r1/events/stream/more")).toBe(
+      "/tasks/:taskId/runs/:runId/events/stream/*"
+    );
+    // a literal the contract declares beats the parameter at the same level
+    expect(pathShapeOf("/tasks/board")).toBe("/tasks/board");
+    expect(pathShapeOf("/")).toBe("/");
+    // nothing a caller wrote survives, including a segment shaped like a pattern
+    expect(pathShapeOf("/tasks/sk-live-abc123/:taskId")).toBe(
+      "/tasks/:taskId/*"
+    );
   });
 });
 
