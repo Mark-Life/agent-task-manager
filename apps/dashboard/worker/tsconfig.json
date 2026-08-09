@@ -1,0 +1,18 @@
+{
+  // The worker is the one file in this app that does not run in a document.
+  // `lib.dom` there is not merely unused, it is wrong: it would offer `window`,
+  // `localStorage` and `document` to code that has none of them, and the
+  // mistake compiles. So the worker gets its own program, and the app's
+  // tsconfig excludes `sw.ts` from its own. `route.ts` and `protocol.ts` are
+  // reached from both, which is the point — they are the shared vocabulary and
+  // they have to be legal in either scope.
+  "extends": "@workspace/typescript-config/base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "WebWorker", "WebWorker.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "types": []
+  },
+  "include": ["sw.ts"]
+}

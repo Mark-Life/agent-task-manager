@@ -16,6 +16,7 @@ import {
   useState,
 } from "react";
 import { isHttpUrl, prettyUrl } from "@/lib/url";
+import { useUpdateHold } from "@/pwa/hold";
 
 /**
  * Inline editing primitives, the shape Notion made familiar: a value on the
@@ -83,6 +84,12 @@ const useInlineEdit = ({
 }: UseInlineEditOptions) => {
   const [draft, setDraft] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+
+  // Every inline edit in the app comes through here — the title, the brief, the
+  // acceptance criteria, a property — and every one of them is uncommitted text
+  // that only exists in this browser. The background update waits for all of
+  // them.
+  useUpdateHold(draft !== null, "something is being edited");
 
   const begin = useCallback(() => setDraft(value), [value]);
   const abandon = useCallback(() => {

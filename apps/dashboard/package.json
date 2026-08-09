@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "typecheck": "tsc --noEmit",
+    "icons": "bun run tools/icons.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p worker/tsconfig.json",
     "preview": "vite preview",
     "test": "bun test --pass-with-no-tests"
   },

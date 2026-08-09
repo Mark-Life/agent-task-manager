@@ -4,6 +4,45 @@
     <meta charset="UTF-8">
     <meta content="width=device-width, initial-scale=1.0" name="viewport">
     <title>Agent Task Manager — Dashboard</title>
+    <meta content="The board the agents work from: tasks, runs and what each one produced." name="description">
+
+    <!--
+      Installable, on both halves of the world.
+
+      The manifest is what Android and desktop Chrome read: the name, the
+      colours and the icon set, including the maskable one those platforms crop
+      into whatever shape they like. Safari reads none of it for a home-screen
+      app — it takes the name from `apple-mobile-web-app-title` and the picture
+      from `apple-touch-icon`, and without them an added app is titled with the
+      <title> above and drawn as a screenshot of the page. The phone this was
+      written for is the second case, so both are here and neither is optional.
+
+      iOS captures all of this at the moment Add to Home Screen is used and
+      never looks again, which is why an app already on a home screen has to be
+      removed and re-added once. Said out loud in deploy/README.md.
+    -->
+    <link href="/manifest.webmanifest" rel="manifest">
+    <link href="/icon.svg" rel="icon" type="image/svg+xml">
+    <link href="/icon-192.png" rel="icon" sizes="192x192" type="image/png">
+    <link href="/apple-touch-icon.png" rel="apple-touch-icon">
+    <meta content="yes" name="apple-mobile-web-app-capable">
+    <meta content="yes" name="mobile-web-app-capable">
+    <meta content="Tasks" name="apple-mobile-web-app-title">
+    <!--
+      `default` rather than `black-translucent`: translucent puts the page under
+      the clock and the battery, and this shell has no safe-area padding to give
+      that back. With `default`, iOS tints the status bar from the theme colour
+      below, which is the same colour the app paints behind it.
+    -->
+    <meta content="default" name="apple-mobile-web-app-status-bar-style">
+    <!--
+      Both values are `--background` from the shared stylesheet, dark then
+      light. The script below overwrites this with whichever one it just
+      resolved, so the bar agrees with an explicitly chosen theme and not only
+      with the machine's; the attribute here is what covers the instant before
+      that runs, and what a browser that never runs it uses.
+    -->
+    <meta content="#0a0a0a" id="theme-color" name="theme-color">
     <style>
     /*
       The shared stylesheet aliases --font-sans onto itself and then applies it
@@ -45,6 +84,13 @@
             : override === "dark";
         document.documentElement.classList.toggle("dark", dark);
         document.documentElement.style.colorScheme = dark ? "dark" : "light";
+        // The status bar of an installed app is painted from this, and it is
+        // painted before the app renders. The two literals are --background in
+        // the shared stylesheet; THEME_COLORS in components/theme.tsx holds
+        // the same pair and keeps this in step once React is up.
+        document
+          .getElementById("theme-color")
+          .setAttribute("content", dark ? "#0a0a0a" : "#f5f5f5");
       } catch {
         /* Private mode denies localStorage; the default theme is fine. */
       }

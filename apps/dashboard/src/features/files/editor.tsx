@@ -19,6 +19,7 @@ import { scopeKeepsHistory } from "@/features/files/scopes";
 import { formatBytes } from "@/lib/format";
 import { byteLengthOf, isInstructionFile } from "@/lib/instruction-budget";
 import { nameOf } from "@/lib/scope-path";
+import { useUpdateHold } from "@/pwa/hold";
 
 /** Names a document rather than code, and is drawn as one. */
 const MARKDOWN_EXTS = new Set(["markdown", "md"]);
@@ -104,6 +105,10 @@ export const ScopeFileEditor = ({ onSelect, path, scope }: EditorProps) => {
   const { mutate, reset } = write;
 
   const [draft, setDraft] = useState<string | null>(null);
+
+  // House rules typed into a box and not yet saved. Losing them to a background
+  // update would be losing the only copy, and several of these files are long.
+  useUpdateHold(draft !== null, "a file is open in the editor");
 
   const source = file.data?.content ?? "";
 

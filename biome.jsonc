@@ -75,6 +75,31 @@
           }
         }
       }
+    },
+    {
+      // The dashboard's icon generator: a drawing and a file format, and both
+      // of them are numbers by nature. `mark.ts` is the mark itself — the
+      // coordinates of three lanes and three cards in a hundred-unit square,
+      // where naming each one produces `const SIX = 6`. `png.ts` writes the
+      // container those pixels ship in: a CRC-32 and a chunk header, whose
+      // constants and whose bit shifts are the PNG specification rather than a
+      // choice anybody here made, and neither is expressible without `^`, `&`
+      // and `>>>`. Both files are covered by tests that render and re-read what
+      // they produce.
+      "includes": [
+        "apps/dashboard/tools/mark.ts",
+        "apps/dashboard/tools/png.ts"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noMagicNumbers": "off"
+          },
+          "suspicious": {
+            "noBitwiseOperators": "off"
+          }
+        }
+      }
     }
   ],
   "linter": {

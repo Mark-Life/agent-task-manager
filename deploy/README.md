@@ -223,6 +223,65 @@ ATM_DASHBOARD_ROOT=/srv/agent-task-manager/dashboard bun run dashboard:publish
 The gateway's address is compiled into the bundle rather than read at runtime,
 so a change to it is a rebuild, not a restart.
 
+`dashboard:publish` is `rsync --delete`: the previous build's files are gone the
+instant it finishes. That is fine and it is deliberate — see the next section
+for what it means for a browser that was holding the old build.
+
+## The dashboard on a phone, and how it updates itself
+
+The bundle is a progressive web app. Added to a home screen it runs without
+browser chrome, under its own icon, and it picks up new builds on its own.
+Nothing about the deploy above changes; this is what that deploy now produces.
+
+**What ships alongside the bundle.** `manifest.webmanifest`, an icon set
+including the maskable variant Android crops, `apple-touch-icon.png` and the
+Apple metas that Safari reads instead of the manifest, and `sw.js` — a service
+worker at the root, which is the scope it needs.
+
+**How a deploy reaches an app that is already installed.** The worker asks the
+server for `index.html` on every navigation, so a new build is seen the first
+time the app is opened after one lands. Seeing it downloads it, in the
+background, into a cache of its own; the running page keeps running on the old
+build until it reloads. That reload happens by itself at the first moment it
+costs nothing: when the app is put into the background, when it is brought back,
+or on the next load. Nobody is asked, and there is no banner to dismiss.
+
+It will not happen over unsaved work. An open editor draft in the file browser,
+a brief or any other field mid-edit, an unsent message, or a live run's timeline
+being watched all hold the update off until they are finished with. A held
+update is late, never lost — in practice it is taken the next time the app is
+put down.
+
+**The one thing an operator has to do by hand, once.** iOS captures the manifest
+and the icon at the moment Add to Home Screen is used and never looks at them
+again. An app that is already on a home screen was added when none of this
+existed, so it cannot learn about it:
+
+> **Every existing home-screen installation has to be deleted and re-added one
+> time.** Long-press the icon, remove the app, open the dashboard in Safari, and
+> Add to Home Screen again. Every update after that one is automatic and
+> silent. If somebody reports that the icon is still a screenshot of the page or
+> that the app is still on an old build, this is why — it is not a failure of
+> the deploy.
+
+**Caching is what makes or breaks this**, so the Caddyfile now states it in two
+halves that cannot overlap: `/assets/*` stays `immutable`, because Vite
+fingerprints those names; everything else — `index.html`, the manifest and the
+worker itself — is `no-cache`, which keeps the copy and revalidates it, so the
+usual answer is a 304 with no body. A worker that is itself cached for a day is
+a worker that cannot ship its own replacement, and an `index.html` served from
+a browser's cache names asset hashes that `rsync --delete` has already removed.
+
+**The API is never cached.** The board is live data on the gateway's origin and
+TanStack Query owns its freshness; the worker declines every cross-origin
+request outright, and the run event stream is named and excluded on top of that
+— a service worker in front of SSE is how streaming quietly stops working.
+
+**On Cloudflare instead of Caddy**, none of the header work above applies:
+Workers Static Assets serves with its own caching, which revalidates rather than
+letting a copy go stale, so the update path holds and the `immutable` year on
+`/assets/*` is what is lost. Unverified, like the rest of that path.
+
 ## Running it from your own checkout instead
 
 The install above is for a host that only runs this. There is a second shape,
@@ -639,6 +698,17 @@ Served real requests, on one host:
   a deep link that only `try_files` can resolve, `immutable` on a fingerprinted
   asset, and 204 to a preflight carrying `traceparent`. The unrelated site kept
   working. An SSE stream through `flush_interval -1` has still not been held.
+- **The dashboard block's cache headers, against a real build.** Caddy 2.10.2
+  over an actual `dist`: `no-cache` on `/`, on a deep link that only `try_files`
+  resolves, on `/index.html`, `/sw.js`, `/manifest.webmanifest` and the icons;
+  `public, max-age=31536000, immutable` on a fingerprinted asset; and a
+  conditional request for `index.html` answered 304. That the two matchers are
+  evaluated before `try_files` rewrites — which is what puts `no-cache` on a
+  navigation to `/tasks/<id>` — was read off those responses, not assumed.
+- **Not checked: the service worker on a device.** The worker is built, emitted
+  at `/sw.js` with the build's file list in it, and its routing rules are under
+  test. Nothing here has installed it in a browser, watched a second deploy
+  arrive over the first, or done the one-time re-add on an iPhone.
 - **The whole cookie path, cross-origin.** `POST /api/auth/sign-in/email` from
   the dashboard's origin to the gateway's answered 200 with
   `Access-Control-Allow-Origin` echoing that one origin, `Allow-Credentials`

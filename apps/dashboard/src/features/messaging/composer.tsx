@@ -10,6 +10,7 @@ import {
   useCallback,
   useState,
 } from "react";
+import { useUpdateHold } from "@/pwa/hold";
 
 /** What a caller is handed when the box is sent: the text, and the way to empty it. */
 export interface ComposerSend {
@@ -55,6 +56,11 @@ export const MessageComposer = ({
   placeholder,
 }: MessageComposerProps) => {
   const [body, setBody] = useState("");
+
+  // The draft lives here and nowhere else, so a reload is the one thing that
+  // can lose it. The app updates itself in the background; this is what keeps
+  // it from doing so over a half-written message.
+  useUpdateHold(body.trim() !== "", "a message is half written");
 
   const onChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>) => {
     setBody(event.target.value);
