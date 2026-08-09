@@ -9,7 +9,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "bun test --pass-with-no-tests",
-    "db:generate": "drizzle-kit generate",
+    "db:generate": "bun run scripts/migrations-check.ts && drizzle-kit generate",
+    "db:migrations-check": "bun run scripts/migrations-check.ts",
     "auth:generate": "bunx --bun auth@$(bun -p \"require('./package.json').dependencies['better-auth']\") generate --config ./src/auth/cli.ts --output ./src/schema/auth.ts --yes && bun run scripts/auth-schema-index.ts && bunx --bun ultracite fix ./src/schema/auth.ts"
   },
   "dependencies": {

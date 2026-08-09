@@ -43,6 +43,7 @@
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:migrate": "bun run --cwd packages/db --bun drizzle-kit migrate",
+    "db:migrations-check": "bun run --cwd packages/db db:migrations-check",
     "db:seed": "bun run scripts/seed.ts",
     "db:seed:demo": "bun run scripts/seed-demo.ts",
     "db:store-check": "bun run scripts/store-check.ts",
