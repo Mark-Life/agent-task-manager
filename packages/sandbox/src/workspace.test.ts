@@ -19,18 +19,20 @@ import {
   newProjectId,
   newRunId,
   newTaskId,
+  type ProjectId,
   WorkspaceId,
 } from "@workspace/domain";
-import { runDirOf } from "@workspace/harness";
+import { ATM_ROOT_MARKER, runDirOf } from "@workspace/harness";
 import { Effect, Exit } from "effect";
 import {
   globalArtifactsDirOf,
   projectArtifactsDirOf,
   taskArtifactsDirOf,
 } from "./artifacts";
+import { composedSkillsDirOf } from "./composed-skills";
 import { CloneFailed } from "./errors";
-import { eventLogDirOf } from "./mounts";
-import type { MaterializeInput, RepoSource } from "./spec";
+import { eventLogDirOf, type RunLabels, runTreeOf, slugOf } from "./mounts";
+import type { MaterializeInput, RepoSource, RunWorkspace } from "./spec";
 import { Workspace } from "./spec";
 import {
   type CloneIntoWorkspace,
@@ -120,9 +122,16 @@ const refusingClone: CloneIntoWorkspace = (input) =>
     })
   );
 
+/** The names this file's runs spell their container paths with. */
+const labels: RunLabels = {
+  project: "Atlas Rewrite",
+  repo: "mark-life/atlas",
+  task: "Ship the CSV export",
+};
+
 const materializeInput = (
   repo: RepoSource | null,
-  projectId = null,
+  projectId: ProjectId | null = null,
   envFiles: MaterializeInput["envFiles"] = []
 ) =>
   ({
@@ -130,9 +139,11 @@ const materializeInput = (
     dataRoot,
     envFiles,
     identity,
+    labels: { ...labels, project: projectId === null ? null : labels.project },
     projectId,
     provider: "claude",
     repo,
+    skillsDir: null,
     taskId,
   }) as MaterializeInput;
 
@@ -140,10 +151,7 @@ const materializeInput = (
 const withWorkspace = <A>(options: {
   readonly clone: CloneIntoWorkspace;
   readonly input: MaterializeInput;
-  readonly use: (workspace: {
-    readonly branch: string | null;
-    readonly workspaceDir: string;
-  }) => A;
+  readonly use: (workspace: RunWorkspace) => A;
 }) =>
   Effect.runPromiseExit(
     Effect.scoped(
@@ -221,6 +229,25 @@ describe("materialize", () => {
     expect(existsSync(eventLogDirOf(runDir))).toBe(true);
   });
 
+  /**
+   * The marker is what a Codex run's upward walk stops at, and the harness
+   * points `project_root_markers` at that name on every Codex turn. Without the
+   * file the walk finds no root at all and the run reads the one `AGENTS.md` in
+   * its checkout — quieter than the default it replaced, since nothing fails.
+   */
+  test("the top of the tree carries the marker a Codex run stops at", async () => {
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null),
+      use: () => null,
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(
+      existsSync(join(globalArtifactsDirOf(dataRoot), ATM_ROOT_MARKER))
+    ).toBe(true);
+  });
+
   test("a task with no project gets no project folder to mount", async () => {
     const exit = await withWorkspace({
       clone: refusingClone,
@@ -241,7 +268,7 @@ describe("materialize", () => {
     const projectId = newProjectId();
     const exit = await withWorkspace({
       clone: refusingClone,
-      input: { ...materializeInput(null), projectId },
+      input: materializeInput(null, projectId),
       use: () => null,
     });
 
@@ -255,6 +282,85 @@ describe("materialize", () => {
     expect(existsSync(projectArtifactsDirOf({ dataRoot, projectId }))).toBe(
       true
     );
+  });
+});
+
+/**
+ * The scopes are bound at nested container paths, and the workspace scope is
+ * read-only to a worker — so the daemon cannot create a destination through it
+ * and the container refuses to start without one. These are the directories that
+ * make the read-only parent workable, and nothing else on the host makes them.
+ */
+describe("the nested mount points", () => {
+  test("exist inside the parent scope's own host directory", async () => {
+    const projectId = newProjectId();
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null, projectId),
+      use: () => null,
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    expect(
+      existsSync(
+        join(
+          globalArtifactsDirOf(dataRoot),
+          "worker",
+          slugOf(String(labels.project))
+        )
+      )
+    ).toBe(true);
+    expect(
+      existsSync(
+        join(
+          projectArtifactsDirOf({ dataRoot, projectId }),
+          slugOf(labels.task)
+        )
+      )
+    ).toBe(true);
+    expect(
+      existsSync(
+        join(
+          taskArtifactsDirOf({ dataRoot, taskId }),
+          slugOf(String(labels.repo))
+        )
+      )
+    ).toBe(true);
+  });
+
+  test("follow the tree, so a task with no project has one level fewer", async () => {
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null),
+      use: () => null,
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    const workerDir = join(globalArtifactsDirOf(dataRoot), "worker");
+    // The task's own directory hangs straight off `worker/`, which is what
+    // `runTreeOf` says for a task that belongs to no project.
+    expect(readdirSync(workerDir)).toEqual([slugOf(labels.task)]);
+    expect(runTreeOf({ ...labels, project: null }).taskScope).toBe(
+      `/workspace/worker/${slugOf(labels.task)}`
+    );
+  });
+
+  test("hold nothing, so the artifact scan finds nothing to record", async () => {
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null),
+      use: () => null,
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    // A directory, and empty: `scanArtifacts` drops directories, so these are
+    // invisible to every row and URL the rest of the system builds.
+    const cloneMountPoint = join(
+      taskArtifactsDirOf({ dataRoot, taskId }),
+      slugOf(String(labels.repo))
+    );
+    expect(statSync(cloneMountPoint).isDirectory()).toBe(true);
+    expect(readdirSync(cloneMountPoint)).toEqual([]);
   });
 });
 
@@ -402,6 +508,92 @@ describe("the project's env files", () => {
 
     expect(Exit.isFailure(exit)).toBe(true);
     expect(existsSync(join(target, ".env"))).toBe(false);
+  });
+});
+
+/**
+ * The promise this keeps: a skill dropped in a shared folder reaches the run.
+ * Codex reads those folders itself; Claude reads only the composed directory,
+ * so a materialization that stopped producing one would take scope-level skills
+ * away from that provider with nothing failing anywhere.
+ */
+describe("the skills a run is composed", () => {
+  /** Writes a skill into a scope's host directory before the run is materialized. */
+  const seedSkill = (input: {
+    readonly name: string;
+    readonly scope: string;
+  }) => {
+    const path = join(input.scope, ".agents/skills", input.name);
+    mkdirSync(path, { recursive: true });
+    writeFileSync(join(path, "SKILL.md"), `# ${input.name}\n`);
+  };
+
+  test("carries a skill from the workspace folder into a directory beside the run's own", async () => {
+    seedSkill({ name: "house-style", scope: globalArtifactsDirOf(dataRoot) });
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null),
+      use: (workspace) =>
+        readFileSync(
+          join(String(workspace.composedSkillsDir), "house-style", "SKILL.md"),
+          "utf8"
+        ),
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (!Exit.isSuccess(exit)) {
+      return;
+    }
+    expect(exit.value.used).toBe("# house-style\n");
+    expect(exit.value.materialized.composedSkillsDir).toBe(
+      composedSkillsDirOf({ dataRoot, runId: identity.runId })
+    );
+    // A sibling of the run directory rather than a child, because `/run` is
+    // bound read-write and a composition under it would be reachable in
+    // writable form there.
+    expect(
+      exit.value.materialized.composedSkillsDir?.startsWith(
+        runDirOf({ dataRoot, runId: identity.runId })
+      )
+    ).toBe(false);
+  });
+
+  test("gives a tree with no skills no mount to make", async () => {
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null),
+      use: () => null,
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) {
+      expect(exit.value.materialized.composedSkillsDir).toBe(null);
+    }
+  });
+
+  test("is the run's while the run lasts, and gone after it", async () => {
+    seedSkill({ name: "house-style", scope: globalArtifactsDirOf(dataRoot) });
+    const exit = await withWorkspace({
+      clone: refusingClone,
+      input: materializeInput(null),
+      use: (workspace) => existsSync(String(workspace.composedSkillsDir)),
+    });
+
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (!Exit.isSuccess(exit)) {
+      return;
+    }
+    expect(exit.value.used).toBe(true);
+    expect(existsSync(String(exit.value.materialized.composedSkillsDir))).toBe(
+      false
+    );
+    // The source outlives it: what died is a copy, and the next run makes its
+    // own from the same folder.
+    expect(
+      existsSync(
+        join(globalArtifactsDirOf(dataRoot), ".agents/skills/house-style")
+      )
+    ).toBe(true);
   });
 });
 

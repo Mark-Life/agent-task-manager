@@ -24,7 +24,11 @@
 
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { RunId, SessionProvider } from "@workspace/domain";
+import {
+  AGENTS_INSTRUCTIONS_FILE,
+  type RunId,
+  type SessionProvider,
+} from "@workspace/domain";
 
 /** Directory under the data root holding one subdirectory per run. */
 export const RUNS_SEGMENT = "runs";
@@ -38,6 +42,34 @@ export const EVENT_LOG_FILE = "events.jsonl";
  * `runs/` can see every other run's files.
  */
 export const CONTAINER_RUN_DIR = "/run";
+
+/**
+ * The empty marker file that names the top of a run's instruction tree.
+ *
+ * Codex collects `AGENTS.md` by walking up from the working directory until it
+ * finds a `project_root_markers` entry, and reads nothing above it — so this
+ * name is what decides how much of the tree a Codex run is handed. Under the
+ * default `[".git"]` a run standing in its checkout gets the checkout's own
+ * file and none of the scopes above it. `./codex-config` points the setting
+ * here; Claude needs neither the marker nor the setting, its own walk having no
+ * stop until the filesystem root.
+ *
+ * Stated here rather than in `@workspace/sandbox`, which is what creates the
+ * file: the sandbox depends on this package and not the other way round, so
+ * only this direction is importable, and this file is already where parties
+ * that cannot see each other agree on a path.
+ */
+export const ATM_ROOT_MARKER = ".atm-root";
+
+/**
+ * The whole body of a `CLAUDE.md` that defers to the `AGENTS.md` beside it.
+ *
+ * `@path` is Claude's own import, resolved relative to the importing file — so
+ * this line works wherever the pair is written and names no absolute path a
+ * container would not recognise. This repository's own `.claude/CLAUDE.md` is
+ * the same one-line file, which is where the form was verified.
+ */
+export const CLAUDE_INSTRUCTIONS_IMPORT = `@${AGENTS_INSTRUCTIONS_FILE}\n`;
 
 /**
  * The environment variable that relocates a provider's config directory. This

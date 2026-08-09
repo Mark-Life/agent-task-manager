@@ -1,5 +1,12 @@
 /**
- * One place where an agent's instructions live.
+ * One place where an agent's instructions are written, whichever of the two
+ * homes they end up in.
+ *
+ * `./rules` holds what a mechanism enforces and `./instructions` holds what a
+ * person may edit on disk, but both are text this package owns: the seeder
+ * writes the second out of these constants rather than out of a literal of its
+ * own, so a rule delivered by a file and the same rule inlined into a local
+ * turn's prompt cannot come apart.
  *
  * A worker and a manager are the same runtime under one role, so their prompts
  * are the same assembly under one role too: standing rules, the conversation
@@ -15,6 +22,14 @@
  * only impure half there is.
  */
 
+export {
+  MANAGER_ANSWER_RULES,
+  MANAGER_INSTRUCTIONS,
+  MESSAGE_SHAPE_RULES,
+  WORKSPACE_INSTRUCTIONS,
+  WORKSPACE_RULES,
+  WRITING_RULES,
+} from "./instructions";
 export type {
   ManagerPromptInput,
   RenderableMessage,
@@ -46,7 +61,6 @@ export {
   MANAGER_RULES,
   SHARED_RULES,
   WORKER_RULES,
-  WRITING_RULES,
 } from "./rules";
 export type { UnreadInput, Watermark } from "./unread";
 export { isAfterWatermark, nextWatermarkOf, unreadOf } from "./unread";

@@ -24,7 +24,7 @@ Each unit of work goes through the same sequence, and the order is the design:
 
 ```
 signal → drain run commands → read the column → plan → quota → pool → lease →
-open run → turn → close → ingest → artifact rescan → retry
+open run → turn → close → ingest → artifact rescan → proposals → retry
 ```
 
 **Nothing is written before the loop has committed.** A plan only reads: status, park stamp,
@@ -86,6 +86,23 @@ on.
 `fallback` so the UI can collapse it. After the turn the loop reads the run's directory back:
 the normalized event file into `run_events` (idempotently — `seq` is the file's line ordinal),
 the transcript into the session, and the task's artifacts folder into the artifact index.
+
+**A worker asks for what it may not write, and the loop only records the asking.** A worker's
+workspace scope is a read-only mount, so a run that has read an untrusted repository cannot edit
+the house rules every later run is given. What it can do is write
+`.atm/proposals/<name>.md` into its own task directory, front matter naming the scope and the
+path within it. The same teardown that rescans the artifacts reads those files, refuses and logs
+any that name a path outside the scope they declared, and records the rest pending and inert
+against the task and run that raised them. Nothing reaches a shared directory until a person
+confirms it through the gateway, and the file stays where it was written — re-collection
+recognises the same bytes and records nothing.
+
+**Which rules a run had is a lookup.** The workspace and project folders are git repositories,
+snapshotted before and after every run, and the `before` snapshot is taken as the run is handed
+its directories — so the commit it leaves behind is exactly the tree that run read. That commit
+goes on the run's `atm.run` row as `workspaceCommit` and `projectCommit`, which points at bytes
+`git show` can still print rather than at whatever those folders hold today. A scope with no
+history yet, or a git that refused, is a null and costs the run nothing.
 
 **Stop and rerun are rows.** Anyone may write a `run_command`; only the loop acts on one.
 Writing one notifies `atm_run_command`, which wakes a sweep the same way a card does — the

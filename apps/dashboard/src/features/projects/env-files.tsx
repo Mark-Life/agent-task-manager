@@ -7,7 +7,7 @@ import type {
   ProjectEnvFileId,
   ProjectId,
 } from "@workspace/domain";
-import { envPathRefusalOf } from "@workspace/domain";
+import { relativePathRefusalOf } from "@workspace/domain";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -57,7 +57,7 @@ const pathProblem = (path: string) => {
   if (path === "") {
     return null;
   }
-  const refusal = envPathRefusalOf(path);
+  const refusal = relativePathRefusalOf(path);
   return refusal === null
     ? null
     : (PATH_REFUSALS[refusal] ?? "Not a usable path.");

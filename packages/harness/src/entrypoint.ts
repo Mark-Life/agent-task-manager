@@ -29,7 +29,7 @@
  * executable for a run that is not in a container.
  */
 
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { clipError } from "@workspace/telemetry";
 import {
   Cause,
@@ -44,6 +44,7 @@ import {
 } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { useImageClaudeCli } from "./claude";
+import { writeCodexConfig } from "./codex-config";
 import {
   describeError,
   type HarnessError,
@@ -145,24 +146,6 @@ const identityConfig = (identity: TurnSpecIdentity) => ({
 });
 
 /**
- * Codex's `mcp_servers` table as TOML. Deliberately not a general encoder: the
- * only thing this ever renders is a server's string fields, so a table header
- * and quoted strings is the whole grammar, and a dependency for it would be a
- * dependency inside a container image.
- */
-const codexMcpToml = (servers: unknown) =>
-  Object.entries((servers ?? {}) as Record<string, unknown>)
-    .filter(([, server]) => typeof server === "object" && server !== null)
-    .map(([name, server]) => {
-      const fields = Object.entries(server as Record<string, unknown>)
-        .filter(([, value]) => typeof value === "string")
-        .map(([key, value]) => `${key} = ${JSON.stringify(value)}`)
-        .join("\n");
-      return `[mcp_servers.${name}]\n${fields}\n`;
-    })
-    .join("\n");
-
-/**
  * A JSON object off disk, or an empty one. Absent, unreadable and unparseable
  * all answer the same way on purpose: this is only ever used to merge into a
  * file the provider owns, and refusing to write because the vendor left
@@ -190,40 +173,6 @@ const objectAt = (source: Record<string, unknown>, key: string) => {
     ? (value as Record<string, unknown>)
     : {};
 };
-
-/**
- * Executor's MCP server in the shape the provider about to run actually reads.
- *
- * Claude takes its map as a query option, so nothing is written at all. Codex
- * reads `config.toml` out of its config directory, and that directory is now
- * shared by every run on the host — see {@link wireCodexExecutor}.
- *
- * Absence is not an error. An install with no Executor configured runs with no
- * Executor tools, which is a smaller agent and not a broken one.
- */
-const wireCodexExecutor = Effect.fn("Turn.wireCodexExecutor")(
-  function* (input: {
-    readonly agentHomeDir: string;
-    readonly executor: ExecutorMcp | null;
-  }) {
-    const config = codexExecutorConfig(input.executor);
-    if (config === null) {
-      return;
-    }
-    // TODO: render this as `codex -c mcp_servers.<name>.<field>=<value>` instead.
-    // The file is a whole-file write into a directory other containers are
-    // reading, and the only thing keeping it safe is that every run writes the
-    // same bytes. It holds no secret — `bearer_token_env_var` names the variable
-    // rather than carrying the token — which is why this is a TODO and not a
-    // blocker, and why Claude's map moved off disk first.
-    const fs = yield* FileSystem;
-    yield* fs.makeDirectory(input.agentHomeDir, { recursive: true });
-    yield* fs.writeFileString(
-      join(input.agentHomeDir, "config.toml"),
-      codexMcpToml(config.config.mcp_servers)
-    );
-  }
-);
 
 /**
  * The `mcpServers` map the host left on the run mount, or null where it left
@@ -256,9 +205,10 @@ const readExtraMcpServers = Effect.fnUntraced(function* (path: string) {
  * `docker inspect` prints. A name collision resolves in favour of the host's,
  * because those were decided for this turn.
  *
- * Claude only. `codexMcpToml` renders a server's string fields alone, so an
- * `args` array would be dropped and the server would launch with nothing to
- * run — a silently toolless agent, which is worse than a warning that says so.
+ * Claude only. The Codex renderer in `./codex-config` writes a server's string
+ * fields alone, so an `args` array would be dropped and the server would launch
+ * with nothing to run — a silently toolless agent, which is worse than a
+ * warning that says so.
  */
 const mcpServersFor = Effect.fn("Turn.mcpServers")(function* (input: {
   readonly executor: ExecutorMcp | null;
@@ -517,17 +467,24 @@ const runSpec = (input: {
       }
       Reflect.deleteProperty(process.env, STOP_HOOK_COMMAND_ENV_VAR);
     });
-    // A config file that could not be written costs the run its Executor tools
-    // and nothing else, so it is a warning rather than an ending.
-    yield* wireCodexExecutor({
-      agentHomeDir: spec.agentHomeDir,
-      executor,
-    }).pipe(
-      Effect.tapError((cause) =>
-        Effect.logWarning("executor mcp not wired", { cause })
-      ),
-      Effect.ignore
-    );
+    // Unconditional for a Codex turn, and only for a Codex turn: the file
+    // carries the two settings that decide how much of the instruction tree
+    // that CLI reads, so a run with no Executor still needs it, and Claude
+    // never reads it. A config that could not be written costs the run its
+    // Executor tools and the scopes above its checkout, both of which leave a
+    // smaller agent rather than a broken one, so it is a warning and not an
+    // ending.
+    if (spec.provider === "codex") {
+      yield* writeCodexConfig({
+        agentHomeDir: spec.agentHomeDir,
+        executor,
+      }).pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning("codex config not written", { cause })
+        ),
+        Effect.ignore
+      );
+    }
     // Same tolerance, same reason: a turn with fewer tools is a smaller agent
     // and not a broken one.
     const mcpServers = yield* mcpServersFor({

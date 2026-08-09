@@ -57,8 +57,10 @@ import {
   identityEnv,
   type Mount,
   managerMountsFor,
+  measureInstructionBudget,
   mountsFor,
   packageCacheEnv,
+  repoLabelOf,
   repoSourceFor,
   type SandboxKind,
   Workspace,
@@ -194,10 +196,13 @@ export interface ExecuteRunInput {
    */
   readonly sandboxKind: SandboxKind;
   /**
-   * The operator's skills directory on the host, mounted read-only inside the
-   * agent home, or null on an install that shares none. Read from the loop's
-   * settings rather than from the run: it is one directory for the whole host,
-   * like the entrypoint bundle and unlike everything else a run is given.
+   * The skills directory the install shares with every run, or null when it
+   * names none. Read from the loop's settings rather than from the run: it is
+   * one directory for the whole host, like the entrypoint bundle and unlike
+   * everything else a run is given.
+   *
+   * Not mounted. It is the broadest level of the composition materialization
+   * builds for this run, and what gets mounted is that composition.
    */
   readonly skillsDir: string | null;
   /**
@@ -224,8 +229,14 @@ export interface ExecuteRunInput {
  * attached to.
  *
  * A task means a checkout, its own artifacts folder and its project's; a
- * conversation means a scratch directory and the global folder to read. Both
+ * conversation means a scratch directory under the manager's own scope. Both
  * end up as the same four fields, so nothing downstream asks which it got.
+ *
+ * This is also where the two halves of a run's identity meet, and the only place
+ * that holds both. The host directories are keyed by id — `tasks/<taskId>`,
+ * `projects/<projectId>` — and the container paths are spelled with names, so
+ * the labels are read off the dispatch context here and handed to the
+ * materializer, which reads no database and could not look one up.
  */
 const directoriesFor = Effect.fnUntraced(function* (input: {
   readonly agentHomeDir: string;
@@ -246,7 +257,6 @@ const directoriesFor = Effect.fnUntraced(function* (input: {
   const extras = {
     agentMcpPath: input.agentMcpPath,
     entrypointPath: entrypointBundlePathOf(input.dataRoot),
-    skillsDir: input.skillsDir,
   };
 
   if (context.attached.role === "manager") {
@@ -255,6 +265,7 @@ const directoriesFor = Effect.fnUntraced(function* (input: {
       dataRoot: input.dataRoot,
       provider: context.provider,
       runId: context.runId,
+      skillsDir: input.skillsDir,
     });
     return {
       branch: null,
@@ -270,21 +281,34 @@ const directoriesFor = Effect.fnUntraced(function* (input: {
     } satisfies RunDirectories;
   }
 
-  const taskId = context.attached.task.id;
+  const { task } = context.attached;
+  const taskId = task.id;
+  const repo = repoSourceFor({
+    dataRoot: input.dataRoot,
+    defaultBranch: context.project?.repoDefaultBranch ?? null,
+    repoUrl: context.repoUrl,
+    taskId,
+  });
   const workspaces = yield* Workspace;
   const made = yield* workspaces.materialize({
     agentHomeDir: input.agentHomeDir,
     dataRoot: input.dataRoot,
     envFiles: input.envFiles,
     identity: runIdentityOf(context),
+    labels: {
+      project: context.project?.name ?? null,
+      // The `owner/name` the mirror path was built from rather than the URL the
+      // task carries: a slug of `https://github.com/owner/name` spends its whole
+      // budget on the host. Taken from the source that was actually resolved, so
+      // a URL nothing could parse is a run whose checkout is named `scratch` in
+      // the tree and is a scratch directory on disk — one answer, not two.
+      repo: repo === null ? null : repoLabelOf(repo.mirrorDir),
+      task: task.title,
+    },
     projectId: projectIdOf(context),
     provider: context.provider,
-    repo: repoSourceFor({
-      dataRoot: input.dataRoot,
-      defaultBranch: context.project?.repoDefaultBranch ?? null,
-      repoUrl: context.repoUrl,
-      taskId,
-    }),
+    repo,
+    skillsDir: input.skillsDir,
     taskId,
   });
   return {
@@ -374,6 +398,18 @@ export const executeRun = (input: ExecuteRunInput) =>
       branch: made.branch,
     }));
 
+    // What the tree costs this run, measured once the directories exist and
+    // before anything reads them. Only for a contained turn: a host process
+    // works in a checkout whose parents hold none of these files, so summing the
+    // tree would report bytes that turn was never handed.
+    if (contained) {
+      const budget = yield* measureInstructionBudget(made.mounts);
+      yield* Ref.update(progress, (current) => ({
+        ...current,
+        instructionBytes: budget.totalBytes,
+      }));
+    }
+
     // The prompt is built after the directories exist, because it names them:
     // where to write an artifact worth keeping, and which branch the checkout
     // is on. It also advances the session's watermark, so the rows that went
@@ -381,6 +417,7 @@ export const executeRun = (input: ExecuteRunInput) =>
     const prompt = yield* buildRunPrompt({
       context,
       placement: made.placement,
+      sandboxKind: input.sandboxKind,
     });
     yield* Ref.update(progress, (current) => ({
       ...current,

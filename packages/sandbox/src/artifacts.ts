@@ -11,9 +11,14 @@
  *
  * All three folders hang off one root. `<dataRoot>/artifacts/{global,
  * projects/<id>, tasks/<id>}` rather than an `artifacts` folder tucked under
- * each task and project, because the manager agent's search is `ripgrep` over a
- * read-only mount of the whole tree — one root is one bind, and the alternative
- * is a mount per task, which is not a thing that can be mounted.
+ * each task and project: one root is one place to look, to back up and to scan,
+ * and the alternative is a folder per task scattered through the data root.
+ *
+ * The host layout is flat and the container's is nested. A run sees the global
+ * folder at `/workspace`, its project's inside that and its own inside that
+ * again, because both agent CLIs read instruction files by walking up from the
+ * working directory — see `./mounts`. Nothing here moves for it: a mount maps a
+ * host path to a container path, and these paths are the host's.
  *
  * **Postgres holds an index, never bytes.** {@link scanArtifacts} reads path,
  * size, modified time and extension off the disk; the orchestrator writes those
@@ -32,19 +37,27 @@
  * that task saw is worth more than deduplication. `contentHash` on the copy is
  * what lets the two rows be compared later.
  *
- * **No versioning.** A folder of current files. What a previous draft said is in
- * the run transcript. If real history ever matters the answer is `git init` in
- * the artifacts directory and a commit after each run — free history, free diff,
- * tooling everyone knows, and no schema — which is exactly why there is no
- * version table here to migrate away from. {@link SCAN_SKIP_DIRS} keeps that
- * option free by leaving `.git` out of the index in advance.
+ * **No version table, and history anyway.** A folder holds the current files.
+ * What a previous draft said is in the run transcript — and, for the two scopes
+ * more than one run can write, in a git repository this module's own directories
+ * carry: `./history` initialises one on demand and commits around each run. That
+ * was always the answer this file named for versioning, which is why there is no
+ * version table to migrate away from, and {@link SCAN_SKIP_DIRS} is what keeps
+ * the object store out of the index now that the option has been taken.
  */
 
 import { createHash } from "node:crypto";
 import { dirname, extname, join, sep } from "node:path";
-import type { ArtifactStat, ProjectId, TaskId } from "@workspace/domain";
+import {
+  type ArtifactStat,
+  FileScope,
+  type ProjectId,
+  type TaskId,
+} from "@workspace/domain";
+import { ATM_ROOT_MARKER } from "@workspace/harness";
 import { DateTime, Effect, Option, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
+import { MANAGER_SEGMENT } from "./mounts";
 
 /** The single root the three folders hang off, and the manager's search mount. */
 export const ARTIFACTS_SEGMENT = "artifacts";
@@ -61,21 +74,28 @@ export const TASKS_SEGMENT = "tasks";
 /**
  * Mode for every artifact directory, all three scopes alike.
  *
- * Read-only on the shared folders is enforced by the mount flag, not by the
- * unix mode, and that is on purpose: the run's own folder has to be writable by
- * the same uid, so a mode that differed per scope would be a second, weaker
- * copy of a rule the mount already states exactly. One mode keeps the whole
- * difference between "yours" and "everyone's" in one place.
+ * Which scope a run may write is enforced by the mount's read-only flag, not by
+ * the unix mode, and that is on purpose: every folder here has to be writable by
+ * the uid the container runs as — a worker writes its task folder and its
+ * project folder, and a manager writes the global one — so a mode that differed
+ * per scope would be a second, weaker copy of a rule the mount already states
+ * exactly. One mode keeps the whole difference between roles in one place.
  */
 export const ARTIFACT_DIR_MODE = 0o755;
 
 /**
- * Directories the index skips. `.git` because the versioning story is "run
- * `git init` here if you ever want history" — indexing an object store would
- * turn that free option into thousands of meaningless rows the day someone took
- * it.
+ * What git calls its object store, named here because two modules have to agree
+ * about it: `./history` creates one inside a shared scope, and the scan below
+ * has to walk past it.
  */
-export const SCAN_SKIP_DIRS = [".git"] as const;
+export const GIT_DIR = ".git";
+
+/**
+ * Directories the index skips. {@link GIT_DIR} because the versioning story is a
+ * repository inside the scope directory, and indexing an object store would turn
+ * a run's two commits into thousands of rows describing nothing anyone can open.
+ */
+export const SCAN_SKIP_DIRS = [GIT_DIR] as const;
 
 /**
  * The hash a copy records, prefixed with the algorithm that produced it. The
@@ -130,7 +150,11 @@ export interface ProjectArtifactsInput {
   readonly projectId: ProjectId;
 }
 
-/** A project's promoted folder: read-only to every run, written only by promotion. */
+/**
+ * A project's promoted folder: the project scope of every run on it, mounted
+ * read-write, so a promotion and a run leaving a document for the next task both
+ * land here.
+ */
 export const projectArtifactsDirOf = (input: ProjectArtifactsInput) =>
   join(artifactsRootOf(input.dataRoot), PROJECTS_SEGMENT, input.projectId);
 
@@ -140,7 +164,7 @@ export interface TaskArtifactsInput {
   readonly taskId: TaskId;
 }
 
-/** A task's own folder: the only artifact folder its run may write. */
+/** A task's own folder: this run's output, and the innermost scope of its tree. */
 export const taskArtifactsDirOf = (input: TaskArtifactsInput) =>
   join(artifactsRootOf(input.dataRoot), TASKS_SEGMENT, input.taskId);
 
@@ -174,6 +198,45 @@ export const artifactDirOf = (input: ArtifactDirInput) => {
   }
 };
 
+/** A scope of a run's tree, resolved against one install's data root. */
+export interface FileScopeDirInput {
+  readonly dataRoot: string;
+  readonly scope: FileScope;
+}
+
+/**
+ * The host directory behind one addressable scope of the tree — the only place
+ * an address a person typed becomes a path anything opens.
+ *
+ * Total over the four scopes by `match`, so a scope added to the address
+ * vocabulary is a compile error here rather than a route silently answering
+ * with the workspace directory. Three of them are artifact folders and go
+ * through {@link artifactDirOf}, which is what keeps this from being a second
+ * opinion about where a run's directories live.
+ *
+ * The manager's is the odd one and is a subdirectory rather than a folder of
+ * its own, exactly as the mount set has it: it arrives in a container through
+ * the workspace bind, so a manager rule written here is a file inside the
+ * workspace scope's git repository and is snapshotted with it. Giving it a
+ * folder of its own would be a fifth host directory nothing mounts.
+ *
+ * The workspace scope answers to `global` on the host, because that is the name
+ * the artifact index and the promotion verb have always called it. The rename
+ * happens here and nowhere else.
+ */
+export const fileScopeDirOf = (input: FileScopeDirInput): string => {
+  const { dataRoot } = input;
+  const dirOf = (location: ArtifactLocation) =>
+    artifactDirOf({ dataRoot, location });
+  return FileScope.match(input.scope, {
+    manager: () => join(dirOf({ scope: "global" }), MANAGER_SEGMENT),
+    project: (self) =>
+      dirOf({ projectId: self.projectId, scope: "project" as const }),
+    task: (self) => dirOf({ scope: "task" as const, taskId: self.taskId }),
+    workspace: () => dirOf({ scope: "global" }),
+  });
+};
+
 /** Creates one directory, or leaves an existing one alone. */
 const ensureDir = Effect.fnUntraced(function* (path: string) {
   const fs = yield* FileSystem;
@@ -184,14 +247,45 @@ const ensureDir = Effect.fnUntraced(function* (path: string) {
 });
 
 /**
+ * Puts the empty {@link ATM_ROOT_MARKER} in the global folder, which is the top
+ * of every run's instruction tree.
+ *
+ * Here rather than at either materialization site, because both of them go
+ * through this module for that folder and a marker written by only one of them
+ * is a Codex chat turn, or a Codex worker run, silently reading the one
+ * `AGENTS.md` in its working directory — Codex stops its upward walk at the
+ * first `project_root_markers` hit and reads nothing at all above the working
+ * directory when there is none. The harness points that setting at this name on
+ * every Codex turn, so the file not being there is worse than the default it
+ * replaced.
+ *
+ * Written once and never rewritten: the content carries nothing, and a
+ * whole-file write per run into a folder every other container has mounted is a
+ * race for no gain.
+ */
+const ensureRootMarker = Effect.fnUntraced(function* (dir: string) {
+  const fs = yield* FileSystem;
+  const path = join(dir, ATM_ROOT_MARKER);
+  const present = yield* fs.exists(path).pipe(failing("create", path));
+  if (present) {
+    return;
+  }
+  yield* fs.writeFileString(path, "").pipe(failing("create", path));
+});
+
+/**
  * Creates one artifact folder, on demand, and answers with its path.
  *
  * On demand rather than at task creation, because most tasks never write an
  * artifact at all and pre-creating a folder per task fills the tree with empty
  * directories that make "which tasks produced something" unanswerable from
- * disk. The global folder goes through here too: it is shared and read-only, so
- * nothing in a run's life would otherwise create it, and the first run on a
- * fresh host would die on a mount source that does not exist.
+ * disk. The global folder goes through here too: nothing else in a run's life
+ * would create it, and the first run on a fresh host would die on a mount
+ * source that does not exist.
+ *
+ * That folder also leaves with its root marker, because it is not only a folder
+ * — it is the workspace scope every run's tree hangs off. See
+ * {@link ensureRootMarker}.
  *
  * One folder per call rather than all three at once, so the caller that is
  * about to mount them can say which mount each failure was for — `./workspace`
@@ -201,8 +295,46 @@ const ensureDir = Effect.fnUntraced(function* (path: string) {
 export const ensureArtifactDir = Effect.fn("Artifacts.ensureDir")(function* (
   input: ArtifactDirInput
 ) {
-  return yield* ensureDir(artifactDirOf(input));
+  const dir = yield* ensureDir(artifactDirOf(input));
+  if (input.location.scope === "global") {
+    yield* ensureRootMarker(dir);
+  }
+  return dir;
 });
+
+/**
+ * Creates one addressable scope's directory, on demand, and answers with its
+ * path.
+ *
+ * The counterpart of {@link fileScopeDirOf} for anything that is about to write
+ * into a scope. Three of the four go through {@link ensureArtifactDir}, so the
+ * workspace scope still leaves with its root marker and the on-demand rule that
+ * keeps the tree free of empty folders is unchanged. The manager's directory is
+ * made under the workspace one, because that is where the mount set puts it.
+ *
+ * Separate from the resolver so that reading a scope never creates it: a listing
+ * of a project nobody has written to should answer "nothing here" without
+ * leaving a directory behind that says a run wrote something.
+ */
+export const ensureFileScopeDir = Effect.fn("Artifacts.ensureScopeDir")(
+  function* (input: FileScopeDirInput) {
+    if (input.scope.scope === "manager") {
+      yield* ensureArtifactDir({
+        dataRoot: input.dataRoot,
+        location: { scope: "global" },
+      });
+      return yield* ensureDir(fileScopeDirOf(input));
+    }
+    const location: ArtifactLocation = FileScope.match(input.scope, {
+      manager: () => ({ scope: "global" }) as const,
+      project: (self) =>
+        ({ projectId: self.projectId, scope: "project" }) as const,
+      task: (self) => ({ scope: "task", taskId: self.taskId }) as const,
+      workspace: () => ({ scope: "global" }) as const,
+    });
+    return yield* ensureArtifactDir({ dataRoot: input.dataRoot, location });
+  }
+);
 
 /**
  * The extension a dashboard picks a renderer from: lowercase, no dot, and null
@@ -392,11 +524,13 @@ export interface PromoteArtifactInput {
  * Promotes one of a task's artifacts into the project's folder or the global
  * one.
  *
- * A verb of its own rather than a flag on a row, because the read-only mounts
- * make this the only way anything reaches a shared folder — and that is the
- * audit trail. If a run could write there, promoted material would drift with
- * no record of which run changed what, and the evidence would be the thing that
- * got overwritten.
+ * A verb of its own rather than a flag on a row, and it survives the project
+ * scope becoming writable to a run. It is still the only way into the global
+ * folder, which no worker may write. Into a project's folder it is now one of
+ * two ways, and the difference is who decided: a promotion is a person or a
+ * manager saying this file is worth keeping, where a run's own write is a side
+ * effect of the work. Attribution never rested on the mount flag — the artifact
+ * row carries the run that last touched it, and a copy records its sha256.
  *
  * The audit row and the `promotedAt` stamp belong to whoever called this: the
  * decision is theirs, and the same copy performed by the machinery would not be

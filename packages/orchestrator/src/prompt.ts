@@ -47,9 +47,8 @@ import {
   type Watermark,
 } from "@workspace/prompts";
 import {
-  CONTAINER_ARTIFACT_DIR,
-  CONTAINER_WORKSPACE_DIR,
   type RunWorkspace,
+  runTreeOf,
   type SandboxKind,
 } from "@workspace/sandbox";
 import { Effect } from "effect";
@@ -69,9 +68,20 @@ export interface PlacementInput {
 
 /**
  * Where the run's files are, from the run's point of view. The two cases mirror
- * what each sandbox implementation actually does — a container sees the fixed
- * mount points, a local process sees the host paths — so the prompt and the
+ * what each sandbox implementation actually does — a container sees its own
+ * nested tree, a local process sees the host paths — so the prompt and the
  * process agree on every path in it.
+ *
+ * The container paths are read off {@link runTreeOf} rather than off a constant,
+ * because there is no longer a constant to read: the scopes are spelled with the
+ * project's and the task's names, so the checkout a prompt names is the one the
+ * mount set puts there only as long as both are computed from the same labels.
+ *
+ * A local turn has no tree to walk. It is a host process with no mounts, its
+ * working directory is `<dataRoot>/workspaces/<runId>`, and the directories
+ * above that hold no instruction file — so the host paths are all there is to
+ * name, and the house rules the tree would have carried travel in the prompt
+ * instead. See {@link PromptRequest.sandboxKind}.
  */
 export const placementOf = ({
   kind,
@@ -87,17 +97,18 @@ export const placementOf = ({
       workspaceDir: workspace.workspaceDir,
     };
   }
+  const tree = runTreeOf(workspace.labels);
   return {
-    artifactsDir: CONTAINER_ARTIFACT_DIR.task,
+    artifactsDir: tree.taskScope,
     branch,
-    globalArtifactsDir: CONTAINER_ARTIFACT_DIR.global,
+    globalArtifactsDir: tree.workspaceScope,
     // Null stays null: a task with no project has no promoted folder mounted,
-    // and naming one the run cannot open is worse than not mentioning it.
+    // and naming one the run cannot open is worse than not mentioning it. Both
+    // nulls are checked because `mountsFor` checks both — a scope named here
+    // that the mount set omitted is a path the agent finds empty.
     projectArtifactsDir:
-      workspace.projectArtifactsDir === null
-        ? null
-        : CONTAINER_ARTIFACT_DIR.project,
-    workspaceDir: CONTAINER_WORKSPACE_DIR,
+      workspace.projectArtifactsDir === null ? null : tree.projectScope,
+    workspaceDir: tree.cwd,
   };
 };
 
@@ -117,6 +128,21 @@ export const watermarkOf = (
 export interface PromptRequest {
   readonly context: DispatchContext;
   readonly placement: RunPlacement;
+  /**
+   * Which sandbox serves the run, which decides one thing here beyond the paths:
+   * whether the standing rules are already on disk where the agent will read
+   * them.
+   *
+   * A container starts inside the tree, so both CLIs collect the instruction
+   * files from the workspace scope down before the prompt is even read. A local
+   * turn walks parents that hold nothing, so the same rules have to be stated in
+   * the text — the prompt carries house style exactly when the filesystem
+   * cannot.
+   *
+   * The kind rather than the boolean, because the placement above answers to the
+   * same fact and one of the two would otherwise be set from the other.
+   */
+  readonly sandboxKind: SandboxKind;
 }
 
 /**
@@ -160,6 +186,7 @@ export const buildRunPrompt = Effect.fn("Prompt.build")(function* (
   const chatMessages = yield* ChatMessageRepo;
 
   const watermarkRead = watermarkOf(context.session.session);
+  const instructionsOnDisk = request.sandboxKind !== "local";
 
   /** Everything said on the task since this session last read it. */
   const fromTaskThread = Effect.fnUntraced(function* (
@@ -181,6 +208,7 @@ export const buildRunPrompt = Effect.fn("Prompt.build")(function* (
     const unread = unreadOf({ rows: returned, watermark: watermarkRead });
     return {
       prompt: buildWorkerPrompt({
+        instructionsOnDisk,
         messages: unread,
         mode: context.session.mode,
         placement: request.placement,
@@ -214,6 +242,7 @@ export const buildRunPrompt = Effect.fn("Prompt.build")(function* (
     const unread = unreadOf({ rows: returned, watermark: watermarkRead });
     return {
       prompt: buildManagerPrompt({
+        instructionsOnDisk,
         messages: unread,
         mode: context.session.mode,
         placement: request.placement,

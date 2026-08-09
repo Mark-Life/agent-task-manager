@@ -1,5 +1,6 @@
 import {
   FolderLibraryIcon,
+  FolderOpenIcon,
   KanbanIcon,
   Key01Icon,
   Logout01Icon,
@@ -57,13 +58,14 @@ const SIGN_IN_PATH = "/login";
  * Each one carries the letter that reaches it, so the taken letters are read
  * off one list rather than hunted for: `d` flips the theme, `f` opens the
  * board's search, `t` its new-task panel, `n` starts a conversation and the
- * digits open one, and a fourth destination would have to find a letter none of
+ * digits open one, and a fifth destination would have to find a letter none of
  * those has spoken for. `k` rather than `a` for the keys, because it is the word
- * the page is called by.
+ * the page is called by — which leaves `a` for the agent files.
  */
 const DESTINATIONS = [
   { hotkey: "b", icon: KanbanIcon, label: "Board", to: "/" },
   { hotkey: "p", icon: FolderLibraryIcon, label: "Projects", to: "/projects" },
+  { hotkey: "a", icon: FolderOpenIcon, label: "Agent files", to: "/files" },
   { hotkey: "k", icon: Key01Icon, label: "API keys", to: "/api-keys" },
 ] as const;
 

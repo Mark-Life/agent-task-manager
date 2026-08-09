@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -10,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunFileSystem } from "@effect/platform-bun";
 import { newProjectId, newTaskId } from "@workspace/domain";
+import { ATM_ROOT_MARKER } from "@workspace/harness";
 import { DateTime, Effect } from "effect";
 import type { FileSystem } from "effect/FileSystem";
 import {
@@ -76,6 +78,12 @@ describe("path algebra", () => {
   });
 });
 
+/**
+ * The global folder is also the top of every run's instruction tree, and Codex
+ * reads the working directory alone when it walks up and finds no marker. So a
+ * folder made without one is a Codex turn handed less than the default `.git`
+ * marker used to give it — quietly, since nothing fails.
+ */
 describe("ensureArtifactDir", () => {
   test("creates on demand and is safe to repeat", async () => {
     const location = { scope: "task", taskId } as const;
@@ -83,6 +91,33 @@ describe("ensureArtifactDir", () => {
     const second = await run(ensureArtifactDir({ dataRoot, location }));
     expect(first).toBe(taskArtifactsDirOf({ dataRoot, taskId }));
     expect(second).toBe(first);
+  });
+
+  test("says the global folder is the top of the tree, with the marker Codex stops at", async () => {
+    const dir = await run(
+      ensureArtifactDir({ dataRoot, location: { scope: "global" } })
+    );
+    expect(readFileSync(join(dir, ATM_ROOT_MARKER), "utf-8")).toBe("");
+  });
+
+  test("leaves the marker alone on a folder that already has one", async () => {
+    const location = { scope: "global" } as const;
+    const dir = await run(ensureArtifactDir({ dataRoot, location }));
+    // What an operator can put in it is theirs. Nothing reads the contents —
+    // only the name decides where the walk stops — so a second run must not
+    // write over it.
+    writeFileSync(join(dir, ATM_ROOT_MARKER), "edited by hand");
+    await run(ensureArtifactDir({ dataRoot, location }));
+    expect(readFileSync(join(dir, ATM_ROOT_MARKER), "utf-8")).toBe(
+      "edited by hand"
+    );
+  });
+
+  test("marks no scope below the top of the tree", async () => {
+    const dir = await run(
+      ensureArtifactDir({ dataRoot, location: { projectId, scope: "project" } })
+    );
+    expect(existsSync(join(dir, ATM_ROOT_MARKER))).toBe(false);
   });
 });
 

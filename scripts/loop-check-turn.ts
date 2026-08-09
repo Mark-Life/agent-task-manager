@@ -29,6 +29,7 @@
  * the path the orchestrator mounts from, and run by the bun the image pins.
  */
 
+import { dirname } from "node:path";
 import process from "node:process";
 import { BunFileSystem, BunRuntime } from "@effect/platform-bun";
 import {
@@ -38,7 +39,6 @@ import {
   STOP_HOOK_FLAG,
   TURN_LEDGER_SERVICE,
 } from "@workspace/harness";
-import { CONTAINER_ARTIFACT_DIR } from "@workspace/sandbox";
 import { telemetryLayer } from "@workspace/telemetry";
 import { Effect, Layer } from "effect";
 import type { Teardown } from "effect/Runtime";
@@ -71,12 +71,17 @@ const teardown: Teardown = (exit, onExit) => {
 };
 
 /**
- * The one artifacts folder a contained run may write, from the mount set — and
- * null for a turn that has no task, which is mounted no such folder. Writing
+ * The task's own artifacts folder, which is the directory holding the working
+ * directory: the checkout — or the scratch directory where there was nothing to
+ * clone — is one level inside the task scope. Derived from the spec rather than
+ * named as a constant, because the container path now carries the task's slug
+ * and only the host that wrote the spec knows it.
+ *
+ * Null for a turn that has no task, which is mounted no such folder. Writing
  * there anyway is a permission error the person reads as the model failing.
  */
 const artifactsDir = (options: RunOptions) =>
-  options.taskId === null ? null : CONTAINER_ARTIFACT_DIR.task;
+  options.taskId === null ? null : dirname(options.workspaceDir);
 
 const stubRegistry = makeProviderRegistry({
   claude: instrumented(stubProvider({ artifactsDir, id: "claude" })),

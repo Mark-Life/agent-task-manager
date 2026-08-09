@@ -42,9 +42,9 @@ interface PromoteDialogProps {
 /**
  * Promotion, behind a confirmation and a choice of destination.
  *
- * Only the task's own folder is writable — the project's and the global folder
- * are read-only mounts to every run — so promoting is how material survives the
- * task that produced it. It copies the bytes rather than pointing at them, so a
+ * A run's own folder goes with the task that produced it, and the global folder
+ * is a read-only mount to every worker, so promoting is how a file becomes
+ * something later tasks are handed. It copies the bytes rather than pointing at them, so a
  * later edit to this file cannot retroactively change what another task worked
  * from, and it can only happen once, which is why the way in disappears
  * afterwards instead of staying live and being refused.

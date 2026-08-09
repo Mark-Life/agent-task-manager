@@ -36,12 +36,13 @@ import {
   unhonouredBy,
 } from "./local";
 import {
-  CONTAINER_ARTIFACT_DIR,
   CONTAINER_EVENT_LOG_DIR,
   CONTAINER_WORKSPACE_DIR,
   type Mount,
   type MountSources,
   mountsFor,
+  type RunLabels,
+  runTreeOf,
 } from "./mounts";
 import { SANDBOX_EVENT_MARKER } from "./sandbox-event";
 import {
@@ -99,20 +100,34 @@ const ledgerRows = () => {
     .filter((row) => row.event === SANDBOX_EVENT_MARKER);
 };
 
+/** The names this file's runs spell their container paths with. */
+const labels: RunLabels = {
+  project: "Atlas",
+  repo: "mark-life/atlas",
+  task: "Ship it",
+};
+
+/** Where a run started from these labels works, container-side. */
+const { cwd } = runTreeOf(labels);
+
 /** A real directory tree with the seven mount sources on disk. */
 const makeSources = (): MountSources => {
   const root = mkdtempSync(join(tmpdir(), "sandbox-local-"));
   const sources: MountSources = {
     agentHomeDir: join(root, "agent-home"),
     cacheDir: join(root, "caches"),
+    composedSkillsDir: null,
     globalArtifactsDir: join(root, "artifacts", "global"),
+    labels,
     projectArtifactsDir: join(root, "artifacts", "project"),
     runDir: join(root, "runs", "r1"),
     taskArtifactsDir: join(root, "artifacts", "task"),
     workspaceDir: join(root, "runs", "r1", "workspace"),
   };
-  for (const dir of Object.values(sources)) {
-    mkdirSync(dir, { recursive: true });
+  for (const value of Object.values(sources)) {
+    if (typeof value === "string") {
+      mkdirSync(value, { recursive: true });
+    }
   }
   return sources;
 };
@@ -133,7 +148,7 @@ const specFor = (input: {
   image: "atm/base:test",
   mounts: input.mounts,
   timeoutMs: input.timeoutMs ?? null,
-  workingDir: CONTAINER_WORKSPACE_DIR,
+  workingDir: cwd,
 });
 
 /** Runs one spec through the local sandbox, collecting everything it printed. */
@@ -168,7 +183,9 @@ describe("hostPathOf", () => {
   const mounts = mountsFor({
     agentHomeDir: "/home/op/.claude-task-management",
     cacheDir: "/data/caches",
+    composedSkillsDir: null,
     globalArtifactsDir: "/data/artifacts/global",
+    labels,
     projectArtifactsDir: "/data/artifacts/projects/p1",
     runDir: "/data/runs/r1",
     taskArtifactsDir: "/data/tasks/t1",
@@ -176,7 +193,7 @@ describe("hostPathOf", () => {
   });
 
   test("translates a mount root and a path under it", () => {
-    expect(hostPathOf({ containerPath: CONTAINER_WORKSPACE_DIR, mounts })).toBe(
+    expect(hostPathOf({ containerPath: cwd, mounts })).toBe(
       "/data/runs/r1/workspace"
     );
     expect(hostPathOf({ containerPath: CONTAINER_EVENT_LOG_DIR, mounts })).toBe(
@@ -184,10 +201,15 @@ describe("hostPathOf", () => {
     );
   });
 
-  test("the longest covering mount wins over its parent", () => {
+  test("the deepest covering mount wins over every scope above it", () => {
+    // Four binds nest inside each other now, so this is what stops a path under
+    // the task scope resolving into the global folder.
     expect(
-      hostPathOf({ containerPath: CONTAINER_ARTIFACT_DIR.task, mounts })
+      hostPathOf({ containerPath: runTreeOf(labels).taskScope, mounts })
     ).toBe("/data/tasks/t1");
+    expect(hostPathOf({ containerPath: CONTAINER_WORKSPACE_DIR, mounts })).toBe(
+      "/data/artifacts/global"
+    );
   });
 
   test("a prefix that does not end on a segment boundary does not match", () => {
@@ -205,8 +227,10 @@ describe("localEnv", () => {
   const mounts = mountsFor({
     agentHomeDir: "/home/op/.claude-task-management",
     cacheDir: "/data/caches",
+    composedSkillsDir: null,
     globalArtifactsDir: "/data/artifacts/global",
-    projectArtifactsDir: null,
+    labels,
+    projectArtifactsDir: "/data/artifacts/projects/p1",
     runDir: "/data/runs/r1",
     taskArtifactsDir: "/data/tasks/t1",
     workspaceDir: "/data/runs/r1/workspace",
@@ -241,7 +265,7 @@ describe("localEnv", () => {
       specFor({
         args: [],
         command: "true",
-        env: { [EVENT_LOG_DIR_ENV_VAR]: CONTAINER_ARTIFACT_DIR.task },
+        env: { [EVENT_LOG_DIR_ENV_VAR]: runTreeOf(labels).taskScope },
         mounts,
       })
     );
@@ -281,8 +305,10 @@ describe("localWorkingDir", () => {
     const mounts = mountsFor({
       agentHomeDir: "/home/op/.claude-task-management",
       cacheDir: "/data/caches",
+      composedSkillsDir: null,
       globalArtifactsDir: "/data/artifacts/global",
-      projectArtifactsDir: null,
+      labels,
+      projectArtifactsDir: "/data/artifacts/projects/p1",
       runDir: "/data/runs/r1",
       taskArtifactsDir: "/data/tasks/t1",
       workspaceDir: "/data/runs/r1/workspace",
@@ -297,8 +323,10 @@ describe("unhonouredBy", () => {
   const mounts = mountsFor({
     agentHomeDir: "/home/op/.claude-task-management",
     cacheDir: "/data/caches",
+    composedSkillsDir: null,
     globalArtifactsDir: "/data/artifacts/global",
-    projectArtifactsDir: null,
+    labels,
+    projectArtifactsDir: "/data/artifacts/projects/p1",
     runDir: "/data/runs/r1",
     taskArtifactsDir: "/data/tasks/t1",
     workspaceDir: "/data/runs/r1/workspace",
@@ -395,7 +423,7 @@ describe("localSandboxLayer", () => {
     ]);
   });
 
-  test("the read-only artifact folders really are writable here", async () => {
+  test("the read-only workspace scope really is writable here", async () => {
     // Not an endorsement: the assertion is the point. Under docker the same
     // write is refused by the kernel, and this pins the difference the mode
     // reports through `unhonouredBy` instead of leaving it to a comment.
@@ -404,7 +432,7 @@ describe("localSandboxLayer", () => {
       specFor({
         args: ["-c", 'printf leaked > "$GLOBAL_DIR"/promoted.md'],
         command: "sh",
-        env: { GLOBAL_DIR: CONTAINER_ARTIFACT_DIR.global },
+        env: { GLOBAL_DIR: CONTAINER_WORKSPACE_DIR },
         mounts: mountsFor(sources),
       })
     );

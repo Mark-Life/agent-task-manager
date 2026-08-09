@@ -39,6 +39,8 @@ const SURFACE = [
   "PersistenceError",
   "ProjectEnvFileRepo",
   "ProjectRepo",
+  "ProposalAlreadyDecided",
+  "ProposalRepo",
   "RunAlreadyLive",
   "RunCommandRepo",
   "RunEventRepo",

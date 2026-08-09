@@ -136,15 +136,31 @@ export interface RunProgress {
   readonly branch: string | null;
   /** Normalized events ingested into `run_events` — what tells a container that died early from one that died late. */
   readonly eventsSeen: number;
+  /**
+   * The instruction files the run's tree was about to hand it, in bytes. Null
+   * for a host turn, which walks no tree, and on a row written before the
+   * directories existed.
+   */
+  readonly instructionBytes: number | null;
   /** True when the loop appended the final assistant message because the run posted no message of its own. */
   readonly messageFallback: boolean;
   readonly parked: boolean;
+  /**
+   * The commit the project scope stood at when this run was handed it. Null on
+   * a run with no project, and where the scope has no history.
+   */
+  readonly projectCommit: string | null;
   readonly promptChars: number | null;
   /** The pull request the task carries once the run has closed, or null for the many runs that produce none. */
   readonly prUrl: string | null;
   readonly retryInMs: number | null;
   /** How the run ended, once one of the three endings is known. */
   readonly terminus: RunTerminus | null;
+  /**
+   * The commit the workspace scope stood at when this run was handed it. Null
+   * where the folder has no history — a fresh install, or a git that refused.
+   */
+  readonly workspaceCommit: string | null;
 }
 
 /** A run that has been claimed and has done nothing yet. */
@@ -152,12 +168,15 @@ export const emptyRunProgress: RunProgress = {
   artifactsWritten: 0,
   branch: null,
   eventsSeen: 0,
+  instructionBytes: null,
   messageFallback: false,
   parked: false,
+  projectCommit: null,
   promptChars: null,
   prUrl: null,
   retryInMs: null,
   terminus: null,
+  workspaceCommit: null,
 };
 
 /** A fresh accumulator for one run. */
@@ -190,6 +209,14 @@ export const RunEvent = defineEvent(RUN_EVENT_MARKER, {
   eventsSeen: Schema.Natural,
   exitCode: Schema.NullOr(Schema.Int),
   image: SanitizedText,
+  /**
+   * How many bytes of instruction files the run's tree held when it was given
+   * its directories, so "which runs were near the cliff" is a query rather than
+   * a grep of the logs. Codex spends one budget across the whole tree root
+   * first, and what it drops past that budget is the deepest and most specific
+   * document. Null on a start row and on a host turn, which reads no tree.
+   */
+  instructionBytes: Schema.NullOr(Schema.Natural),
   /** Which sandbox implementation served the run, so a host run cannot be mistaken for a contained one. */
   kind: SandboxKind,
   /** Which lane's slot this run held: board work, or a conversation. */
@@ -204,6 +231,12 @@ export const RunEvent = defineEvent(RUN_EVENT_MARKER, {
   outcome: outcomeField(RUN_EVENT_EXTRA_OUTCOMES),
   /** Slots held in this run's lane at the instant it took one. */
   poolDepth: Schema.Natural,
+  /**
+   * The commit the project scope stood at when the run was handed it: the same
+   * question as `workspaceCommit`, one level down. Null on a run with no
+   * project, and on a project folder with no history yet.
+   */
+  projectCommit: Schema.NullOr(SanitizedText),
   projectId: Schema.NullOr(SanitizedText),
   /** The prompt is measured, never carried. Null on a row written before it was built. */
   promptChars: Schema.NullOr(Schema.Natural),
@@ -233,6 +266,15 @@ export const RunEvent = defineEvent(RUN_EVENT_MARKER, {
    */
   threadId: Schema.NullOr(SanitizedText),
   trigger: RunTrigger,
+  /**
+   * The commit the workspace scope stood at when this run was given its
+   * directories, so "which rules did that run have" is a lookup rather than a
+   * guess. House style, the shared instruction files and everything else in that
+   * folder live in a git repository the loop snapshots before every run, and a
+   * commit points at bytes somebody can still read — which a hash of the tree
+   * would not. Null on a start row, and where the folder has no history yet.
+   */
+  workspaceCommit: Schema.NullOr(SanitizedText),
 });
 
 /** The row one run supplies, derived from the schema so it cannot drift. */
@@ -460,6 +502,7 @@ const runRow = (
     errorMessage: ending?.errorMessage ?? null,
     eventsSeen: progress.eventsSeen,
     exitCode: terminus?.exitCode ?? null,
+    instructionBytes: progress.instructionBytes,
     // Measured across every exit path, so it is real where the economics are
     // not: a run killed at four minutes genuinely held its slot for four
     // minutes, and that is the number the pool is sized against.
@@ -467,6 +510,9 @@ const runRow = (
     messageFallback: progress.messageFallback,
     outcome: ending?.outcome ?? null,
     phase: wide === null ? "start" : "end",
+    // Where the shared folders stood when this run was handed them, so the rules
+    // it read are a `git show` away rather than whatever those folders hold now.
+    projectCommit: progress.projectCommit,
     promptChars: progress.promptChars,
     // The resume id is known at the claim, which is what makes a start row
     // enough to find the conversation a wedged run is stuck in.
@@ -474,6 +520,7 @@ const runRow = (
       terminus?.providerSessionId ?? resumeSessionIdOf(context.dispatch),
     prUrl: progress.prUrl,
     retryInMs: progress.retryInMs,
+    workspaceCommit: progress.workspaceCommit,
   };
 };
 

@@ -100,6 +100,13 @@ export type RunCommandId = typeof RunCommandId.Type;
 /** Mints a fresh {@link RunCommandId}. */
 export const newRunCommandId = mint(RunCommandId);
 
+/** One change a run asked a person to make to a directory it could not write. */
+export const ProposalId = ownId("ProposalId");
+export type ProposalId = typeof ProposalId.Type;
+
+/** Mints a fresh {@link ProposalId}. */
+export const newProposalId = mint(ProposalId);
+
 /** One file kept from a run, indexed here and stored on disk. */
 export const ArtifactId = ownId("ArtifactId");
 export type ArtifactId = typeof ArtifactId.Type;

@@ -3,6 +3,7 @@ import { Spinner } from "@workspace/ui/components/spinner";
 import { queryClient } from "@/lib/query-client";
 import { apiKeysRoute } from "@/routes/api-keys";
 import { boardRoute } from "@/routes/board";
+import { filesRoute } from "@/routes/files";
 import { layoutRoute } from "@/routes/layout";
 import { loginRoute } from "@/routes/login";
 import { projectsRoute } from "@/routes/projects";
@@ -20,7 +21,13 @@ import { taskRoute } from "@/routes/task";
  */
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  layoutRoute.addChildren([boardRoute, taskRoute, projectsRoute, apiKeysRoute]),
+  layoutRoute.addChildren([
+    boardRoute,
+    taskRoute,
+    projectsRoute,
+    filesRoute,
+    apiKeysRoute,
+  ]),
 ]);
 
 /** The quiet moment between asking for a route and having it. */

@@ -47,7 +47,7 @@ import { Context, type Effect, Schema, type Scope } from "effect";
 import type { EnvFilesWritten } from "./env-files";
 import type { SandboxError } from "./errors";
 import type { HardeningSpec } from "./hardening";
-import type { Mount, MountSources } from "./mounts";
+import type { Mount, MountSources, RunLabels } from "./mounts";
 import type { LabelledContainer } from "./reap";
 
 /**
@@ -310,6 +310,17 @@ export interface MaterializeInput {
    */
   readonly envFiles: readonly EnvFileWrite[];
   readonly identity: RunIdentity;
+  /**
+   * The names the run's container paths are spelled with — the project's name,
+   * the repository's, and the task's title.
+   *
+   * Beside the ids rather than derived from them, because they answer different
+   * questions and only the caller holds both: the id keys the host directory
+   * and the label names the directory inside the container. A caller that knows
+   * a `projectId` always knows the project's name, and materialization must not
+   * be the thing that looks one up — this package reads no database.
+   */
+  readonly labels: RunLabels;
   /** Null for a task with no project: there is no promoted folder to show it. */
   readonly projectId: ProjectId | null;
   /**
@@ -320,6 +331,16 @@ export interface MaterializeInput {
   readonly provider: SessionProvider;
   /** Null for a task with no repo — a scratch directory, and the same machinery otherwise. */
   readonly repo: RepoSource | null;
+  /**
+   * The skills directory the install shares with every run, or null when it
+   * names none.
+   *
+   * The broadest source of the skills this run is composed, and the only one
+   * that is not a scope of its own tree — it is one directory for the whole
+   * host, read from the loop's settings, like the entrypoint bundle. What comes
+   * out is a directory of the run's own; see `./composed-skills`.
+   */
+  readonly skillsDir: string | null;
   /**
    * Whose artifacts folder the checkout is materialized against. Carried here
    * rather than read off {@link RunIdentity} because materializing a checkout

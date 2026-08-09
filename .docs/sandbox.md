@@ -6,16 +6,40 @@ it, and removes it — on every exit path including the interrupt a stop command
 Interrupting the fiber *is* how a run is stopped, which is why there is no `kill` method. The
 package never imports `packages/db`.
 
-**Seven mounts, and nothing else.** The run directory (rw, mounted at `/run`, holding the message
-marker, the turn spec and the event ledger), the provider's agent home (rw, `/agent-home`, see
-[agent homes](./agent-homes.md)), the workspace checkout (rw, `/workspace`), the shared package
-store (rw, `/cache`, the other mount shared between runs — see below), the
-task's artifacts folder (rw, `/artifacts/task`), and the project's and global promoted folders
-(**ro**, `/artifacts/project` and `/artifacts/global`). Read-only on the shared folders is
-load-bearing: promotion is a deliberate act performed on the host, and that separation is the
-audit trail. Never the docker socket — that one mount turns a sandbox into host root. A
-container that runs our own turn entrypoint gets one more, read-only: the bundled entrypoint
-at `/opt/atm/turn.js` (see below).
+**Six mounts, seven with a project, and nothing else.** The run directory (rw, mounted at `/run`,
+holding the message marker, the turn spec and the event ledger), the provider's agent home (rw,
+`/agent-home`, see [agent homes](./agent-homes.md)), the shared package store (rw, `/cache`, the
+other mount shared between runs — see below), and the four scopes of the run's tree:
+
+```
+/workspace                                 global promoted folder   ro
+/workspace/worker/<project>                project promoted folder  rw
+/workspace/worker/<project>/<task>         task's artifacts folder  rw
+/workspace/worker/<project>/<task>/<repo>  the checkout             rw, cwd
+```
+
+**The destinations nest; the binds do not.** Each level is still its own bind with its own host
+directory — the host layout is flat, `${DATA_ROOT}/artifacts/{global,projects/<id>,tasks/<id>}`
+and `${DATA_ROOT}/workspaces/<runId>`, and nothing moved. One bind of the whole tree would hand
+every run every project and every task. The reason for the nesting is that both agent CLIs read
+`CLAUDE.md` and `AGENTS.md` from the working directory upwards and concatenate them root-down,
+so a run starting in its checkout is handed house rules, then project conventions, then its own
+brief, with nothing to configure. `<project>` and `<task>` are slugs of the names, never ids; a
+task with no project loses that level rather than getting a placeholder, and a run with no repo
+gets `scratch` where the checkout would be.
+
+`/workspace` is the one read-only scope, and it is a worker's whole write boundary: it clones
+untrusted repositories, so a write above its own task scope is meant to be a proposal a person
+confirms. The project scope is deliberately writable — a research run leaving a document the
+next task reads is worth more than what the read-only flag bought, and attribution never rested
+on that flag. Because the parent is read-only the daemon cannot create the nested destinations
+through it, so materialization pre-creates them from the mount set itself. An empty
+`.atm-root` sits at the top: Codex stops its upward walk at the nearest `project_root_markers`
+entry, and the turn entrypoint points that setting at this name.
+
+Never the docker socket — that one mount turns a sandbox into host root. A container that runs
+our own turn entrypoint gets one more, read-only: the bundled entrypoint at `/opt/atm/turn.js`
+(see below).
 
 **The two host bundles, read-only.** `/opt/atm/turn.js` and `/opt/atm/agent-mcp.js` are one file
 each under `${DATA_ROOT}/bin`, built on the host and mounted into every container that needs
@@ -51,9 +75,14 @@ holds credentials beside every other run's checkout under one data root. The pat
 orchestrator as plain `{path, content}`, so this package still never imports `packages/db`, and
 they die with the checkout when the scope closes. See [project env](./project-env.md).
 
-A chat turn has no task and no project, so it gets four: the run directory, the agent home, a
-scratch `/workspace` released with the run, and the global promoted folder read-only. Nothing
-it writes to `/workspace` outlives the container, and the prompt says so.
+A chat turn has no task and no project, so it gets four: the run directory, the agent home, the
+global promoted folder at `/workspace` — **read-write** here, the one flag that differs from a
+worker's — and a scratch directory at `/workspace/manager/scratch`, which is its working
+directory and is released with the run. The manager is the role a person is talking to, it
+clones no untrusted repository, and the house rules it is asked to edit are in that folder; its
+own rules live at `/workspace/manager/CLAUDE.md`, inside the same bind, so there is nothing more
+to mount. Its working directory sits under `manager/` rather than under any project, which is
+what keeps project conventions out of a chat turn for free.
 
 **Hardening**: `--cap-drop=ALL`, `no-new-privileges`, non-root, `SANDBOX_MEMORY_MB` (2048 by
 default) with swap pinned equal, `SANDBOX_CPUS` (1.5), 512 pids, `/tmp` as a capped tmpfs,

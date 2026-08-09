@@ -37,7 +37,7 @@
  * built. It is not skipped for anything else — a failure here is a real one.
  */
 
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
@@ -87,12 +87,18 @@ import {
   turnSpecPathOf,
 } from "@workspace/harness";
 import {
+  CONTAINER_MANAGER_SCRATCH_DIR,
+  CONTAINER_WORKSPACE_DIR,
   DEFAULT_SANDBOX_IMAGE,
   dockerSandboxLayer,
   localWorkspaceLayer,
+  type MountSources,
+  managerMountsFor,
+  mountsFor,
 } from "@workspace/sandbox";
 import { Telemetry } from "@workspace/telemetry";
 import { DateTime, Effect, Layer, Schedule, Schema, Stream } from "effect";
+import { workingDirOf } from "./container-turn";
 import { ingestRunEvents, ingestTurnLedger } from "./ingest";
 import { openRun, type RunClaim } from "./open-run";
 import { performRun, runOpened } from "./run";
@@ -627,6 +633,59 @@ afterAll(async () => {
     );
   }
   rmSync(dataRoot, { force: true, recursive: true });
+});
+
+/**
+ * Which directory the container is started in, against the set it is started
+ * with.
+ *
+ * Nothing type-checks this. A working directory is a string on the spec, so
+ * pointing a worker at the workspace scope compiles perfectly and produces a run
+ * that cannot write where it stands and that collects the house rules while
+ * leaving its own brief unread. The rule is the deepest scope, and the way to
+ * keep it true is to take it from the mount that was bound there — which is what
+ * these assert, against the real builders rather than a hand-written set.
+ */
+describe("the directory a turn starts in", () => {
+  const sources = {
+    agentHomeDir: "/host/agent-home",
+    cacheDir: "/host/.data/caches",
+    composedSkillsDir: null,
+    globalArtifactsDir: "/host/.data/artifacts/global",
+    labels: {
+      project: "Atlas",
+      repo: "mark-life/atlas",
+      task: "Ship the thing",
+    },
+    projectArtifactsDir: "/host/.data/artifacts/projects/p1",
+    runDir: "/host/.data/runs/r1",
+    taskArtifactsDir: "/host/.data/artifacts/tasks/t1",
+    workspaceDir: "/host/.data/workspaces/r1",
+  } satisfies MountSources;
+
+  test("is the checkout at the bottom of a worker's tree", () => {
+    expect(workingDirOf(mountsFor(sources))).toBe(
+      "/workspace/worker/atlas/ship-the-thing/mark-life-atlas"
+    );
+  });
+
+  test("is never the workspace scope, which a worker may only read", () => {
+    expect(workingDirOf(mountsFor(sources))).not.toBe(CONTAINER_WORKSPACE_DIR);
+  });
+
+  test("is the scratch directory for a run with nothing to clone", () => {
+    expect(
+      workingDirOf(
+        mountsFor({ ...sources, labels: { ...sources.labels, repo: null } })
+      )
+    ).toBe("/workspace/worker/atlas/ship-the-thing/scratch");
+  });
+
+  test("is the manager's own scratch directory for a chat turn", () => {
+    expect(workingDirOf(managerMountsFor(sources))).toBe(
+      CONTAINER_MANAGER_SCRATCH_DIR
+    );
+  });
 });
 
 test.skipIf(!containerized)(

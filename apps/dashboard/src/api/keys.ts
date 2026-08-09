@@ -20,6 +20,14 @@ const PROJECTS = "projects";
  */
 const USAGE = "usage";
 
+/**
+ * The fifth root: the directories a run walks for its instructions, keyed by
+ * the one segment a URL names a scope with rather than by the tagged union it
+ * decodes into. An object key would be compared field by field on every
+ * invalidation, and two objects naming the same directory would be two caches.
+ */
+const FILES = "files";
+
 /** The list filters, taken from the client rather than restated beside it. */
 type TaskListQuery = Parameters<ApiClientShape["tasks"]["list"]>[0]["query"];
 type ThreadListQuery = Parameters<
@@ -46,6 +54,10 @@ export const keys = {
   /** One project. */
   project: (projectId: ProjectId) => [PROJECTS, projectId] as const,
 
+  /** The files a project keeps, which outlive the tasks that wrote them. */
+  projectArtifacts: (projectId: ProjectId) =>
+    [PROJECTS, projectId, "artifacts"] as const,
+
   /** One of a project's environment files, with its text. Fetched only by the editor. */
   projectEnvFile: (projectId: ProjectId, fileId: ProjectEnvFileId) =>
     [PROJECTS, projectId, "env", fileId] as const,
@@ -57,6 +69,9 @@ export const keys = {
   /** Every project in the workspace. */
   projects: () => [PROJECTS] as const,
 
+  /** What a task's runs asked a person to change above their own scope. */
+  proposals: (taskId: TaskId) => [TASKS, taskId, "proposals"] as const,
+
   /** One run of one task. */
   run: (taskId: TaskId, runId: RunId) =>
     [TASKS, taskId, "runs", runId] as const,
@@ -67,6 +82,40 @@ export const keys = {
 
   /** Every run of one task. */
   runs: (taskId: TaskId) => [TASKS, taskId, "runs"] as const,
+
+  /**
+   * One scope's whole directory tree, and the prefix everything read out of it
+   * hangs off. A write anywhere in a scope creates the directories above it and
+   * commits, so this is what an edit invalidates: refreshing one listing would
+   * leave the folder that has just appeared missing from the tree.
+   */
+  scope: (address: string) => [FILES, address] as const,
+
+  /** One file's bytes, read only once somebody opens it. */
+  scopeFile: (address: string, path: string) =>
+    [FILES, address, "file", path] as const,
+
+  /**
+   * One directory of one scope. The root is null rather than the empty string,
+   * which is the one path no route accepts.
+   */
+  scopeListing: (address: string, path: string | null) =>
+    [FILES, address, "list", path] as const,
+
+  /**
+   * What one scope has installed, which is the lock file checked against the
+   * disk. Under the scope so an install — which writes files — refreshes the
+   * tree and this list from one invalidation.
+   */
+  scopeSkills: (address: string) => [FILES, address, "skills"] as const,
+
+  /**
+   * What one skill's source holds now, against what is installed. Fetched only
+   * while somebody is looking at it: this key is the one read here that leaves
+   * the machine for GitHub.
+   */
+  scopeSkillUpdate: (address: string, name: string) =>
+    [FILES, address, "skills", name, "update"] as const,
 
   /** One agent session. */
   session: (taskId: TaskId, sessionId: SessionId) =>

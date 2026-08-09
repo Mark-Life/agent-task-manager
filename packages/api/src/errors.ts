@@ -21,6 +21,7 @@
  * | `RunRepo.NotLive` | {@link RunNotLive} | 409 |
  * | `AgentSessionRepo.Ended` | {@link AgentSessionEnded} | 409 |
  * | `ArtifactRepo.AlreadyPromoted` | {@link ArtifactAlreadyPromoted} | 409 |
+ * | `ProposalRepo.AlreadyDecided` | {@link ProposalAlreadyDecided} | 409 |
  * | `RunEventRepo.TooLarge` | {@link PayloadTooLarge} | 413 |
  *
  * `Db.MalformedRow` and `Db.PersistenceError` are deliberately absent. A row
@@ -121,6 +122,17 @@ export class AgentSessionEnded extends Schema.TaggedErrorClass<AgentSessionEnded
 export class ArtifactAlreadyPromoted extends Schema.TaggedErrorClass<ArtifactAlreadyPromoted>()(
   "ArtifactAlreadyPromoted",
   { artifactId: Schema.String },
+  { httpApiStatus: 409 }
+) {}
+
+/**
+ * Somebody has already answered this proposal. An accepted one has been written
+ * into a shared directory and recorded in that directory's git history, so a
+ * second answer would either overwrite a decision or claim one nobody made.
+ */
+export class ProposalAlreadyDecided extends Schema.TaggedErrorClass<ProposalAlreadyDecided>()(
+  "ProposalAlreadyDecided",
+  { proposalId: Schema.String, state: Schema.String },
   { httpApiStatus: 409 }
 ) {}
 

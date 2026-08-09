@@ -26,7 +26,7 @@ import { BunServices } from "@effect/platform-bun";
 import { CurrentActor, storeLayer } from "@workspace/db";
 import { providerRegistryLayer } from "@workspace/harness";
 import { Orchestrator } from "@workspace/orchestrator";
-import { sandboxLayer, workspaceLayer } from "@workspace/sandbox";
+import { ScopeHistory, sandboxLayer, workspaceLayer } from "@workspace/sandbox";
 import { EventLog, telemetryLayer } from "@workspace/telemetry";
 import { Layer } from "effect";
 import { LOOP_INSTANCE, orchestratorActor, SERVICE_NAME } from "./identity";
@@ -47,8 +47,9 @@ const observabilityLayer = Layer.mergeAll(
 
 /**
  * What the orchestrator dispatches with: the repositories over one connection
- * pool, a sandbox, somewhere to materialize a run's directories, the harness
- * table, and the actor every write this process makes is attributed to.
+ * pool, a sandbox, somewhere to materialize a run's directories, somewhere to
+ * keep what the shared folders held before the run, the harness table, and the
+ * actor every write this process makes is attributed to.
  *
  * `sandboxLayer` reads `SANDBOX_MODE` itself and hands back docker or local.
  * The choice is not made here and must not be — the moment this file can ask
@@ -59,6 +60,7 @@ const dispatchServicesLayer = Layer.mergeAll(
   CurrentActor.layer(orchestratorActor(LOOP_INSTANCE)),
   providerRegistryLayer,
   sandboxLayer,
+  ScopeHistory.layer,
   storeLayer({ applicationName: SERVICE_NAME }),
   workspaceLayer
 );

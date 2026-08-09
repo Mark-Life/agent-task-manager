@@ -48,9 +48,9 @@ export interface ArtifactStat extends Schema.Schema.Type<typeof ArtifactStat> {}
 
 /**
  * A file a run produced and someone wanted to keep. Scope decides which mount
- * it lives on, and only the task's own folder is writable — if any run could
- * write the shared folders, promoted material would drift with no audit and the
- * evidence would be the thing that got overwritten.
+ * it lives on, and therefore who may write it: a worker writes its task's
+ * folder and its project's, and the global folder is read-only to it, so
+ * material every project sees only ever arrives by promotion.
  *
  * Reuse across projects is always a copy, never a reference, so `sourceArtifactId`
  * records where a file came from without making one task's record of what it

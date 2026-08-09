@@ -1,11 +1,14 @@
 import { HttpApi, OpenApi } from "effect/unstable/httpapi";
 import { ArtifactsGroup } from "./groups/artifacts";
+import { FilesGroup } from "./groups/files";
 import { HealthGroup } from "./groups/health";
 import { MessagesGroup } from "./groups/messages";
 import { ProjectsGroup } from "./groups/projects";
+import { ProposalsGroup } from "./groups/proposals";
 import { RunCommandsGroup } from "./groups/run-commands";
 import { RunsGroup } from "./groups/runs";
 import { SessionsGroup } from "./groups/sessions";
+import { SkillsGroup } from "./groups/skills";
 import { TasksGroup } from "./groups/tasks";
 import { ThreadsGroup } from "./groups/threads";
 import { UsageGroup } from "./groups/usage";
@@ -51,6 +54,9 @@ export class Api extends HttpApi.make("atm")
     RunsGroup,
     RunCommandsGroup,
     ArtifactsGroup,
+    ProposalsGroup,
+    FilesGroup,
+    SkillsGroup,
     ThreadsGroup,
     UsageGroup
   )

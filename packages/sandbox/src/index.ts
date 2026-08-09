@@ -13,8 +13,9 @@
  * Exported: the one {@link Sandbox} service and the two layers behind it, the
  * spec a run is described by, the mount set and the container-side paths the
  * harness agrees with, the confinement, the image names, the typed failures, the
- * workspace and repo materialization, the artifact folders, and the event marker
- * a query starts from.
+ * workspace and repo materialization, the artifact folders with the history the
+ * shared ones keep and the instruction budget a tree adds up to, and the event
+ * marker a query starts from.
  *
  * **Both implementations sit behind the one service, and the choice is config.**
  * {@link sandboxLayer} reads `SANDBOX_MODE` and builds the docker layer or the
@@ -49,9 +50,10 @@
  *
  * **`Git`.** A service that runs `git` and `gh` on the host, with the host's
  * credentials, is one refactor away from being an `exec` that takes its command
- * from a database row. It stays inside, and the two operations an owner outside
- * actually needs — clone a workspace, refresh a mirror — are exported already
- * wired, with no runner left in their requirements.
+ * from a database row. It stays inside, and the operations an owner outside
+ * actually needs are exported with the runner already provided: clone a
+ * workspace, refresh a mirror, and — behind {@link ScopeHistory} — snapshot a
+ * shared scope.
  *
  * **The local mode's honesty list.** `unhonouredBy` names every confinement a
  * host process drops, and the local implementation logs it once per run.
@@ -60,6 +62,7 @@
  */
 
 export {
+  ARTIFACT_DIR_MODE,
   ARTIFACT_OPERATIONS,
   ARTIFACTS_SEGMENT,
   type ArtifactCopy,
@@ -73,7 +76,11 @@ export {
   type CopyArtifactInput,
   copyArtifact,
   ensureArtifactDir,
+  ensureFileScopeDir,
   extOf,
+  type FileScopeDirInput,
+  fileScopeDirOf,
+  GIT_DIR,
   GLOBAL_SEGMENT,
   globalArtifactsDirOf,
   PROJECTS_SEGMENT,
@@ -97,6 +104,27 @@ export {
   type ResolveCommitterOptions,
   resolveCommitter,
 } from "./committer";
+// The skills one run is handed, gathered from every level of its tree. Here
+// rather than in `./skills` because it is about a run's directories and not
+// about what a skill is: the layout is durable, and this is a copy that dies
+// with the run that read it.
+export {
+  COMPOSED_SKILLS_DIR_MODE,
+  COMPOSED_SKILLS_MAX_BYTES,
+  COMPOSED_SKILLS_SEGMENT,
+  type ComposedSkill,
+  type ComposedSkills,
+  composedSkillsDirOf,
+  composeSkills,
+  composeSkillsScoped,
+  releaseComposedSkills,
+  type ShadowedSkill,
+  SKILL_LEVELS,
+  type SkillCompositionInput,
+  type SkillLevel,
+  type SkillScope,
+  skillSearchDirsOf,
+} from "./composed-skills";
 export { dockerSandbox, dockerSandboxLayer } from "./docker";
 export {
   ENV_DIR_MODE,
@@ -155,6 +183,27 @@ export {
   sandboxMemoryMbConfig,
   type TmpfsMount,
 } from "./hardening";
+// The history of the two folders more than one run can write. A service rather
+// than a function, because the identity its commits carry is resolved once for
+// the process and the git runner behind it stays inside this package.
+export {
+  editMessageOf,
+  HISTORY_BRANCH,
+  HISTORY_PHASES,
+  type HistoryPhase,
+  historyMessageOf,
+  historyScopeOf,
+  makeScopeHistory,
+  type ScopeCommits,
+  type ScopeEditInput,
+  type ScopeEditReport,
+  ScopeHistory,
+  type ScopeHistoryInput,
+  type ScopeHistoryInterface,
+  type ScopeHistoryOptions,
+  type ScopeHistoryReport,
+  type SharedScope,
+} from "./history";
 export {
   buildTag,
   DEFAULT_IMAGE_KIND,
@@ -168,6 +217,12 @@ export {
   RECIPE_DIGEST_CHARS,
   sandboxImageFor,
 } from "./images";
+export {
+  type InstructionBudget,
+  type InstructionFile,
+  instructionDirsOf,
+  measureInstructionBudget,
+} from "./instruction-budget";
 export { localSandbox, localSandboxLayer } from "./local";
 export {
   DEFAULT_SANDBOX_KIND,
@@ -178,15 +233,19 @@ export {
   sandboxLayerFor,
 } from "./mode";
 export {
+  AGENT_HOME_SKILLS_SEGMENT,
   CONTAINER_AGENT_HOME_DIR,
-  CONTAINER_ARTIFACT_DIR,
-  CONTAINER_ARTIFACTS_DIR,
   CONTAINER_CACHE_DIR,
   CONTAINER_EVENT_LOG_DIR,
+  CONTAINER_MANAGER_DIR,
+  CONTAINER_MANAGER_SCRATCH_DIR,
   CONTAINER_SKILLS_DIR,
+  CONTAINER_WORKER_DIR,
   CONTAINER_WORKSPACE_DIR,
   EVENT_LOG_SEGMENT,
   eventLogDirOf,
+  FALLBACK_SLUG,
+  MANAGER_SEGMENT,
   type ManagerMountSources,
   MOUNT_PURPOSES,
   type Mount,
@@ -196,8 +255,17 @@ export {
   managerMountsFor,
   mountSourcePaths,
   mountsFor,
+  type NestedMountPoint,
   NO_MOUNT_EXTRAS,
+  nestedMountPointsOf,
   packageCacheEnv,
+  type RunLabels,
+  type RunTree,
+  runTreeOf,
+  SCRATCH_SEGMENT,
+  SLUG_MAX_LENGTH,
+  slugOf,
+  WORKER_SEGMENT,
 } from "./mounts";
 // The pull request a run's branch has. Exported because the orchestrator's
 // terminal path writes it onto the task, and because asking GitHub is how that
@@ -244,6 +312,44 @@ export {
   REQUIRED_SCOPES,
   tokenKindOf,
 } from "./scopes";
+// A skill, as the files it is. The layout and the lock are here beside the
+// artifact folders they are written into; the writing itself is the gateway's,
+// which owns the one containment check every path into a scope goes through.
+export {
+  AGENT_SKILLS_DIR,
+  CLAUDE_SKILLS_DIR,
+  compareSkillFiles,
+  EMPTY_SKILLS_LOCK,
+  fetchSkillFiles,
+  GITHUB_CONTENTS_ORIGIN,
+  parseSkillsLock,
+  SKILL_DIFF_CONTENT_MAX,
+  SKILL_FILE,
+  SKILL_MAX_BYTES,
+  SKILL_MAX_DEPTH,
+  SKILL_MAX_FILE_BYTES,
+  SKILL_MAX_FILES,
+  SKILL_SOURCE_REFUSALS,
+  SKILLS_LOCK_FILE,
+  SKILLS_LOCK_VERSION,
+  type SkillFetchInput,
+  type SkillFetchResult,
+  type SkillFile,
+  type SkillFileChange,
+  type SkillPaths,
+  SkillSourceRefusal,
+  SkillSourceUnreadable,
+  SkillsLock,
+  serializeSkillsLock,
+  skillDirOf,
+  skillFilePathOf,
+  skillHashOf,
+  skillLinkOf,
+  skillLinkTargetOf,
+  skillPathsOf,
+  withoutSkill,
+  withSkill,
+} from "./skills";
 export {
   identityEnv,
   MATERIALIZE_STRATEGIES,

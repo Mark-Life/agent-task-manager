@@ -131,9 +131,31 @@ export interface ContainerTurnInput<R> {
   readonly timeoutMs: number;
 }
 
+/**
+ * Where the turn starts, taken from the mount set it was handed.
+ *
+ * The deepest directory of the run's tree rather than its root, and that is what
+ * makes the nesting work at all: both CLIs read instruction files from the
+ * working directory *upwards* and concatenate them root-down, while a file below
+ * it loads on demand at best. Starting at the workspace scope would collect the
+ * house rules and leave the project's conventions and the task's own brief
+ * unread — the most specific ones, which is backwards.
+ *
+ * Read off the mount carrying the `workspace` purpose rather than passed beside
+ * the set, so the directory the container is started in is by construction the
+ * one that was bound writable there: a worker's checkout, a repo-less run's
+ * scratch directory, a chat turn's scratch directory under the manager's scope.
+ * Both builders always emit that mount, which is why the fallback below is a
+ * value for a case that cannot arise rather than a default anyone relies on.
+ */
+export const workingDirOf = (mounts: readonly Mount[]) =>
+  mounts.find((mount) => mount.purpose === "workspace")?.containerPath ??
+  CONTAINER_WORKSPACE_DIR;
+
 /** The spec one turn runs under, in the container's own view of the world. */
 export const specFor = (input: {
   readonly context: DispatchContext;
+  readonly mounts: readonly Mount[];
   readonly prompt: string;
   readonly timeoutMs: number;
 }): TurnSpec => {
@@ -155,7 +177,7 @@ export const specFor = (input: {
     provider: context.provider,
     resumeSessionId: resumeSessionIdOf(context),
     timeoutMs: input.timeoutMs,
-    workspaceDir: CONTAINER_WORKSPACE_DIR,
+    workspaceDir: workingDirOf(input.mounts),
   };
 };
 
@@ -182,7 +204,7 @@ export const sandboxSpecFor = (input: {
   image: input.context.image,
   mounts: input.mounts,
   timeoutMs: input.timeoutMs,
-  workingDir: CONTAINER_WORKSPACE_DIR,
+  workingDir: workingDirOf(input.mounts),
 });
 
 /**
@@ -308,6 +330,7 @@ export const containerTurn = <R>(input: ContainerTurnInput<R>) =>
     const spec = yield* encodeSpec(
       specFor({
         context,
+        mounts: input.mounts,
         prompt: input.prompt,
         timeoutMs: innerCapMs(containerCapMs),
       })

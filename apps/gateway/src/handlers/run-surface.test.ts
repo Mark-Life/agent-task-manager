@@ -50,6 +50,7 @@ import {
   UserId,
   type WorkspaceId,
 } from "@workspace/domain";
+import { ScopeHistory } from "@workspace/sandbox";
 import { Context, DateTime, Effect, Exit, Layer, Schema, Scope } from "effect";
 import { HttpRouter, HttpServer } from "effect/unstable/http";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
@@ -138,9 +139,11 @@ const gatewayLayer = (workspace: WorkspaceId) => {
       })
     )
   );
-  const services = Layer.mergeAll(access, RunEventNotices.layer).pipe(
-    Layer.provideMerge(Layer.merge(CurrentActor.layer(actor), store))
-  );
+  const services = Layer.mergeAll(
+    access,
+    RunEventNotices.layer,
+    ScopeHistory.editsLayer
+  ).pipe(Layer.provideMerge(Layer.merge(CurrentActor.layer(actor), store)));
   // Once, and once is enough: every group takes its repositories while its
   // layer is being built, so nothing is left asking for one per request.
   const api = HttpApiBuilder.layer(Api).pipe(

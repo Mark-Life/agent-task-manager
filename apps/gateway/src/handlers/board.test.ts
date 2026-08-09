@@ -58,6 +58,7 @@ import {
   type TaskId,
   UserId,
 } from "@workspace/domain";
+import { ScopeHistory } from "@workspace/sandbox";
 import { Effect, Layer, ManagedRuntime, Schema } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
@@ -192,7 +193,8 @@ const storeForHandlers = storeLayer({ applicationName: APPLICATION_NAME });
 const services = Layer.mergeAll(
   storeForHandlers,
   BunServices.layer,
-  RunEventNotices.layer.pipe(Layer.provide(storeForHandlers))
+  RunEventNotices.layer.pipe(Layer.provide(storeForHandlers)),
+  ScopeHistory.editsLayer
 );
 
 /**

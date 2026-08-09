@@ -19,6 +19,7 @@
  */
 
 import type { ChatMessage } from "@workspace/domain";
+import { MANAGER_ANSWER_RULES, WORKSPACE_RULES } from "./instructions";
 import {
   conversation,
   joinSections,
@@ -29,7 +30,7 @@ import {
   section,
   speech,
 } from "./render";
-import { MANAGER_RULES, SHARED_RULES, WRITING_RULES } from "./rules";
+import { MANAGER_RULES, SHARED_RULES } from "./rules";
 
 /**
  * How many rows of a thread a first turn is given.
@@ -95,6 +96,15 @@ export interface ManagerPromptInput {
    */
   readonly historyLimit?: number;
   /**
+   * Whether this turn's directories carry the seeded rules as `CLAUDE.md` and
+   * `AGENTS.md` files it reads on its own. When they do,
+   * {@link WORKSPACE_RULES} and {@link MANAGER_ANSWER_RULES} are left out and
+   * the files are the single copy; when they do not — a local turn is a host
+   * process with no tree above its working directory — the prompt states both.
+   * Defaults to false, so a caller that says nothing gets the rules.
+   */
+  readonly instructionsOnDisk?: boolean;
+  /**
    * Every message after the session's watermark, oldest first. The one being
    * answered is the last of them; the rest are what arrived while the previous
    * turn was still running.
@@ -110,11 +120,15 @@ const ANSWER_INSTRUCTION =
 
 /** The full situating prompt a conversation's first turn gets. */
 const freshPrompt = (input: ManagerPromptInput) => {
+  const { instructionsOnDisk = false } = input;
   const limit = input.historyLimit ?? FRESH_HISTORY_MESSAGES;
   const kept = limit <= 0 ? [] : input.messages.slice(-limit);
   return joinSections([
     MANAGER_RULES,
-    WRITING_RULES,
+    // Both seeded documents, stated exactly when the turn cannot read them, and
+    // in the order the tree hands them over: the workspace document first, the
+    // manager's own last, so the more specific one still wins by position.
+    ...(instructionsOnDisk ? [] : [WORKSPACE_RULES, MANAGER_ANSWER_RULES]),
     SHARED_RULES,
     section(
       "Where you are working",

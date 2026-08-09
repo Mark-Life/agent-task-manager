@@ -30,6 +30,7 @@ import { basename, dirname, relative, resolve, sep } from "node:path";
 import {
   Api,
   ArtifactAlreadyPromoted,
+  Forbidden,
   InvalidInput,
   NotFound,
   PayloadTooLarge,
@@ -41,13 +42,14 @@ import {
   ArtifactRepo,
   type MalformedRow,
   type PersistenceError,
+  ProjectRepo,
   type ArtifactAlreadyPromoted as StoreAlreadyPromoted,
   type InvalidInput as StoreInvalidInput,
   type NotFound as StoreNotFound,
   TaskRepo,
   withActor,
 } from "@workspace/db";
-import type { ArtifactId, Task, TaskId } from "@workspace/domain";
+import type { ArtifactId, ProjectId, Task, TaskId } from "@workspace/domain";
 import {
   type ArtifactIoFailed,
   copyArtifact,
@@ -281,7 +283,7 @@ const requireOwnArtifact = Effect.fnUntraced(function* (
   return row;
 });
 
-/** The folder this task's files live in, and the only artifact folder anything writes. */
+/** The folder this task's files live in, and the only one these handlers read. */
 const taskDirOf = (input: ArtifactRequest) =>
   taskArtifactsDirOf({ dataRoot: input.dataRoot, taskId: input.taskId });
 
@@ -306,6 +308,43 @@ export const listTaskArtifacts = Effect.fn("Gateway.artifacts.list")(function* (
     // empty array, and what is left is the driver or a row that stopped decoding.
     .pipe(Effect.orDie);
 });
+
+/** Which project's shared folder is being read, and on whose behalf. */
+export interface ProjectArtifactRequest {
+  readonly principal: PrincipalShape;
+  /** From the route. A project id is not a permission — the workspace comes off the credential. */
+  readonly projectId: ProjectId;
+}
+
+/**
+ * A project's shared folder, most recently written first.
+ *
+ * The listing the writable project mount was missing. A research task leaves a
+ * document there for the next task in the project, and until this existed that
+ * document was on disk, in the index, and reachable only by somebody who already
+ * knew its path.
+ *
+ * No directory is touched. The project's folder holds what a run wrote and what
+ * a promotion copied, and both are already rows — reading disk here would answer
+ * a different question than the one the dashboard and the agent tools ask.
+ */
+export const listProjectArtifacts = Effect.fn("Gateway.artifacts.listProject")(
+  function* (input: ProjectArtifactRequest) {
+    const projects = yield* ProjectRepo;
+    // The project is looked up rather than assumed, so an id from another
+    // workspace is a 404 rather than an empty folder that reads as "nothing here".
+    yield* projects
+      .byId({ id: input.projectId, workspaceId: input.principal.workspaceId })
+      .pipe(asNotFound);
+    const artifacts = yield* ArtifactRepo;
+    return yield* artifacts
+      .listByProject({
+        projectId: input.projectId,
+        workspaceId: input.principal.workspaceId,
+      })
+      .pipe(Effect.orDie);
+  }
+);
 
 /**
  * The bytes, as a stream off local disk.
@@ -428,15 +467,30 @@ export interface ArtifactPromoteRequest extends ArtifactItemRequest {
  * missing thing rather than the request being malformed — so it reads as a 404
  * on the project, which is the row a caller would have to create to make the
  * same call work.
+ *
+ * The global folder is a person's to fill. It is mounted read-only into every
+ * worker so that a run which has read an untrusted repository cannot change what
+ * every later run of every project is given, and a run's own token reaches this
+ * route — it is `task-write`, which is what promoting into a project needs. So
+ * the destination is checked against who is asking: without this, a run could
+ * write a file into its own folder and promote it into the shared one, and the
+ * proposal a person has to accept would be the long way round a door standing
+ * open. The project folder is not checked, because a run may write it directly.
  */
 const promotionTargetOf = (input: {
+  readonly principal: PrincipalShape;
   readonly scope: PromotionScope;
   readonly task: Task;
 }) => {
   if (input.scope === "global") {
-    return Effect.succeed({
-      scope: "global",
-    } as const satisfies PromotionTarget);
+    return input.principal.actor.kind === "human"
+      ? Effect.succeed({ scope: "global" } as const satisfies PromotionTarget)
+      : Effect.fail(
+          new Forbidden({
+            reason: "the shared folder is filled by a person, not by a run",
+            required: "admin",
+          })
+        );
   }
   return input.task.projectId === null
     ? Effect.fail(new NotFound({ entity: "project", id: input.task.id }))
@@ -450,11 +504,13 @@ const promotionTargetOf = (input: {
  * Copies one of a task's files into the project's folder or the global one,
  * indexes the copy, and records the decision.
  *
- * Promotion is a verb, not an update. The shared folders are mounted read-only
- * into every container precisely so nothing else reaches them, which makes this
- * call the only way material becomes something every later run in the project
- * sees — and that is why it carries an audit action of its own rather than a
- * flag on a row.
+ * Promotion is a verb, not an update. The global folder is mounted read-only
+ * into every worker's container, so this call and a proposal a person accepted
+ * are the two ways anything reaches it — and both of them are a person, which is
+ * what {@link promotionTargetOf} enforces. A project's folder a run may also
+ * write, and what this call adds there is the record that somebody chose the
+ * file rather than a run leaving it. That is why it carries an audit action of
+ * its own rather than a flag on a row.
  *
  * Bytes first, index second. A copy with no row is a file somebody can promote
  * again over the same path; a row with no copy is a promise of shared material
@@ -477,7 +533,11 @@ export const promoteTaskArtifact = Effect.fn("Gateway.artifacts.promote")(
     }
 
     const task = yield* requireTask(input);
-    const to = yield* promotionTargetOf({ scope: input.scope, task });
+    const to = yield* promotionTargetOf({
+      principal: input.principal,
+      scope: input.scope,
+      task,
+    });
 
     const dir = taskDirOf(input);
     const contained = yield* containOrInvalid({ dir, path: row.path }).pipe(
@@ -519,13 +579,21 @@ export const artifactsHandlers = HttpApiBuilder.group(
       // At build time, not per request: a mistyped DATA_ROOT should stop the
       // process rather than surface as a 500 on the first upload.
       const dataRoot = yield* Effect.orDie(dataRootConfig);
-      const on = yield* atBuild<ArtifactRepo | FileSystem | TaskRepo>();
+      const on = yield* atBuild<
+        ArtifactRepo | FileSystem | ProjectRepo | TaskRepo
+      >();
 
       return handlers.handleAll({
         list: ({ params }) =>
           on(
             Effect.flatMap(Principal, (principal) =>
               listTaskArtifacts({ dataRoot, principal, taskId: params.taskId })
+            )
+          ),
+        listProject: ({ params }) =>
+          on(
+            Effect.flatMap(Principal, (principal) =>
+              listProjectArtifacts({ principal, projectId: params.projectId })
             )
           ),
         promote: ({ params, payload }) =>

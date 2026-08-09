@@ -18,6 +18,11 @@ import {
 } from "@workspace/domain";
 import { DateTime } from "effect";
 import {
+  MANAGER_ANSWER_RULES,
+  WORKSPACE_RULES,
+  WRITING_RULES,
+} from "./instructions";
+import {
   buildManagerPrompt,
   FRESH_HISTORY_MESSAGES,
   renderChatMessage,
@@ -28,21 +33,22 @@ import {
   MANAGER_RULES,
   SHARED_RULES,
   WORKER_RULES,
-  WRITING_RULES,
 } from "./rules";
 
 const threadId = newThreadId();
 
 /**
  * What `threadPlacementOf` builds: a manager turn has no task and no project,
- * so its scratch directory is also the only directory it may write.
+ * so its scratch directory is the only directory of its own it has, and it
+ * points both fields at it. The shared directory is the one it may leave
+ * anything in, and it sits above the scratch directory rather than beside it.
  */
 const placement: RunPlacement = {
-  artifactsDir: "/workspace",
+  artifactsDir: "/workspace/manager/scratch",
   branch: null,
-  globalArtifactsDir: "/artifacts/global",
+  globalArtifactsDir: "/workspace",
   projectArtifactsDir: null,
-  workspaceDir: "/workspace",
+  workspaceDir: "/workspace/manager/scratch",
 };
 
 /** One stored row, with only the fields the renderer reads varying. */
@@ -64,11 +70,13 @@ const message = (
 
 const textOf = (input: {
   readonly historyLimit?: number;
+  readonly instructionsOnDisk?: boolean;
   readonly messages: readonly ChatMessage[];
   readonly mode?: PromptMode;
 }) =>
   buildManagerPrompt({
     historyLimit: input.historyLimit,
+    instructionsOnDisk: input.instructionsOnDisk,
     messages: input.messages,
     mode: input.mode ?? "fresh",
     placement,
@@ -85,10 +93,12 @@ describe("a first turn's prompt", () => {
 
     expect(text.startsWith(MANAGER_RULES)).toBe(true);
     expect(text).toContain(SHARED_RULES);
-    // The house style reaches both roles from here. A run never sees the
-    // operator's own `AGENTS.md`, and a mounted skill's body is read only if
-    // the model invokes it, so neither is a place to keep it.
+    // The seeded rules reach a turn from here whenever it has no tree to read
+    // them from. A run never sees the operator's own `AGENTS.md`, and a mounted
+    // skill's body is read only if the model invokes it, so neither is a place
+    // to keep them.
     expect(text).toContain(WRITING_RULES);
+    expect(text).toContain(MANAGER_ANSWER_RULES);
     expect(text.indexOf("## The conversation so far")).toBeLessThan(
       text.indexOf("Person: what is on the board?")
     );
@@ -113,14 +123,32 @@ describe("a first turn's prompt", () => {
   test("names the directories the turn was given", () => {
     const text = textOf({ messages: [message({ body: "hi", role: "user" })] });
     expect(text).toContain(
-      "`/workspace` is an empty scratch directory, yours to write, released when this run ends"
+      "`/workspace/manager/scratch` is an empty scratch directory, yours to write, released when this run ends"
     );
-    expect(text).toContain("Read-only reference material: `/artifacts/global`");
+    expect(text).toContain(
+      "- `/workspace` is the shared directory every run reads."
+    );
+  });
+
+  /**
+   * The shared directory is read-only to a worker and writable to a manager,
+   * and a placement carries no flag saying which. So the placement says nothing
+   * about it here and the manager's own rules say what it may leave there — a
+   * turn told the directory is read-only will not edit the house rules, which
+   * is the point of giving it write access.
+   */
+  test("does not call the shared directory read-only to the one role that writes it", () => {
+    const text = textOf({ messages: [message({ body: "hi", role: "user" })] });
+    expect(text).not.toContain("every run reads. Read-only.");
+    expect(text).toContain(
+      "The shared directory every run reads is yours to write"
+    );
   });
 
   test("never promises the scratch directory outlives the turn", () => {
     const text = textOf({ messages: [message({ body: "hi", role: "user" })] });
     expect(text).not.toContain("outlives the container");
+    expect(text).not.toContain("is this task's directory");
   });
 
   /**
@@ -131,8 +159,12 @@ describe("a first turn's prompt", () => {
    */
   test("is told nothing about an artifacts folder it does not have", () => {
     const text = textOf({ messages: [message({ body: "hi", role: "user" })] });
-    expect(text).not.toContain(artifactRulesOf({ hasRepo: true }));
-    expect(text).not.toContain(artifactRulesOf({ hasRepo: false }));
+    expect(text).not.toContain(
+      artifactRulesOf({ hasProject: false, hasRepo: true })
+    );
+    expect(text).not.toContain(
+      artifactRulesOf({ hasProject: false, hasRepo: false })
+    );
     expect(text).not.toContain("What survives this run");
   });
 
@@ -197,8 +229,9 @@ describe("a resumed turn's prompt", () => {
   test("repeats nothing the session already has in its own history", () => {
     expect(text).not.toContain(MANAGER_RULES);
     expect(text).not.toContain(SHARED_RULES);
-    expect(text).not.toContain(WRITING_RULES);
-    expect(text).not.toContain("/artifacts/task");
+    expect(text).not.toContain(WORKSPACE_RULES);
+    expect(text).not.toContain(MANAGER_ANSWER_RULES);
+    expect(text).not.toContain(placement.workspaceDir);
   });
 
   test("is total on an empty read rather than pretending something arrived", () => {
@@ -307,6 +340,17 @@ describe("the rules", () => {
     expect(MANAGER_RULES).toContain("asks that run to stop");
   });
 
+  /**
+   * How an answer is phrased is seeded on disk and editable there. The one line
+   * of it that was board policy rather than phrasing — an answer that has grown
+   * into a brief belongs on a card — is enforced by nothing else, so it stays
+   * where the tool that files it is named.
+   */
+  test("keep the rule that an answer grown into a brief is filed as one", () => {
+    expect(MANAGER_RULES).not.toContain("## How you answer");
+    expect(MANAGER_RULES).toContain("it is a task brief. File it");
+  });
+
   test("name no single window the conversation arrives through", () => {
     expect(MANAGER_RULES).not.toContain("Telegram");
   });
@@ -333,8 +377,74 @@ describe("the rules", () => {
     expect(MANAGER_RULES).toContain("file the card");
   });
 
-  test("say the scratch directory does not outlive the turn", () => {
-    expect(MANAGER_RULES).toContain("`/workspace` is scratch");
+  test("say the working directory does not outlive the turn", () => {
+    expect(MANAGER_RULES).toContain(
+      "Your working directory is deleted when this turn ends"
+    );
     expect(MANAGER_RULES).not.toContain("outlives the container");
+  });
+
+  /**
+   * The rule this replaced said `/workspace` was scratch. It stopped being true
+   * when the workspace scope became the shared directory every run reads, and a
+   * manager that believes its one writable path is thrown away will not edit
+   * the house rules a worker is handed.
+   */
+  test("say the shared directory is theirs to write, and that an edit reaches every later run", () => {
+    expect(MANAGER_RULES).not.toContain("is scratch");
+    expect(MANAGER_RULES).toContain(
+      "The shared directory every run reads is yours to write"
+    );
+    expect(MANAGER_RULES).toContain("an edit changes every run after this one");
+  });
+
+  /**
+   * A rule is one string for every mode; the paths are per run, and a local
+   * turn's are host directories with no `/workspace` anywhere. A path named here
+   * would send that turn to write somewhere that does not exist — so the rules
+   * describe the directories and `placementSection` names them.
+   */
+  test("name no container path, leaving the paths to the placement section", () => {
+    expect(MANAGER_RULES).not.toContain("/workspace");
+  });
+});
+
+/**
+ * The prompt carries the seeded rules exactly when the filesystem cannot. A
+ * container turn reads the same text out of the workspace document and its own
+ * `manager/AGENTS.md`; a local turn is a host process with nothing above it, so
+ * dropping them there would lose them silently.
+ */
+describe("the seeded rules, on disk or in the prompt", () => {
+  const messages = [message({ body: "hi", role: "user" })];
+
+  test("states both documents when the turn has no tree to read them from", () => {
+    const text = textOf({ instructionsOnDisk: false, messages });
+    expect(text).toContain(WORKSPACE_RULES);
+    expect(text).toContain(MANAGER_ANSWER_RULES);
+    // A caller that has not been updated is that case, so silence means stated.
+    expect(textOf({ messages })).toContain(WORKSPACE_RULES);
+  });
+
+  /**
+   * Root-down, deepest last, which is how both CLIs concatenate the files
+   * themselves — so the manager's own answering rules still win by position
+   * over the house style every role reads.
+   */
+  test("states them in the order the tree would have handed them over", () => {
+    const text = textOf({ messages });
+    expect(text.indexOf(WORKSPACE_RULES)).toBeLessThan(
+      text.indexOf(MANAGER_ANSWER_RULES)
+    );
+  });
+
+  test("leaves them out when the directories carry them", () => {
+    const text = textOf({ instructionsOnDisk: true, messages });
+    expect(text).not.toContain(WORKSPACE_RULES);
+    expect(text).not.toContain("## How you write");
+    expect(text).not.toContain("## How you answer");
+    // Only those blocks. Board policy is not a thing a file on disk can promise.
+    expect(text).toContain(MANAGER_RULES);
+    expect(text).toContain(SHARED_RULES);
   });
 });
