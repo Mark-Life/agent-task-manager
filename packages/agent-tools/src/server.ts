@@ -37,11 +37,26 @@ import { AGENT_TOOLS, agentToolByName } from "./tools";
  */
 export const AGENT_MCP_VERSION = "1.0.0";
 
-/** One tool as an MCP client is told about it. */
-const listedTool = (tool: (typeof AGENT_TOOLS)[number]) => ({
+/**
+ * The key a Claude client reads off a listed tool to decide the tool is not
+ * deferred behind tool search. Claude's own SDK writes it into `_meta` for the
+ * servers it hosts in-process; the client honours it from any server's
+ * `tools/list`, which is how a tool over stdio opts out one name at a time
+ * rather than the whole server at once.
+ */
+export const ALWAYS_LOAD_META = "anthropic/alwaysLoad";
+
+/**
+ * One tool as an MCP client is told about it.
+ *
+ * `_meta` is omitted rather than sent empty: a client that does not know the key
+ * should see the listing it would have seen before it existed.
+ */
+export const listedTool = (tool: (typeof AGENT_TOOLS)[number]) => ({
   description: tool.description,
   inputSchema: tool.inputJsonSchema,
   name: tool.name,
+  ...(tool.alwaysLoad ? { _meta: { [ALWAYS_LOAD_META]: true } } : {}),
 });
 
 /** A tool result carrying text, and whether the text is what went wrong. */
