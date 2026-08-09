@@ -1,16 +1,17 @@
 #!/usr/bin/env bun
 
 /**
- * The three long-running processes, as systemd user services.
+ * The three long-running processes and the nightly backup, as systemd user
+ * units.
  *
  * `systemctl --user` is the thing an operator actually types here, and it is
- * three units, a `daemon-reload`, a unit directory nobody remembers the path
- * of, and one `loginctl enable-linger` without which none of it survives a
+ * five unit files, a `daemon-reload`, a unit directory nobody remembers the
+ * path of, and one `loginctl enable-linger` without which none of it survives a
  * logout. This wraps that so the commands worth running are in `package.json`
  * beside every other command, and so installing is idempotent rather than a
  * sequence somebody has to get right from the README.
  *
- *     bun run service:install            # all three, or name some
+ *     bun run service:install            # all four, or name some
  *     bun run service:status
  *     bun run service:logs -n 50 loop
  *     bun run service:restart gateway bot
@@ -70,14 +71,33 @@ const ENV_DIR = join(
  * unit whose `EnvironmentFile=` has no `-` prefix fails at boot when the file
  * is missing, and systemd reports that as a service that will not start rather
  * than as a file somebody has not written yet.
+ *
+ * `timer` marks the one that is not a long-running process. `atm-backup` is a
+ * `Type=oneshot` service plus the timer that starts it, so it installs two
+ * files and the thing that gets enabled, started, stopped and reported on is
+ * the timer — enabling the service would run one backup at boot and call it a
+ * schedule.
  */
 const SERVICES = {
-  bot: { requires: ["common.env", "bot.env"], unit: "atm-bot" },
-  gateway: { requires: ["common.env"], unit: "atm-gateway" },
-  loop: { requires: ["common.env"], unit: "atm-loop" },
+  backup: { requires: ["common.env"], timer: true, unit: "atm-backup" },
+  bot: { requires: ["common.env", "bot.env"], timer: false, unit: "atm-bot" },
+  gateway: { requires: ["common.env"], timer: false, unit: "atm-gateway" },
+  loop: { requires: ["common.env"], timer: false, unit: "atm-loop" },
 } as const;
 
 type ServiceName = keyof typeof SERVICES;
+
+/** Every unit file a service installs. */
+const filesOf = (service: ServiceName) => {
+  const { timer, unit } = SERVICES[service];
+  return timer ? [`${unit}.service`, `${unit}.timer`] : [`${unit}.service`];
+};
+
+/** The one unit that `enable`, `start` and `is-active` should name. */
+const enableUnitOf = (service: ServiceName) =>
+  SERVICES[service].timer
+    ? `${SERVICES[service].unit}.timer`
+    : `${SERVICES[service].unit}.service`;
 
 const ALL: readonly ServiceName[] = Object.keys(
   SERVICES
@@ -139,17 +159,11 @@ const runInherit = (cmd: readonly string[]) =>
 /** `systemctl --user …`, captured. */
 const systemctl = (...rest: string[]) => run(["systemctl", "--user", ...rest]);
 
-/** The unit file as this host should have it, with the two paths substituted. */
-const render = (service: ServiceName) => {
-  const template = join(
-    REPO_DIR,
-    "deploy/user",
-    `${SERVICES[service].unit}.service`
-  );
-  return readFileSync(template, "utf8")
+/** One unit file as this host should have it, with the two paths substituted. */
+const render = (file: string) =>
+  readFileSync(join(REPO_DIR, "deploy/user", file), "utf8")
     .replaceAll("%h/projects/agent-task-manager", REPO_DIR)
     .replaceAll("%h/.bun/bin/bun", BUN_PATH);
-};
 
 /** The environment files a service needs and this host does not have. */
 const missingEnv = (service: ServiceName) =>
@@ -175,22 +189,28 @@ const writeUnits = (chosen: readonly ServiceName[]) => {
   const changed: ServiceName[] = [];
 
   for (const service of chosen) {
-    const path = join(UNIT_DIR, `${SERVICES[service].unit}.service`);
-    const wanted = render(service);
-    const existing = existsSync(path) ? readFileSync(path, "utf8") : null;
-    if (existing === wanted && !hasFlag("--force")) {
-      process.stdout.write(`${service}: unit already up to date\n`);
-      continue;
+    let touched = false;
+    for (const file of filesOf(service)) {
+      const path = join(UNIT_DIR, file);
+      const wanted = render(file);
+      const existing = existsSync(path) ? readFileSync(path, "utf8") : null;
+      if (existing === wanted && !hasFlag("--force")) {
+        process.stdout.write(`${service}: ${file} already up to date\n`);
+        continue;
+      }
+      // Written beside the target and renamed, so a unit file is never half
+      // there — systemd reads this directory on a timer as well as on demand.
+      const temporary = `${path}.tmp`;
+      writeFileSync(temporary, wanted, "utf8");
+      renameSync(temporary, path);
+      touched = true;
+      process.stdout.write(
+        `${service}: ${existing === null ? "wrote" : "updated"} ${path}\n`
+      );
     }
-    // Written beside the target and renamed, so a unit file is never half
-    // there — systemd reads this directory on a timer as well as on demand.
-    const temporary = `${path}.tmp`;
-    writeFileSync(temporary, wanted, "utf8");
-    renameSync(temporary, path);
-    changed.push(service);
-    process.stdout.write(
-      `${service}: ${existing === null ? "wrote" : "updated"} ${path}\n`
-    );
+    if (touched) {
+      changed.push(service);
+    }
   }
 
   return changed;
@@ -215,15 +235,15 @@ const enableUnits = (
       );
       continue;
     }
-    const wasActive =
-      systemctl("is-active", SERVICES[service].unit).stdout === "active";
-    const enabled = systemctl("enable", "--now", SERVICES[service].unit);
+    const unit = enableUnitOf(service);
+    const wasActive = systemctl("is-active", unit).stdout === "active";
+    const enabled = systemctl("enable", "--now", unit);
     if (enabled.code !== 0) {
       process.stderr.write(`${service}: ${enabled.stderr || enabled.stdout}\n`);
       continue;
     }
     if (changed.includes(service) && wasActive) {
-      systemctl("restart", SERVICES[service].unit);
+      systemctl("restart", unit);
       process.stdout.write(`${service}: restarted, the unit changed\n`);
     }
   }
@@ -257,7 +277,9 @@ const install = () => {
 
   if (hasFlag("--dry-run")) {
     for (const service of chosen) {
-      process.stdout.write(`${render(service)}\n`);
+      for (const file of filesOf(service)) {
+        process.stdout.write(`# ${file}\n${render(file)}\n`);
+      }
     }
     return 0;
   }
@@ -273,11 +295,13 @@ const install = () => {
 const status = () => {
   const chosen = targets();
   const rows = chosen.map((service) => ({
-    active: systemctl("is-active", SERVICES[service].unit).stdout,
-    enabled: systemctl("is-enabled", SERVICES[service].unit).stdout,
+    active: systemctl("is-active", enableUnitOf(service)).stdout,
+    enabled: systemctl("is-enabled", enableUnitOf(service)).stdout,
     missingEnv: missingEnv(service),
     service,
-    unit: SERVICES[service].unit,
+    // The timer for `backup`, the service for the rest — `active` above is
+    // about this unit, and a oneshot's own unit is inactive between runs.
+    unit: enableUnitOf(service),
   }));
 
   if (hasFlag("--json")) {
@@ -331,7 +355,7 @@ const logs = () => {
 const simple = (verb: string) => {
   let code = 0;
   for (const service of targets()) {
-    const result = systemctl(verb, SERVICES[service].unit);
+    const result = systemctl(verb, enableUnitOf(service));
     if (result.code === 0) {
       process.stdout.write(`${service}: ${verb} ok\n`);
     } else {
@@ -345,10 +369,12 @@ const simple = (verb: string) => {
 /** Stops, disables and removes the units. Environment files and linger stay. */
 const uninstall = () => {
   for (const service of targets()) {
-    systemctl("disable", "--now", SERVICES[service].unit);
-    const path = join(UNIT_DIR, `${SERVICES[service].unit}.service`);
-    rmSync(path, { force: true });
-    process.stdout.write(`${service}: removed ${path}\n`);
+    systemctl("disable", "--now", enableUnitOf(service));
+    for (const file of filesOf(service)) {
+      const path = join(UNIT_DIR, file);
+      rmSync(path, { force: true });
+      process.stdout.write(`${service}: removed ${path}\n`);
+    }
   }
   systemctl("daemon-reload");
   process.stdout.write(`environment files in ${ENV_DIR} left untouched\n`);
@@ -363,7 +389,10 @@ const usage = `Usage: bun run service:<command> [service...]
   start | stop | restart
   uninstall
 
-Services: ${ALL.join(", ")}. Naming none means all of them.`;
+Services: ${ALL.join(", ")}. Naming none means all of them.
+
+backup is a timer rather than a process: start and stop arm and disarm the
+schedule, status reports the timer, and \`bun run backup\` takes one now.`;
 
 /** Commands that read nothing from systemd, and so run anywhere. */
 const isOffline =

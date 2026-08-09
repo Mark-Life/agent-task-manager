@@ -1,0 +1,26 @@
+# When the backup runs.
+#
+# 03:20 rather than 03:00, because every other schedule anyone writes is on the
+# hour and a VPS this small would rather not do two things at once.
+#
+# `Persistent=yes` is the line that matters. Without it a host that was off, or
+# a laptop that was asleep, silently skips the night and the next backup is 48
+# hours old; with it the timer fires as soon as the machine is back and the gap
+# is one boot rather than one day. It needs the timestamp file under
+# %h/.local/state/systemd/timers, which is why linger is not optional here
+# either — `bun run service:install` turns it on.
+#
+#   systemctl --user list-timers atm-backup.timer   # last run, next run
+#   journalctl --user -u atm-backup -n 50           # what the last one did
+
+[Unit]
+Description=Agent Task Manager nightly backup (user)
+Documentation=file:%h/projects/agent-task-manager/deploy/README.md
+
+[Timer]
+OnCalendar=*-*-* 03:20:00
+Persistent=yes
+Unit=atm-backup.service
+
+[Install]
+WantedBy=timers.target

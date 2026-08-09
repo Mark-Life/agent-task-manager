@@ -53,6 +53,12 @@ bun run service:logs -n 50 loop
 bun run service:restart      # after a code change; name a subset or get all three
 ```
 
+`service:install` also arms `atm-backup.timer`, which dumps the database and tars the artifact
+tree at 03:20 into `<DATA_ROOT>-backups` — 14 daily sets and 4 weekly. Take one now with
+`bun run backup`, and prove one is restorable with `bun run backup:verify`, which restores it
+into a scratch database and checks every table's row count. `deploy/README.md` has the restore
+procedure and what a set does not contain.
+
 ## The dashboard
 
 ```bash

@@ -21,6 +21,11 @@ coverage
 # Data root: artifacts, per-run agent homes, event ledger
 .data
 
+# Backup sets. A sibling of the data root rather than a child, so deleting the
+# data root does not delete its own backups. Holds password hashes and the
+# encrypted project environment, so it is never a thing to commit.
+.data-backups
+
 # Vercel
 .vercel
 

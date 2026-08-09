@@ -234,13 +234,20 @@ bun run service:install
 ```
 
 `service:install` is `scripts/service.ts` and it is the whole of it: it writes
-the three units, reloads systemd, enables and starts each service whose
-environment files are present, restarts any whose unit changed, and turns
-linger on. Re-running it is how an edit to a unit takes effect, and running it
-twice does nothing the second time.
+the units, reloads systemd, enables and starts each service whose environment
+files are present, restarts any whose unit changed, and turns linger on.
+Re-running it is how an edit to a unit takes effect, and running it twice does
+nothing the second time.
+
+Four services, five unit files. `backup` is the odd one: a `Type=oneshot`
+service plus `atm-backup.timer`, and the timer is what gets enabled, started,
+stopped and reported on. `bun run service:status backup` showing the timer
+`active` is the schedule being armed, not a backup in progress — see
+[Backups](#backups).
 
 Linger is not a detail: without it the units stop with your last session and do
-not come back after a reboot. `service:install` enables it, or says which
+not come back after a reboot, and `Persistent=yes` on the backup timer needs its
+state directory for the same reason. `service:install` enables it, or says which
 `sudo loginctl enable-linger` to run when it cannot.
 
 ```sh
@@ -410,6 +417,125 @@ Stopping the loop is the slow half. It stops the containers it is holding and
 releases its leases; `TimeoutStopSec=60s` bounds that, and a `SIGKILL` through
 the middle leaves rows claiming a run is live and containers nobody will reap.
 
+## Backups
+
+Everything the board knows is in one Docker volume, `atm_postgres_data`, and
+every file a run kept is in one directory under `DATA_ROOT`. `scripts/backup.ts`
+makes a second copy of both, nightly, and can restore one.
+
+```sh
+bun run service:install backup    # writes the units, arms atm-backup.timer
+bun run backup                    # take one now, in the foreground
+bun run backup:list               # what is on disk and how old it is
+bun run backup:verify             # restore the newest set and check every row count
+```
+
+A set is four files in `<DATA_ROOT>-backups/daily/<YYYY-MM-DD>/`:
+
+| File | What it is |
+| --- | --- |
+| `db.dump` | `pg_dump --format=custom`, the whole database |
+| `globals.sql` | `pg_dumpall --globals-only` — roles and their passwords, which `pg_dump` does not carry |
+| `artifacts.tar.gz` | `<DATA_ROOT>/artifacts`, all three folders |
+| `manifest.json` | sizes, sha256 of each file, and an exact row count per table taken immediately before the dump |
+
+Fourteen daily sets and four weekly. A weekly set is **hardlinks** to the daily
+one, relinked on every run in its week, so it ends up being that week's last
+backup and costs nothing until the daily twin ages out. At this board's current
+size — a 3.0 MB dump and a 3.5 MB artifact tree — the whole tree settles around
+120 MB, against 17 GB free.
+
+The tree is `0700` and every file `0600`, and that is not decoration: the dump
+carries Better Auth password hashes and the encrypted project environment, and
+`globals.sql` carries the Postgres role passwords. Copying a set off this host
+copies all of that.
+
+**`pg_dump` runs inside the Postgres container when Compose is running it.** A
+`pg_dump` older than its server refuses, which is the single commonest way a
+backup schedule turns out to have been failing for months; the container's own
+client cannot be the wrong version. A host `pg_dump` is the fallback, and the
+script checks its major version against the server's before writing anything.
+`ATM_BACKUP_PG=host` or `=compose` forces one.
+
+**Taking a backup does not need the loop stopped.** `pg_dump` reads one MVCC
+snapshot and blocks no writer. The artifact tar is not snapshotted, so a file
+being written while it runs can land half-copied; the next night's set has it
+whole.
+
+### Verifying
+
+`bun run backup` finishes by reading the archive's table of contents and says
+so in exactly those words. That proves the header is not truncated. It is not a
+restore and proves nothing about the rows.
+
+`bun run backup:verify` is the real check, and it needs a database to write to,
+which is why the timer cannot run it for you. It creates a scratch database,
+restores the archive into it, counts every table, compares each count against
+the manifest written immediately before the dump, unpacks the artifact tar and
+counts that too — then drops the scratch database, whether it passed or failed.
+It exits non-zero on any mismatch. `--at weekly/2026-W32` checks a named set
+instead of the newest daily one.
+
+Run it after any change to the backup script, and once in a while regardless.
+
+### Restoring
+
+There is no partial path. A restore replaces the database.
+
+```sh
+bun run service:stop                       # the loop must not be writing
+cd /opt/agent-task-manager                 # or your checkout
+SET=/var/lib/agent-task-manager-backups/daily/2026-08-09
+
+# 1. Roles. Only needed on a cluster that does not have them; on one that does
+#    it says the role already exists, which is not a failure.
+docker compose exec -T postgres psql -U user -d postgres < "$SET/globals.sql"
+
+# 2. The database.
+docker compose exec -T postgres dropdb -U user --if-exists agent_task_manager
+docker compose exec -T postgres createdb -U user agent_task_manager
+docker compose exec -T postgres pg_restore -U user -d agent_task_manager \
+  --no-owner --no-privileges --exit-on-error < "$SET/db.dump"
+
+# 3. The artifact tree.
+tar --extract --gzip --file "$SET/artifacts.tar.gz" \
+  --directory /var/lib/agent-task-manager
+
+bun run service:start
+```
+
+**Do not run migrations after a restore.** The dump carries the schema as it was
+at that moment. Restoring a set older than a migration puts you on the older
+schema, and the checkout has to go back to a matching commit — this is what the
+[Upgrading](#upgrading) section means by a rollback across a migration being a
+restore rather than a checkout.
+
+A restore brings back rows and files. It does not bring back containers or
+leases: rows claiming a run was live come back too, and the loop reclaims and
+reaps them at boot the same way it does after a crash.
+
+### What is not in a set
+
+Named so nobody assumes otherwise.
+
+- **The JSONL event ledger** under `<DATA_ROOT>/events`. It has no rotation and
+  no retention window yet, so it has no bounded size to budget for. Phase 9
+  item 6 in `.docs/plan/02-build-plan.md` is that work, and the backup joins it
+  there.
+- **The agent homes**, `~/.claude-task-management` and `~/.codex-task-management`.
+  They hold provider logins, not data, and a login is re-established by
+  `bun run agent-home:login` rather than restored.
+- **The environment files** in `/etc/agent-task-manager` or
+  `~/.config/agent-task-manager`. Secrets an operator holds; a backup that
+  copied them would put every secret in a second place on the same disk.
+- **Run workspaces, checkouts and caches** under `DATA_ROOT`. Scratch, rebuilt
+  on demand, and larger than everything else here combined.
+
+The `/opt` install has no backup unit. `deploy/user/atm-backup.{service,timer}`
+are user units and the script works from any checkout, so the missing piece
+there is a system-wide unit pair running as `atm` — worth writing on the day
+that shape is actually deployed, and not before.
+
 ## The dashboard, on Cloudflare
 
 This is the second of two ways to serve it, and the one that has never been run.
@@ -502,10 +628,44 @@ Served real requests, on one host:
   parent — so the two hosts are one site to the browser and a third domain under
   the same registrable name is not sent the cookie.
 
+The backup, against a real Postgres 17.6 — the same version as the Compose
+image — in a container, on its **host** channel. Not on the VPS, and not once
+through Compose:
+
+- **A dump and a real restore.** `bun run backup` against a migrated, seeded
+  database; then `dropdb agent_task_manager`, `createdb`, `pg_restore` from that
+  set, and every row back — including `drizzle.__drizzle_migrations`, which is
+  what makes "do not run migrations after a restore" true. `bun run db:store-check`
+  then drove the restored database through a task's whole lifecycle and passed.
+  The artifact tar was extracted over a deleted `.data/artifacts` and the files
+  came back.
+- **`backup:verify` fails when it should.** With a byte flipped in the middle of
+  `db.dump` it reported the sha256 mismatch, `pg_restore`'s "could not
+  uncompress data", every table restored at 0 rows against what was dumped, and
+  exited 1. With one table's count edited in the manifest it reported that one
+  table. It dropped its scratch database in both cases; `pg_database` had none
+  left behind.
+- **Retention.** 20 day-stamped and 8 week-stamped sets pruned to 14 and 4, with
+  a `.staging-*` directory and an unrecognised name left untouched.
+- **Two runs in one day.** The second replaced the day's set atomically, the
+  weekly hardlink was relinked to it — same inode, link count 2 — and no
+  `.staging`, `.lock` or `.previous` was left behind.
+
+Not exercised, and the place to look first if the first real night fails: the
+**Compose channel**. `docker compose exec -T postgres pg_dump` with its stdout
+redirected to a host file, and `pg_restore` fed from a host file on stdin, are
+written and never run — there is no Docker in the container this was built in.
+`ATM_BACKUP_PG=host` is the fallback if it misbehaves, and needs
+`postgresql-client-17` on the host.
+
 Adapted or verified, but never served a request:
 
 - `systemd-analyze verify` on the system units, in a `debian:12` container, and
   on the user units on the host: no syntax or directive errors.
+- **`atm-backup.service` and `atm-backup.timer` have not been run under
+  systemd.** They render correctly through `service:install --dry-run`, and that
+  is all that has been checked; there is no systemd in the container this was
+  built in.
 - `alchemy.run.ts` typechecks against the installed type definitions
   (`tsc --noEmit`, exit 0). It has never been executed and no Cloudflare
   resource exists.
