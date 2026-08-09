@@ -10,8 +10,8 @@
  * by hand at a call site is a hole nobody reviews.
  *
  * Seven mounts a run always gets, one it gets when the install shares a skills
- * directory and one when it runs our own entrypoint, and the reasons are each
- * their own.
+ * directory, one when it runs our own entrypoint and one when it is given the
+ * board tools, and the reasons are each their own.
  *
  * The run directory carries the run's message marker, its turn spec and its
  * event ledger, and it is mounted whole at {@link CONTAINER_RUN_DIR} rather than
@@ -80,13 +80,21 @@
  * operator edits the skills in their own directory, and the next container sees
  * the edit without a sync step that can be forgotten.
  *
- * The last is the bundled turn entrypoint, read-only, and it is a file rather
- * than a directory. It is not in the image on purpose: the image carries bun,
- * node, git and the agent CLIs, which move on a weekly rebuild, while the
- * entrypoint is this repository's own code and changes every commit — so an
- * image build per commit is the tax it avoids. Read-only because the container
- * runs it and has no business rewriting the host's copy of it, and conditional
- * because a container told to run a shell has no entrypoint to mount.
+ * The last two are bundles rather than directories: the turn entrypoint and the
+ * board tools, one file each, read-only. Neither is in the image on purpose —
+ * the image carries bun, node, git and the agent CLIs, which move on a weekly
+ * rebuild, while both bundles are this repository's own code and change every
+ * commit, so an image build per commit is the tax they avoid. Read-only because
+ * the container runs them and has no business rewriting the host's copy, which
+ * every other run on the box is running too. Each is conditional: a container
+ * told to run a shell has no entrypoint to mount, and an install with no
+ * gateway configured has no board tools to hand out.
+ *
+ * The board tools are mounted rather than copied onto the run mount, which is
+ * what they used to be. The copy was defended as costing less than a mount
+ * entry; at 1.7 MB a run it was 77% of everything under `runs/` on the first
+ * host to be measured, and it grew with the run count. One entry here, one file
+ * on the host, nothing per run.
  *
  * Never the docker socket. Not read-only, not "just for `docker ps`", not ever:
  * a process that can talk to the daemon can start a container with the host root
@@ -106,6 +114,7 @@
 
 import { join } from "node:path";
 import {
+  CONTAINER_AGENT_MCP_PATH,
   CONTAINER_ENTRYPOINT_PATH,
   CONTAINER_RUN_DIR,
 } from "@workspace/harness";
@@ -232,6 +241,7 @@ export const MOUNT_PURPOSES = [
   "global_artifacts",
   "skills",
   "entrypoint",
+  "agent_mcp",
 ] as const;
 
 /** What one mount is for. */
@@ -288,6 +298,15 @@ export interface MountSources {
  */
 export interface MountExtras {
   /**
+   * The bundled board tools on the host, mounted read-only at
+   * {@link CONTAINER_AGENT_MCP_PATH}. Null on an install that named no gateway,
+   * which runs every turn without board tools — a smaller agent, not a broken
+   * one. The orchestrator has already checked the file is there by the time it
+   * names it here, so that a host with no bundle fails as the missing bundle it
+   * is rather than as a mount source the daemon could not find.
+   */
+  readonly agentMcpPath: string | null;
+  /**
    * The bundled turn entrypoint on the host, mounted read-only at
    * {@link CONTAINER_ENTRYPOINT_PATH}. Null for a container that runs something
    * the image already has — a shell, in the checks that prove the plumbing.
@@ -304,6 +323,7 @@ export interface MountExtras {
 
 /** What a container that brings its own command gets: the five run mounts. */
 export const NO_MOUNT_EXTRAS: MountExtras = {
+  agentMcpPath: null,
   entrypointPath: null,
   skillsDir: null,
 };
@@ -324,6 +344,38 @@ const skillsMounts = (extras: MountExtras): readonly Mount[] =>
           readOnly: true,
         },
       ];
+
+/**
+ * The host's two bundles, whichever of them this turn was given. One function
+ * for both mount sets, like {@link skillsMounts} and for the stronger version
+ * of the same reason: a manager turn is the one that uses the board tools most,
+ * so a copy of this that drifted would take them away from exactly the role
+ * that needs them.
+ *
+ * Read-only on both. One file on the host serves every container, so a
+ * container that could write it would be rewriting the code every other run on
+ * the box is executing.
+ */
+const bundleMounts = (extras: MountExtras): readonly Mount[] => {
+  const mounts: Mount[] = [];
+  if (extras.entrypointPath !== null) {
+    mounts.push({
+      containerPath: CONTAINER_ENTRYPOINT_PATH,
+      hostPath: extras.entrypointPath,
+      purpose: "entrypoint",
+      readOnly: true,
+    });
+  }
+  if (extras.agentMcpPath !== null) {
+    mounts.push({
+      containerPath: CONTAINER_AGENT_MCP_PATH,
+      hostPath: extras.agentMcpPath,
+      purpose: "agent_mcp",
+      readOnly: true,
+    });
+  }
+  return mounts;
+};
 
 /**
  * The exact mount set for one run. Pure, total, and the only place the set is
@@ -391,15 +443,7 @@ export const mountsFor = (
     purpose: "global_artifacts",
     readOnly: true,
   });
-  mounts.push(...skillsMounts(extras));
-  if (extras.entrypointPath !== null) {
-    mounts.push({
-      containerPath: CONTAINER_ENTRYPOINT_PATH,
-      hostPath: extras.entrypointPath,
-      purpose: "entrypoint",
-      readOnly: true,
-    });
-  }
+  mounts.push(...skillsMounts(extras), ...bundleMounts(extras));
   return mounts;
 };
 
@@ -470,14 +514,7 @@ export const managerMountsFor = (
     },
     ...skillsMounts(extras),
   ];
-  if (extras.entrypointPath !== null) {
-    mounts.push({
-      containerPath: CONTAINER_ENTRYPOINT_PATH,
-      hostPath: extras.entrypointPath,
-      purpose: "entrypoint",
-      readOnly: true,
-    });
-  }
+  mounts.push(...bundleMounts(extras));
   return mounts;
 };
 

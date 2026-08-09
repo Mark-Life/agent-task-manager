@@ -7,6 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  CONTAINER_AGENT_MCP_PATH,
   CONTAINER_ENTRYPOINT_PATH,
   containerRunLayout,
 } from "@workspace/harness";
@@ -85,6 +86,7 @@ describe("mountsFor", () => {
     expect(byPurpose(mountsFor(sources), "entrypoint")).toBeUndefined();
 
     const mounts = mountsFor(sources, {
+      agentMcpPath: null,
       entrypointPath: "/data/bin/turn.js",
       skillsDir: null,
     });
@@ -96,10 +98,45 @@ describe("mountsFor", () => {
     expect(entrypoint?.readOnly).toBe(true);
   });
 
+  test("the board tools are one shared file, mounted read-only, and only when there are any", () => {
+    expect(byPurpose(mountsFor(sources), "agent_mcp")).toBeUndefined();
+
+    const mounts = mountsFor(sources, {
+      agentMcpPath: "/data/bin/agent-mcp.js",
+      entrypointPath: null,
+      skillsDir: null,
+    });
+    const bundle = byPurpose(mounts, "agent_mcp");
+    expect(bundle?.hostPath).toBe("/data/bin/agent-mcp.js");
+    expect(bundle?.containerPath).toBe(CONTAINER_AGENT_MCP_PATH);
+    // One file on the host serves every container, so a run that could write it
+    // would be rewriting the tools every other run on the box is running.
+    expect(bundle?.readOnly).toBe(true);
+  });
+
+  test("the board tools are mounted, never copied into the run directory", () => {
+    // The copy is what this replaced: 1.7 MB per run, kept for as long as the
+    // run directory is, and 77% of `runs/` on the host that was measured. A
+    // destination under the run mount would put it back, one turn at a time.
+    const bundle = byPurpose(
+      mountsFor(sources, {
+        agentMcpPath: "/data/bin/agent-mcp.js",
+        entrypointPath: null,
+        skillsDir: null,
+      }),
+      "agent_mcp"
+    );
+    expect(bundle?.containerPath.startsWith(containerRunLayout.runDir)).toBe(
+      false
+    );
+    expect(bundle?.hostPath.startsWith(sources.runDir)).toBe(false);
+  });
+
   test("the operator's skills are mounted read-only, and only when shared", () => {
     expect(byPurpose(mountsFor(sources), "skills")).toBeUndefined();
 
     const mounts = mountsFor(sources, {
+      agentMcpPath: null,
       entrypointPath: null,
       skillsDir: "/home/op/.agents/skills",
     });
@@ -253,6 +290,7 @@ describe("managerMountsFor", () => {
     // The type forbids naming them; this is the claim that no other code path
     // reintroduces one, which is what a reviewer of the security boundary asks.
     const purposes = managerMountsFor(managerSources, {
+      agentMcpPath: null,
       entrypointPath: "/data/bin/turn.js",
       skillsDir: null,
     }).map((mount) => mount.purpose);
@@ -269,6 +307,7 @@ describe("managerMountsFor", () => {
 
   test("the entrypoint is mounted read-only where the harness looks for it", () => {
     const mounts = managerMountsFor(managerSources, {
+      agentMcpPath: null,
       entrypointPath: "/data/bin/turn.js",
       skillsDir: null,
     });
@@ -277,8 +316,20 @@ describe("managerMountsFor", () => {
     expect(entrypoint?.readOnly).toBe(true);
   });
 
+  test("a conversation gets the board tools, which is the role that lives on them", () => {
+    const mounts = managerMountsFor(managerSources, {
+      agentMcpPath: "/data/bin/agent-mcp.js",
+      entrypointPath: null,
+      skillsDir: null,
+    });
+    const bundle = byPurpose(mounts, "agent_mcp");
+    expect(bundle?.containerPath).toBe(CONTAINER_AGENT_MCP_PATH);
+    expect(bundle?.readOnly).toBe(true);
+  });
+
   test("a conversation is given the operator's skills on the same terms", () => {
     const mounts = managerMountsFor(managerSources, {
+      agentMcpPath: null,
       entrypointPath: null,
       skillsDir: "/home/op/.agents/skills",
     });

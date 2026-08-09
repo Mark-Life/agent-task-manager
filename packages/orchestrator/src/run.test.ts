@@ -33,10 +33,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import process from "node:process";
 import { BunFileSystem } from "@effect/platform-bun";
-import { AGENT_TOOL_PREFIX, describeFailure } from "@workspace/agent-tools";
+import {
+  AGENT_MCP_BUNDLE_FILE,
+  AGENT_TOOL_PREFIX,
+  agentMcpBundlePathOf,
+  describeFailure,
+} from "@workspace/agent-tools";
 import { Unauthorized } from "@workspace/api";
 import {
   AgentSessionRepo,
@@ -323,6 +328,12 @@ const claimOf = (task: Task): RunClaim => ({
 const runOnce = (input: {
   readonly events: readonly AgentEvent[];
   readonly failure?: ProviderCrashed;
+  /**
+   * The gateway this run's board tools reach, for the one test that is about
+   * them. Absent is the default and what every other test here wants: the
+   * credential's own claims are `./agent-token.test`'s.
+   */
+  readonly gatewayUrl?: string;
   readonly hang?: boolean;
   /**
    * Puts something on disk for the run to find, once the task exists and
@@ -339,6 +350,9 @@ const runOnce = (input: {
     input.onSeeded?.(task);
     const outcome = yield* performRun({
       ...RUN_SETTINGS,
+      ...(input.gatewayUrl === undefined
+        ? {}
+        : { gatewayUrl: input.gatewayUrl }),
       claim: claimOf(task),
       // The host path, which is what a scripted provider is: the container path
       // has a container test of its own, in `./container-turn.test`.
@@ -891,4 +905,39 @@ test("the close hook copies the transcript out of the shared home and reads it t
       CREDENTIAL_NAMES.some((name) => entry.includes(name))
     )
   ).toEqual([]);
+});
+
+test("a run given board tools mounts the one bundle and copies nothing", async () => {
+  // The bundle every run used to be handed a copy of. Written here because
+  // nothing on the run path builds it — `bun run agent-mcp:build` does, once
+  // per host, and a run that cannot find it fails rather than starting an
+  // agent with no way to reach the board.
+  const bundle = agentMcpBundlePathOf(dataRoot);
+  mkdirSync(dirname(bundle), { recursive: true });
+  writeFileSync(bundle, "// the board tools\n");
+
+  const seen = await provide(
+    runOnce({
+      events: [sessionInit, assistant("worked"), doneResult],
+      // Never reached: the provider is scripted and the turn runs as a host
+      // process. Naming one is what turns the board tools on at all.
+      gatewayUrl: "http://127.0.0.1:1",
+      title: "a run that is given the board tools",
+    })
+  );
+
+  expect(seen.terminus.kind).toBe("finished");
+
+  // The claim: the run directory holds this run's own files and not 1.7 MB of
+  // a bundle that is identical on every run of this host. 184 of those copies
+  // were 77% of everything under `runs/` on the box this was measured on.
+  const left = readdirSync(seen.context.layout.runDir, { recursive: true });
+  expect(left).not.toContain(AGENT_MCP_BUNDLE_FILE);
+  expect(
+    left.filter((entry) => String(entry).endsWith(AGENT_MCP_BUNDLE_FILE))
+  ).toEqual([]);
+
+  // And the host's own copy is still there, unread by anything that would move
+  // it: one file, mounted, for every run on the box.
+  expect(existsSync(bundle)).toBe(true);
 });
