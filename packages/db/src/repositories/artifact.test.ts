@@ -25,25 +25,19 @@ import type {
   WorkspaceId,
 } from "@workspace/domain";
 import { Actor, UserId } from "@workspace/domain";
-import { DateTime, Effect, Layer, ManagedRuntime, Schema } from "effect";
+import { DateTime, Effect, Layer, ManagedRuntime } from "effect";
 import { CurrentActor, withActor } from "../actor";
 import { storeLayer } from "../store";
+import { ensureFixtureWorkspace } from "../testing/fixtures";
 import { ArtifactRepo } from "./artifact";
 import { ProjectRepo } from "./project";
 import { TaskRepo } from "./task";
-import { WorkspaceRepo } from "./workspace";
 
 /** Reported as `application_name`, so `pg_stat_activity` names this process. */
 const APPLICATION_NAME = "db-artifact-test";
 
 /** The digest a promotion records, algorithm prefix and all. */
 const CONTENT_HASH = /^sha256:[0-9a-f]{64}$/;
-
-/** The database has never been seeded, so there is no workspace to hang a task on. */
-class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
-  "ArtifactRepoTest.NoWorkspace",
-  { detail: Schema.String }
-) {}
 
 const caller = Actor.cases.system.make({ reason: APPLICATION_NAME });
 
@@ -143,42 +137,39 @@ const rowsAt = Effect.fnUntraced(function* (path: string) {
 beforeAll(async () => {
   const built = await runtime.runPromise(
     Effect.gen(function* () {
-      const workspaces = yield* WorkspaceRepo;
-      const [first] = yield* workspaces.list();
-      if (first === undefined) {
-        return yield* Effect.fail(
-          new NoWorkspace({ detail: "run `bun run db:seed` first" })
-        );
-      }
+      const { workspace } = yield* ensureFixtureWorkspace({
+        suite: APPLICATION_NAME,
+      });
+      const scope = workspace.id;
       const projects = yield* ProjectRepo;
       const tasks = yield* TaskRepo;
       const made = yield* projects.create({
         name: "artifacts: promotion",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       const producer = yield* tasks.create({
         projectId: made.id,
         title: "artifacts: the file that gets promoted",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       const successor = yield* tasks.create({
         projectId: made.id,
         title: "artifacts: the file that replaces it",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       // A project of its own for the rescans. A rescan deletes every row in the
       // folder its scan did not find, so pointing one at the project the
       // promotion tests share would have them delete each other's fixtures.
       const rescanned = yield* projects.create({
         name: "artifacts: the folder a run writes",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       return {
         project: made,
         scanned: rescanned,
         taskA: producer,
         taskB: successor,
-        workspaceId: first.id,
+        workspaceId: scope,
       };
     }).pipe(withActor(caller))
   );

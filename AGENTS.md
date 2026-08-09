@@ -24,5 +24,20 @@ type errors. Errors and warnings fail; suggestions print and do not.
   `bunx effect-tsgo patch --typescript --no-oxlint` if it was skipped. After changing plugin
   options, delete `**/*.tsbuildinfo` — `incremental` caches the old severities.
 
+## Tests that touch the database
+The repository tests write real rows, so they get a database and a workspace of their own. Both
+walls already exist; keep them.
+
+- Never find a workspace with `workspaces.list()[0]`. That is how four fixture cards ended up on
+  the production board. Call `ensureFixtureWorkspace({ suite })` from `@workspace/db/testing` —
+  one workspace per suite, created on first use.
+- A card a test files should carry `metadata: FIXTURE_METADATA`, which keeps it out of every
+  column listing and so out of the dispatch queue. The exception is a test whose subject *is* a
+  column read — `dispatch.test.ts` is the one — and it says so where it seeds.
+- `DATABASE_URL` is redirected to `<database>_test` by the preload
+  (`@workspace/db/testing/root-env`), which every `bunfig.toml` in the repo loads. Do not add a
+  fifth copy of that file, and do not read `DATABASE_URL` in a test to decide where to write.
+- `bun run test` runs `bun run db:test` first, which creates and migrates that database.
+
 ## Stack
 When making decisions on new stack, or libs to add, read stack options from the template author at `.docs/stack.md`.

@@ -35,9 +35,9 @@ import {
   ProjectRepo,
   storeLayer,
   TaskRepo,
-  WorkspaceRepo,
   withActor,
 } from "@workspace/db";
+import { ensureFixtureWorkspace } from "@workspace/db/testing";
 import type { Project, ProjectId, Task, WorkspaceId } from "@workspace/domain";
 import { Actor, newAgentSessionId, newRunId, UserId } from "@workspace/domain";
 import {
@@ -45,7 +45,7 @@ import {
   projectArtifactsDirOf,
   taskArtifactsDirOf,
 } from "@workspace/sandbox";
-import { Effect, Layer, ManagedRuntime, Schema, Stream } from "effect";
+import { Effect, Layer, ManagedRuntime, Stream } from "effect";
 import {
   listProjectArtifacts,
   listTaskArtifacts,
@@ -56,12 +56,6 @@ import {
 
 /** Reported as `application_name`, so `pg_stat_activity` names this process. */
 const APPLICATION_NAME = "gateway-artifacts-test";
-
-/** The database has never been seeded, so there is no workspace to hang a task on. */
-class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
-  "ArtifactsTest.NoWorkspace",
-  { detail: Schema.String }
-) {}
 
 /** The digest {@link promoteTaskArtifact} records, algorithm prefix and all. */
 const CONTENT_HASH = /^sha256:[0-9a-f]{64}$/;
@@ -121,32 +115,29 @@ beforeAll(async () => {
 
   const built = await runtime.runPromise(
     Effect.gen(function* () {
-      const workspaces = yield* WorkspaceRepo;
-      const [first] = yield* workspaces.list();
-      if (first === undefined) {
-        return yield* Effect.fail(
-          new NoWorkspace({ detail: "run `bun run db:seed` first" })
-        );
-      }
+      const { workspace } = yield* ensureFixtureWorkspace({
+        suite: APPLICATION_NAME,
+      });
+      const scope = workspace.id;
       const projects = yield* ProjectRepo;
       const tasks = yield* TaskRepo;
       const made = yield* projects.create({
         name: "artifacts: the endpoints",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       const card = yield* tasks.create({
         projectId: made.id,
         title: "artifacts: upload, read and promote",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       // The task that comes after. Promotion exists so that this one reads what
       // the first one produced, which needs two tasks in one project to claim.
       const next = yield* tasks.create({
         projectId: made.id,
         title: "artifacts: the task that comes after",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
-      return { card, made, next, workspaceId: first.id };
+      return { card, made, next, workspaceId: scope };
     }).pipe(withActor(caller))
   );
 

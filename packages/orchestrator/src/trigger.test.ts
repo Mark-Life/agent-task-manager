@@ -19,7 +19,8 @@
 import { afterAll, expect, test } from "bun:test";
 import { join } from "node:path";
 import { PgClient } from "@effect/sql-pg";
-import { storeLayer, TaskRepo, WorkspaceRepo, withActor } from "@workspace/db";
+import { storeLayer, TaskRepo, withActor } from "@workspace/db";
+import { ensureFixtureWorkspace } from "@workspace/db/testing";
 import { Actor, type TaskId, UserId } from "@workspace/domain";
 import { file, Glob } from "bun";
 import {
@@ -28,7 +29,6 @@ import {
   ManagedRuntime,
   Option,
   Schedule,
-  Schema,
   Stream,
 } from "effect";
 import {
@@ -52,12 +52,6 @@ const HEARD_TIMEOUT = "10 seconds";
 /** Where the migrations live, relative to this package. */
 const MIGRATIONS_DIR = join(import.meta.dir, "../../db/drizzle");
 
-/** The database has never been seeded, so there is no workspace to hang a task on. */
-class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
-  "TriggerTest.NoWorkspace",
-  { detail: Schema.String }
-) {}
-
 const runtime = ManagedRuntime.make(
   storeLayer({ applicationName: APPLICATION_NAME })
 );
@@ -70,14 +64,10 @@ const asHuman = withActor(human);
 
 const workspaceId = await runtime.runPromise(
   Effect.gen(function* () {
-    const workspaces = yield* WorkspaceRepo;
-    const [first] = yield* workspaces.list();
-    if (first === undefined) {
-      return yield* Effect.fail(
-        new NoWorkspace({ detail: "run `bun run db:seed` first" })
-      );
-    }
-    return first.id;
+    const { workspace } = yield* ensureFixtureWorkspace({
+      suite: APPLICATION_NAME,
+    });
+    return workspace.id;
   })
 );
 

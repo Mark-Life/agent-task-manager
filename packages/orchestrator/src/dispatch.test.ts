@@ -20,9 +20,9 @@ import {
   RunRepo,
   storeLayer,
   TaskRepo,
-  WorkspaceRepo,
   withActor,
 } from "@workspace/db";
+import { ensureFixtureWorkspace } from "@workspace/db/testing";
 import {
   Actor,
   NextSession,
@@ -30,7 +30,7 @@ import {
   type TaskId,
   UserId,
 } from "@workspace/domain";
-import { DateTime, Effect, Layer, ManagedRuntime, Schema } from "effect";
+import { DateTime, Effect, Layer, ManagedRuntime } from "effect";
 import { attemptAfter, Dispatch, isParked, type Skipped } from "./dispatch";
 import { type DispatchContext, resumeSessionIdOf } from "./dispatch-context";
 import { openRun } from "./open-run";
@@ -47,12 +47,6 @@ const PARK_AHEAD = "1 hour";
 
 /** More than the column will ever hold here, so a queue read is not truncated. */
 const WHOLE_COLUMN = 200;
-
-/** The database has never been seeded, so there is no workspace to hang a task on. */
-class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
-  "DispatchTest.NoWorkspace",
-  { detail: Schema.String }
-) {}
 
 const runtime = ManagedRuntime.make(
   Dispatch.layer.pipe(
@@ -71,20 +65,23 @@ const asLoop = withActor(loop);
 
 const workspaceId = await runtime.runPromise(
   Effect.gen(function* () {
-    const workspaces = yield* WorkspaceRepo;
-    const [first] = yield* workspaces.list();
-    if (first === undefined) {
-      return yield* Effect.fail(
-        new NoWorkspace({ detail: "run `bun run db:seed` first" })
-      );
-    }
-    return first.id;
+    const { workspace } = yield* ensureFixtureWorkspace({
+      suite: APPLICATION_NAME,
+    });
+    return workspace.id;
   })
 );
 
 /** Every task these tests filed, so the same list can erase them at the end. */
 const filed: TaskId[] = [];
 
+/**
+ * The one seeded card in the repository that is deliberately *not* flagged
+ * `FIXTURE_METADATA`: the queue below is a column listing, and a listing does
+ * not show a fixture. A test of what the dispatcher picks up cannot be written
+ * with rows the dispatcher is built to ignore. What keeps these off a board is
+ * the two walls underneath — the test database and this suite's own workspace.
+ */
 const fileTask = (title: string) =>
   Effect.gen(function* () {
     const tasks = yield* TaskRepo;
