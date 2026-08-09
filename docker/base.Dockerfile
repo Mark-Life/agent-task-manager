@@ -10,12 +10,12 @@
 # Every version below is an exact one and every download is checked against a
 # hash published with that release. An unpinned tool is a different image every
 # rebuild, and the day a run starts behaving differently there is nothing to
-# compare. The four Debian packages are the deliberate exception: apt has no
-# stable archive of superseded versions, so pinning them to an exact release is
-# a Dockerfile that stops building the week the mirror rotates. Picking up
+# compare. What apt installs is the deliberate exception: Debian keeps no stable
+# archive of superseded versions, so pinning those to an exact release is a
+# Dockerfile that stops building the week the mirror rotates. Picking up
 # Debian's security updates is most of the reason the rebuild is scheduled at
-# all. What was actually resolved is recorded in the image labels, so an image
-# can still be asked what it is made of.
+# all. What was actually resolved is not in the image labels — `dpkg -l` in a
+# container is how you ask an image which Debian versions it got.
 #
 # arm64 only. The host is aarch64 and every archive fetched here names that
 # architecture, so the build refuses to run anywhere else rather than producing
@@ -96,17 +96,29 @@ RUN set -eu; \
 # image. `openssh-client` covers a repo whose remote is an ssh URL. `procps` is
 # what a stuck agent uses to see its own children. `unzip` and `xz-utils` unpack
 # Bun and Node respectively.
+#
+# `python3`, `jq` and `bc` are here because agents reach for them without
+# checking. `python3: command not found` came back in 52 of 184 runs, `jq` in 10
+# and `bc` in 5, and the recovery is the same every time: notice the failure,
+# rewrite the one-liner as `bun -e`, four seconds gone. They cost 26 MiB
+# installed on an image of roughly 1.1 GiB, and 25 of those 26 are `python3`.
+# It is the full interpreter and not `python3-minimal`, which would save 13 MiB
+# by leaving out `libpython3.11-stdlib` — the package that carries `json` and
+# `statistics`. A one-liner that does not import `json` is a rare one-liner.
 RUN set -eu; \
   apt-get update; \
   apt-get install -y --no-install-recommends \
+  bc \
   ca-certificates \
   curl \
   git \
+  jq \
   less \
   libgcc-s1 \
   libstdc++6 \
   openssh-client \
   procps \
+  python3 \
   unzip \
   xz-utils; \
   rm -rf /var/lib/apt/lists/*
@@ -205,7 +217,7 @@ ENV HOME=/home/${AGENT_USER} \
 # What each pinned version actually was, readable with `docker image inspect`
 # and without starting a container.
 LABEL org.opencontainers.image.title="atm sandbox base" \
-  org.opencontainers.image.description="Base sandbox image for agent-task-manager runs: bun, node, git, gh, ripgrep, Claude Code and Codex." \
+  org.opencontainers.image.description="Base sandbox image for agent-task-manager runs: bun, node, git, gh, ripgrep, python3, jq, bc, Claude Code and Codex." \
   com.atm.image.kind="base" \
   com.atm.version.node="${NODE_VERSION}" \
   com.atm.version.bun="${BUN_VERSION}" \
@@ -228,6 +240,9 @@ RUN set -eu; \
   git --version; \
   gh --version; \
   rg --version; \
+  python3 --version; \
+  jq --version; \
+  bc --version; \
   claude --version; \
   codex --version
 
