@@ -690,6 +690,15 @@ const happyPath = (workspaceId: WorkspaceId) =>
     });
 
     if (CONTAINED) {
+      // The handle a post-mortem is read through. Written when the container is
+      // created rather than when it exits, which is the only ordering that
+      // leaves a name on the runs worth investigating — one that would not
+      // start, one that was killed, one still going.
+      yield* check({
+        detail: `the run row names container ${run.containerId ?? "nothing at all"}`,
+        ok: run.containerId?.startsWith(`atm-${run.id}-`) === true,
+        step: "the run row carries the name of the container that served it",
+      });
       yield* containedClaims({
         dataRoot: CHECK_ROOT,
         ledgerPath: ledger.path,

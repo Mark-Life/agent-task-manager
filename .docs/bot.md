@@ -21,7 +21,7 @@ sentence and one `atm.chat` row saying `not_allowed`.
 **One live turn per conversation.** A message that arrives while a turn is running is stored
 anyway and answered with one line saying how many are waiting, carrying a *Force send* button;
 a second one edits that line rather than sending another. The button files a `stop` run command
-naming the thread, so the turn closes as `interrupted` and everything said since it started is
+naming the thread, so the turn closes as `stopped` and everything said since it started is
 still unread — which is what the next turn reads. Nothing coalesces messages in the bot: a
 watermark does it, the same one that gives a resumed worker every message since it last looked.
 A conversation opened over `POST /threads` from a dashboard behaves identically, because it is

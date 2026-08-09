@@ -213,8 +213,32 @@ export interface SandboxResult {
   readonly wallClockMs: number;
 }
 
+/**
+ * The container this run is about to be given, named before it exists.
+ *
+ * A name rather than an id, because an id is not available yet and the name is:
+ * the handle is minted on the host so that a fiber interrupted between the
+ * spawn and the first byte of output still has something to remove, and the
+ * same property makes it the only identifier a run that never got as far as an
+ * inspect can report. The daemon takes it everywhere it takes an id, so
+ * `docker logs <name>` reads a container this names while it is still up.
+ */
+export interface ContainerHandle {
+  readonly name: string;
+}
+
 /** One run: the container to build, and who reads what it prints. */
 export interface SandboxRunInput<E, R> {
+  /**
+   * Called once, with the name of the container this run is about to create,
+   * before it is created — so a caller that records the handle records it for
+   * the runs that die first as well as the ones that finish. Never called by an
+   * implementation that starts no container; see {@link SandboxResult.containerId}.
+   * A caller with nothing to record passes `() => Effect.void`.
+   */
+  readonly onContainer: (
+    container: ContainerHandle
+  ) => Effect.Effect<void, E, R>;
   /**
    * Called for each chunk as it arrives. Its effect gates the reader, so a slow
    * consumer slows the container rather than filling a buffer nobody bounded.

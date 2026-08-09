@@ -10,6 +10,13 @@
  * summarizing the failure or having an agent answer it are additive changes on
  * top of this, not a reason to hold the task somewhere else in the meantime.
  *
+ * **A run somebody ended is not a run that broke.** A stop, and the loop going
+ * down under a run, both leave a notice on the thread saying so — the reader
+ * should know why it stopped talking — but the session is *finished* rather
+ * than failed, because nothing about the conversation went wrong and a failed
+ * session is one nothing may resume. That is what makes Stop-then-Rerun carry
+ * on rather than start over with the history on disk and unreachable.
+ *
  * A run is the restricted actor on this board: `in_progress → review` is the
  * one move it has. The writes here are performed as the `orchestrator` actor
  * rather than as `worker_run`, and that is deliberate for the failure path —
@@ -63,6 +70,7 @@ import {
   economicsOf,
   errorFieldsOf,
   isFailure,
+  isInterrupt,
   outcomeOfTerminus,
   type RunTerminus,
   sessionIdOf,
@@ -140,10 +148,29 @@ const ALREADY_CLOSED = "already-closed" as const;
 /** `undefined` where the repository means "no number", which is not the same as null. */
 const orAbsent = <A>(value: A | null) => value ?? undefined;
 
+/**
+ * The first line of the notice a run that did not finish cleanly leaves on its
+ * task.
+ *
+ * A run somebody ended gets a heading of its own, and the difference is the
+ * point: "Run failed — Unknown" over a person's own Stop is what sends the next
+ * reader looking for a bug that is not there. The sentence under it already
+ * says which interrupt and who asked, so the heading only has to separate "this
+ * broke" from "this was ended".
+ */
+const headingOf = (terminus: RunTerminus, errorClass: string | null) => {
+  if (!isInterrupt(terminus)) {
+    return `Run failed — ${errorClass ?? "Unknown"}`;
+  }
+  return terminus.kind === "failed" && terminus.interruptReason === "stopped"
+    ? "Run stopped"
+    : "Run interrupted";
+};
+
 /** The crash text, as the thread shows it. Already sanitized by `describeFailure`. */
 const errorMessageBody = (terminus: RunTerminus) => {
   const { errorClass, errorMessage } = errorFieldsOf(terminus);
-  return `**Run failed — ${errorClass ?? "Unknown"}**\n\n${errorMessage ?? UNSTATED_FAILURE}`;
+  return `**${headingOf(terminus, errorClass)}**\n\n${errorMessage ?? UNSTATED_FAILURE}`;
 };
 
 /** The final assistant message, clipped, with the cut stated rather than implied. */
@@ -475,7 +502,12 @@ export const closeRun = Effect.fn("Run.close")(function* (closure: RunClosure) {
   const sessionId = sessionIdOf(context);
   const outcome = outcomeOfTerminus(terminus);
   const fields = errorFieldsOf(terminus);
-  const failed = isFailure(terminus);
+  // The notice on the thread goes on every ending that is not a clean finish, a
+  // stop included — see `closeOnTask`, and the thread should say why the run
+  // stopped talking either way. The session is the other question, and it has a
+  // different answer: only a run that actually broke leaves one that nothing
+  // may pick up again.
+  const broke = isFailure(terminus) && !isInterrupt(terminus);
 
   yield* Effect.annotateCurrentSpan({
     kind: terminus.kind,
@@ -555,8 +587,13 @@ export const closeRun = Effect.fn("Run.close")(function* (closure: RunClosure) {
       ? yield* closeOnTask({ attached: context.attached, closure })
       : NO_BOARD_WRITES;
 
+  // A failed session is one nothing may resume, so what lands here decides
+  // whether Stop-then-Rerun continues the conversation or starts over with the
+  // history intact on disk and unreachable. A run somebody ended, and one the
+  // loop was carrying when it went down, both leave a session that is fine —
+  // nothing about the conversation went wrong — so both finish it.
   const ended = yield* asActor(
-    failed
+    broke
       ? sessions.fail({
           errorMessage: fields.errorMessage ?? UNSTATED_FAILURE,
           id: sessionId,

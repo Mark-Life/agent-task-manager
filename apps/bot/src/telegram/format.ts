@@ -37,8 +37,12 @@ export const TASK_STATUS_ICONS: Record<TaskStatus, string> = {
 export const RUN_OUTCOME_ICONS: Record<RunOutcome, string> = {
   done: "✅",
   errored: "❌",
-  interrupted: "⏹",
+  // Two glyphs for the two interrupts, because a reader scanning a list wants
+  // the same thing the outcome column splits: the button somebody pressed, and
+  // the loop that went down under a run nobody touched.
+  interrupted: "🔌",
   lost: "❓",
+  stopped: "⏹",
   timeout: "⏱",
 };
 

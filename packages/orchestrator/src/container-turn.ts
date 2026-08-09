@@ -49,6 +49,7 @@ import {
 import {
   CONTAINER_AGENT_HOME_DIR,
   CONTAINER_WORKSPACE_DIR,
+  type ContainerHandle,
   hardeningFor,
   hostUser,
   type Mount,
@@ -118,6 +119,15 @@ export interface ContainerTurnInput<R> {
    * — and deciding it here would be a role check inside the shared turn.
    */
   readonly mounts: readonly Mount[];
+  /**
+   * Called once with the name of the container this turn is about to run in,
+   * before it exists. Total by contract, and for the same reason as
+   * {@link onRecord}: recording the handle must not be what stops the run from
+   * having one.
+   */
+  readonly onContainer: (
+    container: ContainerHandle
+  ) => Effect.Effect<void, never, R>;
   /**
    * Called once per readable line of the event file, in file order, while the
    * container is still running. Total by contract: a recorder that could fail
@@ -291,6 +301,10 @@ export const terminusOfContainer = ({
       errorMessage: result.errorMessage ?? result.errorClass,
       exitCode,
       finalText: progress.finalText,
+      // The result file records that the turn was ended from outside, never who
+      // did it: the command is a row on the host, and the container never sees
+      // one. See `terminusOfResult` for the same null and the same reason.
+      interruptReason: null,
       kind: "failed",
       providerSessionId: result.providerSessionId ?? progress.providerSessionId,
       totalTokens: null,
@@ -389,6 +403,7 @@ export const containerTurn = <R>(input: ContainerTurnInput<R>) =>
           drain.pipe(Effect.repeat(Schedule.spaced(TAIL_POLL_MS)))
         );
         return yield* sandbox.run({
+          onContainer: input.onContainer,
           onOutput,
           spec: sandboxSpecFor({
             context,

@@ -217,7 +217,7 @@ const makeLiveRun = (taskId: Task["id"]) =>
     })
   );
 
-test("a stop kills the container, marks the run interrupted and names who asked", async () => {
+test("a stop kills the container, files the run as stopped, and names who asked", async () => {
   const task = await makeTask("in_progress");
   const run = await makeLiveRun(task.id);
   const calls = emptyCalls();
@@ -241,8 +241,15 @@ test("a stop kills the container, marks the run interrupted and names who asked"
 
   expect(outcome?.result).toBe("acted");
   expect(outcome?.command.status).toBe("consumed");
+  // The reason and the requester travel with the stop, because an interrupt
+  // carries nothing of its own and the run's own close is what writes the row.
   expect(calls.stopped).toEqual([
-    { runId: run.id, subject: taskSubject(task.id), workspaceId },
+    {
+      note: { reason: "stopped", requestedBy: "system" },
+      runId: run.id,
+      subject: taskSubject(task.id),
+      workspaceId,
+    },
   ]);
 
   const [closed, events] = await runStore(
@@ -257,7 +264,7 @@ test("a stop kills the container, marks the run interrupted and names who asked"
   );
 
   expect(closed.status).toBe("interrupted");
-  expect(closed.outcome).toBe("interrupted");
+  expect(closed.outcome).toBe("stopped");
 
   const [stopped] = events;
   expect(events).toHaveLength(1);
@@ -327,7 +334,11 @@ test("a stop whose container is already gone still closes the row out", async ()
       return yield* runs.byId({ id: run.id, workspaceId });
     })
   );
-  expect(closed.outcome).toBe("interrupted");
+  expect(closed.outcome).toBe("stopped");
+  // The row nobody else was left to close still names who asked, off the
+  // command in hand.
+  expect(closed.errorClass).toBe("Interrupted");
+  expect(closed.errorMessage).toBe("stopped by the system");
 });
 
 test("a rerun starts a run, clears the park, and says so on the trigger", async () => {

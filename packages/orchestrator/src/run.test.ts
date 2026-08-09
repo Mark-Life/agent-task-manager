@@ -80,7 +80,7 @@ import {
   taskArtifactsDirOf,
 } from "@workspace/sandbox";
 import { Telemetry } from "@workspace/telemetry";
-import { Effect, Layer, Stream } from "effect";
+import { Effect, Fiber, Layer, Stream } from "effect";
 import { BOARD_ACCESS_ERROR_CLASS } from "./board-access";
 import { openRun, type RunClaim } from "./open-run";
 import { performRun, runOpened } from "./run";
@@ -940,4 +940,86 @@ test("a run given board tools mounts the one bundle and copies nothing", async (
   // And the host's own copy is still there, unread by anything that would move
   // it: one file, mounted, for every run on the box.
   expect(existsSync(bundle)).toBe(true);
+});
+
+test("a run somebody stopped is filed as stopped, and its session stays resumable", async () => {
+  // The path this whole seam exists for. A stop command interrupts the fiber,
+  // and an interrupt carries nothing with it: squashing an interrupts-only
+  // cause produces `Error("All fibers interrupted without error")`, which the
+  // classifier reads as `Unknown` — so a person's own Stop used to reach their
+  // run's row as `errored / Unknown` with their name nowhere on it.
+  const seen = await provide(
+    Effect.gen(function* () {
+      const { owner } = yield* ensureWorkspace;
+      const task = yield* seedTask({ owner, title: "stopped run" });
+      const context = yield* openRun(claimOf(task));
+
+      const fiber = yield* Effect.forkChild(
+        Effect.scoped(
+          runOpened({
+            ...RUN_SETTINGS,
+            context,
+            dataRoot,
+            sandboxKind: "local",
+            // What the loop writes the instant before it interrupts. Read once,
+            // as the run unwinds, and only on the interrupt path.
+            stopNote: Effect.succeed({
+              reason: "stopped",
+              requestedBy: "human",
+            }),
+            timeoutMs: TURN_TIMEOUT_MS,
+          })
+        )
+      );
+      // The turn hangs after saying one thing, so the interrupt lands on a run
+      // that is genuinely mid-flight rather than on one already closing.
+      yield* Effect.sleep("200 millis");
+      yield* Fiber.interrupt(fiber);
+
+      const messages = yield* TaskMessageRepo;
+      const runs = yield* RunRepo;
+      const sessions = yield* AgentSessionRepo;
+      const tasks = yield* TaskRepo;
+      const { id: taskId, workspaceId } = task;
+      return {
+        messages: yield* messages.forTask({ taskId, workspaceId }),
+        run: yield* runs.byId({ id: context.runId, workspaceId }),
+        session: yield* sessions.byId({
+          id: context.session.session.id as AgentSessionId,
+          workspaceId,
+        }),
+        task: yield* tasks.byId({ id: taskId, workspaceId }),
+      };
+    }).pipe(
+      Effect.provide(
+        registryLayer({
+          events: [sessionInit, assistant("started work")],
+          failure: null,
+          hang: true,
+        })
+      )
+    )
+  );
+
+  // Its own outcome, not `errored` and not the same bucket as a host that went
+  // down under a run nobody touched.
+  expect(seen.run.outcome).toBe("stopped");
+  expect(seen.run.status).toBe("interrupted");
+  expect(seen.run.errorClass).toBe("Interrupted");
+  expect(seen.run.errorMessage).toBe("stopped by a person");
+
+  // A stop is not a wreck. The conversation is intact, so the session finishes
+  // rather than failing — which is what makes Stop-then-Rerun resume it instead
+  // of starting over with the history on disk and unreachable.
+  expect(seen.session.status).toBe("finished");
+
+  // Every ending lands the card in review, and the thread says which ending it
+  // was rather than reporting a bug that is not there.
+  expect(seen.task.status).toBe("review");
+  const notices = seen.messages.filter(
+    (message) => message.kind === "run_error"
+  );
+  expect(notices).toHaveLength(1);
+  expect(notices[0]?.body).toContain("Run stopped");
+  expect(notices[0]?.body).toContain("stopped by a person");
 });

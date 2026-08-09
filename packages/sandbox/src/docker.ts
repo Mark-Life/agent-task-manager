@@ -510,7 +510,7 @@ interface DockerDeps {
 
 /** The docker sandbox, over already-resolved services. */
 const makeDocker = ({ fs, spawner, telemetry }: DockerDeps) => {
-  const run = <E, R>({ onOutput, spec }: SandboxRunInput<E, R>) =>
+  const run = <E, R>({ onContainer, onOutput, spec }: SandboxRunInput<E, R>) =>
     Effect.gen(function* () {
       const progress = yield* makeSandboxProgress;
       const work = Effect.gen(function* () {
@@ -518,6 +518,10 @@ const makeDocker = ({ fs, spawner, telemetry }: DockerDeps) => {
         const cached = yield* imageCached(spawner, spec.image);
         yield* observeSandboxProgress(progress, { imagePulled: !cached });
         const name = yield* mintContainerName(spec.identity.runId);
+        // Before the attempt, so the caller holds the handle for every ending
+        // the container can have — including the ones that leave no id to
+        // inspect and the ones nobody is around to read a result from.
+        yield* onContainer({ name });
 
         // Scoped here rather than around the whole method, because the teardown
         // outcome is part of the answer and is only known once the scope closed.

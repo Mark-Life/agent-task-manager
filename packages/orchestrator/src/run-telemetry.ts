@@ -23,10 +23,13 @@
  * outcome of the attempt that just failed, because a park emitted separately is
  * one run counted twice.
  *
- * **Economics come from the terminus or not at all.** An interrupted run did
- * not cost $0.00 and a run nobody heard from did not take 0ms; `RunTerminus`
- * nulls what it does not know and this file nulls the lot where there is no
- * terminus, so no branch here writes a zero.
+ * **Economics come from the terminus or not at all.** A run nobody heard from
+ * did not take 0ms; `RunTerminus` nulls what it does not know and this file
+ * nulls the lot where there is no terminus, so no branch here writes a zero.
+ * What a *stopped* run had already spent is not one of those gaps: the close
+ * reads it off the `atm.turn` rows the container wrote before it was killed, so
+ * the row carries a real partial figure beside an outcome that says the run did
+ * not finish.
  *
  * **Content is measured, never carried.** The prompt is a character count, the
  * repo is `owner/name` parsed out of a URL that may hold a token, the final
@@ -75,6 +78,7 @@ import {
   economicsOf,
   errorFieldsOf,
   eventIdentityOf,
+  isInterrupt,
   outcomeOfTerminus,
   projectIdOf,
   type RunTerminus,
@@ -92,9 +96,16 @@ export const RUN_EVENT_MARKER = "atm.run";
  * stops being visible the moment it is folded into `errored`. `lost` is a run
  * that went quiet, the whole reason two rows are written; `parked` is the retry
  * ladder ending, a decision about the task rather than a way the container
- * died; `skipped` is a dispatch that declined to create work at all.
+ * died; `skipped` is a dispatch that declined to create work at all; `stopped`
+ * is somebody having asked, which is not a way a run can go wrong and does not
+ * belong in the same bucket as one that did.
  */
-export const RUN_EVENT_EXTRA_OUTCOMES = ["lost", "parked", "skipped"] as const;
+export const RUN_EVENT_EXTRA_OUTCOMES = [
+  "lost",
+  "parked",
+  "skipped",
+  "stopped",
+] as const;
 
 /** Every way a run row can end, for the metric's tag vocabulary. */
 // biome-ignore format: one line reads as the union it is
@@ -384,12 +395,20 @@ const endingBeforeParking = (
         }
       : endingOfTerminus(progress.terminus);
   }
-  // Only a cause that is nothing but interrupts is a stop: work that failed and
-  // was then torn down really failed, and calling it `interrupted` hides it.
+  // Only a cause that is nothing but interrupts was ended from outside: work
+  // that failed and was then torn down really failed, and calling that an
+  // interrupt hides the error behind the teardown.
   if (Cause.hasInterruptsOnly(exit.cause)) {
-    // A stop command is not a thing that went wrong with a run, so it carries
-    // no class: this package's classes are all faults, and none of them is one.
-    return { errorClass: null, errorMessage: null, outcome: "interrupted" };
+    // The close already named this ending, and it knows more than the cause
+    // does. The terminal path is a finalizer, so by the time an interrupt
+    // reaches here the terminus it filed — which of the three interrupts this
+    // was, and who asked for it — is on the accumulator. Reading it is what
+    // puts a reason behind the row instead of a bare `interrupted` with
+    // nothing to look at; a run nobody noted a reason for still lands there.
+    const filed = progress.terminus;
+    return filed !== null && isInterrupt(filed)
+      ? endingOfTerminus(filed)
+      : { errorClass: null, errorMessage: null, outcome: "interrupted" };
   }
   const failure = Cause.findErrorOption(exit.cause);
   const thrown = Option.isSome(failure)
@@ -406,12 +425,18 @@ const endingBeforeParking = (
 
 /**
  * What the run cost, from the only thing that knows: the terminus. Null where
- * there is none, and on an interrupt even when one was recorded — a run killed
- * mid-flight has a partial reading, and a partial number stored as final is one
- * someone later averages.
+ * there is none, and never a fabricated zero.
+ *
+ * A run that was stopped halfway reports what it had spent by the time it was
+ * stopped, and that is deliberate rather than an oversight. The figures are the
+ * container's own `atm.turn` rows read back at the close, so they are a
+ * measurement rather than a guess; the outcome beside them says the run did not
+ * finish, so nothing averages them in with the runs that did; and the
+ * alternative — a null — says "this cost nothing", which of every stopped run
+ * on this board was the one thing that was not true.
  */
-const economicsFor = (progress: RunProgress, ending: RunEnding) => {
-  if (progress.terminus === null || ending.outcome === "interrupted") {
+const economicsFor = (progress: RunProgress) => {
+  if (progress.terminus === null) {
     return { costUsd: null, durationMs: null, totalTokens: null, turns: null };
   }
   const economics = economicsOf(progress.terminus);
@@ -495,7 +520,7 @@ const runRow = (
     // No numbers at all before the work: none of them exist yet.
     ...(ending === null
       ? { costUsd: null, durationMs: null, totalTokens: null, turns: null }
-      : economicsFor(progress, ending)),
+      : economicsFor(progress)),
     artifactsWritten: progress.artifactsWritten,
     branch: progress.branch,
     errorClass: ending?.errorClass ?? null,
@@ -660,7 +685,7 @@ const recordRunMetrics = (
     const progress = yield* Ref.get(context.progress);
     const ending = endingOf(exit, progress);
     const { provider } = context.dispatch;
-    const economics = economicsFor(progress, ending);
+    const economics = economicsFor(progress);
     const now = yield* Clock.currentTimeMillis;
     yield* runsTotal.increment({
       kind: context.settings.sandboxKind,

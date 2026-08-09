@@ -12,12 +12,14 @@
 import { describe, expect, test } from "bun:test";
 import { AGENT_TOOL_PREFIX, describeFailure } from "@workspace/agent-tools";
 import { Unauthorized } from "@workspace/api";
-import type { AgentEvent } from "@workspace/harness";
+import { type AgentEvent, Interrupted } from "@workspace/harness";
 import { BOARD_ACCESS_ERROR_CLASS } from "./board-access";
-import type { RunTerminus } from "./dispatch-context";
+import { outcomeOfTerminus, type RunTerminus } from "./dispatch-context";
 import {
   EMPTY_TURN_PROGRESS,
   observeTurn,
+  terminusOfFailure,
+  terminusOfStop,
   terminusWithBoardAccess,
 } from "./turn-progress";
 
@@ -72,6 +74,7 @@ const failed: RunTerminus = {
   errorMessage: "the container was killed for memory",
   exitCode: 137,
   finalText: "",
+  interruptReason: null,
   kind: "failed",
   providerSessionId: null,
   totalTokens: null,
@@ -172,5 +175,89 @@ describe("terminusWithBoardAccess", () => {
       terminus: lost,
     });
     expect(ending).toEqual(lost);
+  });
+});
+
+describe("terminusOfStop", () => {
+  test("names the person who asked, and files it as a stop", () => {
+    const ending = terminusOfStop({
+      note: { reason: "stopped", requestedBy: "human" },
+      progress: watch([boardCall, boardAnswered]),
+    });
+
+    expect(ending.kind).toBe("failed");
+    // The class every interrupt carries, against the `Unknown` a squashed
+    // interrupts-only cause used to produce.
+    expect(ending.kind === "failed" && ending.errorClass).toBe("Interrupted");
+    expect(ending.kind === "failed" && ending.errorMessage).toBe(
+      "stopped by a person"
+    );
+    expect(ending.kind === "failed" && ending.interruptReason).toBe("stopped");
+    expect(outcomeOfTerminus(ending)).toBe("stopped");
+  });
+
+  test("tells the manager agent's stop from a person's", () => {
+    const ending = terminusOfStop({
+      note: { reason: "stopped", requestedBy: "manager" },
+      progress: EMPTY_TURN_PROGRESS,
+    });
+    expect(ending.kind === "failed" && ending.errorMessage).toBe(
+      "stopped by the manager agent"
+    );
+    expect(outcomeOfTerminus(ending)).toBe("stopped");
+  });
+
+  test("a shutdown is an interrupt and not somebody's stop", () => {
+    // Both are interrupts and neither is a fault; only one of them is a
+    // decision, and the outcome column is what separates them.
+    const ending = terminusOfStop({
+      note: { reason: "shutdown", requestedBy: null },
+      progress: EMPTY_TURN_PROGRESS,
+    });
+    expect(ending.kind === "failed" && ending.errorClass).toBe("Interrupted");
+    expect(outcomeOfTerminus(ending)).toBe("interrupted");
+  });
+
+  test("says so when nothing recorded who asked", () => {
+    // An interrupt from somewhere the loop keeps no note of. Admitting that is
+    // the point: the alternative is attributing it to whichever of the three
+    // seemed likely.
+    const ending = terminusOfStop({
+      note: null,
+      progress: EMPTY_TURN_PROGRESS,
+    });
+    expect(ending.kind === "failed" && ending.interruptReason).toBeNull();
+    expect(ending.kind === "failed" && ending.errorMessage).toContain(
+      "nothing recorded who asked"
+    );
+    expect(outcomeOfTerminus(ending)).toBe("interrupted");
+  });
+
+  test("keeps the run's last words, which are all a killed run leaves", () => {
+    const ending = terminusOfStop({
+      note: { reason: "stopped", requestedBy: "human" },
+      progress: { ...EMPTY_TURN_PROGRESS, finalText: FINAL_TEXT },
+    });
+    expect(ending.finalText).toBe(FINAL_TEXT);
+  });
+});
+
+describe("terminusOfFailure", () => {
+  test("keeps the reason a typed interrupt already carries", () => {
+    // The container's own harness names why it was interrupted. That answer is
+    // read off the value rather than matched in the sentence it renders into.
+    const ending = terminusOfFailure(
+      new Interrupted({ reason: "stopped" }),
+      EMPTY_TURN_PROGRESS
+    );
+    expect(ending.kind === "failed" && ending.interruptReason).toBe("stopped");
+    expect(outcomeOfTerminus(ending)).toBe("stopped");
+  });
+
+  test("an ordinary failure names no interrupt reason", () => {
+    const ending = terminusOfFailure(new Error("the socket died"), {
+      ...EMPTY_TURN_PROGRESS,
+    });
+    expect(ending.kind === "failed" && ending.interruptReason).toBeNull();
   });
 });

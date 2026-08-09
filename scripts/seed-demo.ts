@@ -317,8 +317,12 @@ const openAttempt = (options: {
       trigger: "status_change",
       workspaceId: options.workspaceId,
     });
+    yield* runs.attachContainer({
+      containerId: `atm-${run.id}-demo0000`,
+      id: run.id,
+      workspaceId: options.workspaceId,
+    });
     yield* runs.start({
-      containerId: "atm-demo-container",
       id: run.id,
       model: "claude-opus-5",
       sandboxImage: "atm-base:arm64",

@@ -67,11 +67,21 @@ export type RunStatus = typeof RunStatus.Type;
  * How a run ended. Deliberately narrower than the `atm.run` telemetry outcome:
  * `parked` is a property of the task, and `skipped` describes a dispatch that
  * never created a run row at all, so neither has a row to live on.
+ *
+ * `stopped` and `interrupted` are both "something outside the run ended it",
+ * and they are two values because only one of them is somebody's decision. A
+ * person or the manager agent filing a stop command is `stopped`, and the row
+ * says who asked; the loop going down under a run, or any other interrupt
+ * nothing recorded a reason for, is `interrupted`. Folding the first into the
+ * second — or, as this system did until they were told apart, into `errored` —
+ * files a deliberate intervention as a fault, which puts a working Stop button
+ * in the error budget and leaves the person who pressed it unnamed.
  */
 export const RUN_OUTCOMES = [
   "done",
   "errored",
   "interrupted",
+  "stopped",
   "timeout",
   "lost",
 ] as const;

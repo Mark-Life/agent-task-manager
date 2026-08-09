@@ -35,6 +35,9 @@ import {
   classify,
   HARNESS_ERROR_CLASSES,
   type HarnessErrorClass,
+  INTERRUPT_REASONS,
+  type Interrupted,
+  type InterruptReason,
 } from "@workspace/harness";
 import {
   redactRemote,
@@ -262,6 +265,28 @@ export const runOutcomeOfClass = (errorClass: RunErrorClass) =>
 const tagOf = (failure: unknown) => {
   const tag = (failure as { readonly _tag?: unknown } | null)?._tag;
   return typeof tag === "string" ? tag : null;
+};
+
+/** The tag a harness interrupt arrives under, and the only failure that names a reason. */
+const INTERRUPTED_TAG = "Harness.Interrupted";
+
+/**
+ * Why a failure ended the run from outside it, where the failure says so.
+ *
+ * Only `Harness.Interrupted` carries the answer, and it is read off the value
+ * rather than matched in text: the reason is a closed union the harness already
+ * declares, and re-deriving it from the sentence the error renders into would
+ * be a second spelling of a fact that already exists. Everything else failed on
+ * its own terms and answers null.
+ */
+export const interruptReasonOf = (failure: unknown): InterruptReason | null => {
+  if (tagOf(failure) !== INTERRUPTED_TAG) {
+    return null;
+  }
+  const { reason } = failure as Interrupted;
+  return (INTERRUPT_REASONS as readonly string[]).includes(reason)
+    ? reason
+    : null;
 };
 
 /** How `@workspace/sandbox` prefixes its tags. */

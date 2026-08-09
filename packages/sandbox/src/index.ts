@@ -351,6 +351,7 @@ export {
   withSkill,
 } from "./skills";
 export {
+  type ContainerHandle,
   identityEnv,
   MATERIALIZE_STRATEGIES,
   type MaterializeInput,

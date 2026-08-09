@@ -457,6 +457,10 @@ const attempt = <E, R>({
  */
 const runLocal =
   (deps: LocalDeps) =>
+  // `onContainer` is deliberately never called: this mode starts a host
+  // process, so there is no container to name and a handle invented for it
+  // would be one nobody can `docker logs`. `kind: "local"` on the row is what
+  // says why the run has none.
   <E, R>({ onOutput, spec }: SandboxRunInput<E, R>) =>
     Effect.gen(function* () {
       const progress = yield* makeSandboxProgress;

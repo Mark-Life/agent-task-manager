@@ -110,6 +110,20 @@ queue is drained before the column is read, so a stop lands even with every slot
 interrupts the fiber holding the run, which is the whole of a teardown, and a refused command
 is rejected with its reason on the row rather than consumed in silence.
 
+**A stop is filed as a stop.** An interrupt carries nothing with it, so the loop records the
+reason and the requester immediately before it touches the fiber and the run reads that back as
+it unwinds. The row lands `outcome = stopped` with `error_class = Interrupted` and a sentence
+naming who asked; the loop going down under a run is `interrupted` instead, and an interrupt
+nothing recorded says so rather than being attributed. A stopped run's session is *finished*,
+not failed, so Stop-then-Rerun resumes the conversation. What the run had already spent is read
+off the `atm.turn` rows its container wrote and lands on the row beside the outcome — a stopped
+run reports a real partial cost rather than none at all.
+
+**A run's container is named on the row.** `run.container_id` holds the container's name,
+written as it is created rather than after it exits, so `docker logs` reaches a run that is
+still going, one that was killed, and one that never started. The container's own id needs an
+inspect after the exit and stays on the `atm.sandbox` row.
+
 **Kill it and it recovers.** A lease file per claimed task is heartbeated under
 `${DATA_ROOT}/leases`; at boot the loop reclaims every lease whose holder is gone and closes
 every run row still marked live behind it as `lost` — posting the message, ending the session,

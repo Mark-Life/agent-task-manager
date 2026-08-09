@@ -67,13 +67,16 @@ const FIRST_ATTEMPT = 1;
  * makes the pair true rather than merely well-formed.
  *
  * `lost` is a failure and not an interruption: nobody asked for it, the process
- * simply stopped answering.
+ * simply stopped answering. `stopped` and `interrupted` share a status because
+ * the status answers only "is this still live"; which of the two it was, and
+ * who asked, is the outcome and the error columns.
  */
 const STATUS_OF_OUTCOME = {
   done: "finished",
   errored: "failed",
   interrupted: "interrupted",
   lost: "failed",
+  stopped: "interrupted",
   timeout: "failed",
 } as const satisfies Record<RunOutcome, RunStatus>;
 
@@ -169,9 +172,18 @@ interface CreateInput extends SubjectRef {
 
 /** What the container reported about itself once it was up. */
 interface StartInput extends RunRef {
-  readonly containerId?: string;
   readonly model?: string;
   readonly sandboxImage?: string;
+}
+
+/** The name this run's container was created under. */
+interface AttachContainerInput extends RunRef {
+  /**
+   * `atm-<runId>-<nonce>`, minted on the host before the container exists. Not
+   * the container's own id, which only an inspect after it has exited can
+   * answer — see {@link Run.containerId}.
+   */
+  readonly containerId: string;
 }
 
 /**
@@ -371,8 +383,7 @@ const make = Effect.gen(function* () {
 
   /**
    * The container is up and the harness is working. Records what actually ran —
-   * the image, the model, the container to tear down — against the request that
-   * only asked for them.
+   * the image and the model — against the request that only asked for them.
    */
   const start = Effect.fn("RunRepo.start")(function* (input: StartInput) {
     yield* Effect.annotateCurrentSpan({ runId: input.id });
@@ -388,13 +399,43 @@ const make = Effect.gen(function* () {
           entity: ENTITY,
           schema: RunUpdate,
           value: {
-            containerId: input.containerId,
             model: input.model,
             sandboxImage: input.sandboxImage,
             startedAt,
             status: "running",
           },
         });
+      })
+    );
+  });
+
+  /**
+   * Records the container this run was given, at the moment it is created.
+   *
+   * Its own operation rather than a field on {@link start}, because the two
+   * happen at different moments and only one of them is the queue transition:
+   * the container is named on the host before it exists, and the run is
+   * `running` once the harness inside it has answered. A run that never gets
+   * that far — a container that would not start, one killed in its first
+   * second, one that wedged before the first event — is precisely the run whose
+   * logs somebody wants, and folding this into `start` is what left
+   * `container_id` null on every row this board has ever written.
+   *
+   * Not guarded on the run being live: a container outliving the row's close is
+   * a leak, and the name is the handle that removes it.
+   */
+  const attachContainer = Effect.fn("RunRepo.attachContainer")(function* (
+    input: AttachContainerInput
+  ) {
+    yield* Effect.annotateCurrentSpan({
+      containerId: input.containerId,
+      runId: input.id,
+    });
+    return yield* revise(input, "RunRepo.attachContainer", () =>
+      encodeWrite({
+        entity: ENTITY,
+        schema: RunUpdate,
+        value: { containerId: input.containerId },
       })
     );
   });
@@ -566,6 +607,7 @@ const make = Effect.gen(function* () {
   });
 
   return {
+    attachContainer,
     byId,
     close,
     create,

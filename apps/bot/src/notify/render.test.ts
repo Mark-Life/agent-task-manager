@@ -143,7 +143,7 @@ describe("notifyKindOf", () => {
     expect(
       notifyKindOf({
         eventKind: "stopped",
-        run: run({ outcome: "interrupted", status: "stopped" }),
+        run: run({ outcome: "stopped", status: "interrupted" }),
         task: task("in_progress"),
       })
     ).toBe("run_failed");

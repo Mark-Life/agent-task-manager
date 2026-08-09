@@ -217,7 +217,10 @@ describe.skipIf(!reachable)("dockerSandbox", () => {
       const program = Effect.gen(function* () {
         const sandbox = yield* Sandbox;
         const chunks = yield* Ref.make<string[]>([]);
+        const named = yield* Ref.make<string[]>([]);
         const result = yield* sandbox.run({
+          onContainer: ({ name }) =>
+            Ref.update(named, (seen) => [...seen, name]),
           onOutput: (chunk) =>
             Ref.update(chunks, (seen) => [
               ...seen,
@@ -225,11 +228,19 @@ describe.skipIf(!reachable)("dockerSandbox", () => {
             ]),
           spec: specFor(fixture),
         });
-        return { output: (yield* Ref.get(chunks)).join(""), result };
+        return {
+          named: yield* Ref.get(named),
+          output: (yield* Ref.get(chunks)).join(""),
+          result,
+        };
       }).pipe(Effect.provide(sandboxLayer(fixture.ledgerDir)));
 
-      const { output, result } = await Effect.runPromise(program);
+      const { named, output, result } = await Effect.runPromise(program);
 
+      // The handle reaches the caller once, and it names this run — which is
+      // what makes it recordable before the container has an id of its own.
+      expect(named).toHaveLength(1);
+      expect(named[0]).toStartWith(`atm-${identity.runId}-`);
       expect(result.exitCode).toBe(CONTAINER_EXIT_CODE);
       expect(result.kind).toBe("docker");
       expect(result.oomKilled).toBe(false);
@@ -289,7 +300,11 @@ describe.skipIf(!reachable)("dockerSandbox", () => {
         Effect.flip(
           Sandbox.pipe(
             Effect.flatMap((sandbox) =>
-              sandbox.run({ onOutput: () => Effect.void, spec })
+              sandbox.run({
+                onContainer: () => Effect.void,
+                onOutput: () => Effect.void,
+                spec,
+              })
             ),
             Effect.provide(sandboxLayer(fixture.ledgerDir))
           )
