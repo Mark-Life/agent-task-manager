@@ -21,12 +21,25 @@
  * a browser image whose base half is whatever was on disk at the time, which is
  * a pair of images that can drift while both look current.
  *
+ * Every build also sweeps, because nothing else on the host does. A build
+ * writes two tags and removes none, so a weekly rebuild leaves last week's
+ * images and last week's build cache on the disk for as long as the disk lasts.
+ * The sweep removes old dated tags by name, newest {@link KEPT_BUILDS} kept,
+ * and drops the build cache. Removing by name is the whole safety of it:
+ * `docker image prune -a` would reclaim the same bytes and take `latest` with
+ * it, and `atm.local` is a registry that does not exist, so there is no pull to
+ * fall back on — the next run would fail until somebody rebuilt.
+ *
  * Usage:
  *
- *   bun run images:build              both images
+ *   bun run images:build              both images, then sweep what they replaced
  *   bun run images:build --base       just the base image
  *   bun run images:build --browser    just the browser image, on the base `latest`
- *   bun run images:build --check      what exists locally and how old it is; builds nothing
+ *   bun run images:build --check      what exists locally, how old it is, and what a
+ *                                     sweep would remove; changes nothing
+ *   bun run images:build --prune      sweep only; builds nothing
+ *   bun run images:build --no-prune   build and leave the old tags alone
+ *   bun run images:build --keep=4     how many dated builds per image survive a sweep
  *
  * A build takes minutes and prints the daemon's output as it goes, because a
  * silent five-minute command is one nobody can tell from a hung one.
@@ -83,6 +96,30 @@ const BASE_IMAGE_ARG = "BASE_IMAGE";
  * weekly rebuild cadence, so one missed run is not an alarm and two are.
  */
 const STALE_AFTER_DAYS = 14;
+
+/**
+ * How many dated builds of one image kind a sweep leaves behind, on top of
+ * whatever `latest` points at. Two, which at the weekly cadence is the same two
+ * weeks {@link STALE_AFTER_DAYS} calls fresh: the build a run would get today,
+ * and the one an operator rolls back to when today's is wrong.
+ *
+ * It is also what a pinned task can count on. `task.sandbox_image` may name a
+ * dated tag, and this script cannot see the board — asking a build to read the
+ * database would make an image build need a database. So the contract is the
+ * number rather than a lookup: a pin older than the last two builds is a pin
+ * that will stop resolving, and `--keep` is how an operator holding one buys
+ * more time.
+ */
+const KEPT_BUILDS = 2;
+
+/** How `--keep` is spelled. */
+const KEEP_PREFIX = "--keep=";
+
+/** Separates the fields of one listed tag. Neither field can contain it. */
+const FIELD_SEPARATOR = "\t";
+
+/** The tag `docker image ls` prints for an image with no tag at all. */
+const UNTAGGED = "<none>";
 
 const MS_PER_DAY = 86_400_000;
 
@@ -143,6 +180,119 @@ export const parseTargets = (argv: readonly string[]): readonly ImageKind[] => {
 /** Whether the invocation only wants a report. */
 export const isCheckOnly = (argv: readonly string[]) =>
   argv.includes("--check");
+
+/** Whether the invocation wants the sweep and no build. */
+export const isPruneOnly = (argv: readonly string[]) =>
+  argv.includes("--prune");
+
+/**
+ * Whether a build should sweep afterwards. It should, unless told not to —
+ * the disk filling up is the default outcome, so leaving old tags in place is
+ * the thing an operator has to ask for.
+ */
+export const shouldPrune = (argv: readonly string[]) =>
+  !argv.includes("--no-prune");
+
+/**
+ * How many dated builds to keep. Anything that is not a whole number of at
+ * least one falls back to the default: a typo in a cron line must not turn a
+ * sweep into `--keep=NaN`, which would compare false everywhere and remove
+ * every dated tag on the host.
+ */
+export const parseKeep = (argv: readonly string[]) => {
+  const named = argv.find((arg) => arg.startsWith(KEEP_PREFIX));
+  if (named === undefined) {
+    return KEPT_BUILDS;
+  }
+  const parsed = Number(named.slice(KEEP_PREFIX.length));
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : KEPT_BUILDS;
+};
+
+/** One tag of one repository, as the daemon lists it. */
+export interface TaggedImage {
+  /** The image's own id, which several tags can share. */
+  readonly id: string;
+  readonly tag: string;
+}
+
+/** What one sweep asks the daemon to list: every tag of one repository, with its image id. */
+export const listArgv = (kind: ImageKind): readonly string[] => [
+  "image",
+  "ls",
+  imageRepository(kind),
+  `--format={{.Tag}}${FIELD_SEPARATOR}{{.ID}}`,
+];
+
+/**
+ * The listing, as rows. A line missing either field is dropped rather than
+ * guessed at, and an untagged image is skipped — it has no name to remove it
+ * by, and a dangling image is `docker image prune`'s business, not a sweep's.
+ */
+export const parseTagList = (stdout: string): readonly TaggedImage[] => {
+  const rows: TaggedImage[] = [];
+  for (const line of stdout.split("\n")) {
+    const [tag, id] = line.trim().split(FIELD_SEPARATOR);
+    if (tag !== undefined && tag !== "" && tag !== UNTAGGED && id) {
+      rows.push({ id, tag });
+    }
+  }
+  return rows;
+};
+
+/**
+ * Which tags of one repository a sweep removes, given everything the daemon
+ * holds for it.
+ *
+ * Pure, and the only part of the sweep worth testing: everything else is a
+ * daemon. Three rules, each of which is a way the host could be broken.
+ *
+ * `latest` is never named, because nothing can pull it back. Neither is any
+ * dated tag sharing `latest`'s image id — untagging that one would be harmless
+ * today and a run pinned to a tag that no longer exists tomorrow. And the
+ * newest {@link KEPT_BUILDS} survive, sorted by tag: the tag opens with the
+ * build date, so a string sort is a date sort, and two builds on one day break
+ * the tie by recipe digest, which is arbitrary but stable.
+ */
+export const staleTags = (input: {
+  readonly keep: number;
+  readonly kind: ImageKind;
+  readonly rows: readonly TaggedImage[];
+}): readonly string[] => {
+  const moving = new Set(
+    input.rows.filter((row) => row.tag === LATEST_TAG).map((row) => row.id)
+  );
+  return input.rows
+    .filter((row) => row.tag !== LATEST_TAG)
+    .sort((left, right) => right.tag.localeCompare(left.tag))
+    .slice(input.keep)
+    .filter((row) => !moving.has(row.id))
+    .map((row) => imageRef({ kind: input.kind, tag: row.tag }));
+};
+
+/**
+ * What a sweep asks the daemon to remove. No `--force`: an image a container
+ * still holds is a refusal to report, not something to take out from under a
+ * running turn.
+ */
+export const removeArgv = (refs: readonly string[]): readonly string[] => [
+  "image",
+  "rm",
+  ...refs,
+];
+
+/**
+ * What clears the build cache. `--all` rather than a `until=` filter, because
+ * the cache is only worth keeping for a build that reuses it, and a rebuild
+ * that hits cache is a rebuild that picked up none of the Debian security
+ * updates it exists to pick up. So the cache from a finished build has no next
+ * reader, and it is gigabytes.
+ */
+export const BUILD_CACHE_PRUNE_ARGV: readonly string[] = [
+  "builder",
+  "prune",
+  "--all",
+  "--force",
+];
 
 /**
  * A digest of what an image is built from. The browser recipe includes the base
@@ -282,6 +432,84 @@ const inspect = Effect.fn("BuildImages.inspect")(function* (image: string) {
   return decoded[0] ?? null;
 });
 
+/**
+ * The dated tags of one image kind that a sweep would remove.
+ *
+ * A listing the daemon refuses is an empty answer rather than a failure. This
+ * runs after a build that already succeeded, and failing the script there would
+ * report a build that happened as a build that did not.
+ */
+const staleTagsFor = Effect.fn("BuildImages.staleTagsFor")(function* (input: {
+  readonly keep: number;
+  readonly kind: ImageKind;
+}) {
+  const { exitCode, stdout } = yield* Effect.mapError(
+    Effect.scoped(dockerRead(listArgv(input.kind))),
+    asUnavailable
+  );
+  if (exitCode !== 0) {
+    yield* Effect.logWarning(
+      `could not list ${imageRepository(input.kind)} — nothing swept for it`
+    );
+    return [];
+  }
+  return staleTags({
+    keep: input.keep,
+    kind: input.kind,
+    rows: parseTagList(stdout),
+  });
+});
+
+/** Old dated tags of one image kind, removed by name. */
+const sweepKind = Effect.fn("BuildImages.sweepKind")(function* (input: {
+  readonly keep: number;
+  readonly kind: ImageKind;
+}) {
+  const refs = yield* staleTagsFor(input);
+  if (refs.length === 0) {
+    yield* Effect.logInfo(
+      `${imageRepository(input.kind)}  nothing to remove, ${input.keep} kept`
+    );
+    return;
+  }
+  yield* Effect.logInfo(`removing ${refs.join(" ")}`);
+  const exitCode = yield* Effect.mapError(
+    Effect.scoped(dockerStreamed(removeArgv(refs))),
+    asUnavailable
+  );
+  if (exitCode !== 0) {
+    // The usual reason is a container still holding the image, which is a run
+    // in flight and the next sweep's problem.
+    yield* Effect.logWarning(
+      `docker refused to remove one of ${refs.join(" ")} — left in place`
+    );
+  }
+});
+
+/**
+ * The whole sweep: old tags of each kind, then the build cache.
+ *
+ * The cache goes last and unconditionally. It is the larger half of what a
+ * rebuild leaves behind, and unlike a tag it belongs to nobody — no run names
+ * it, so nothing breaks when it is gone.
+ */
+const sweep = Effect.fn("BuildImages.sweep")(function* (input: {
+  readonly keep: number;
+  readonly targets: readonly ImageKind[];
+}) {
+  for (const kind of input.targets) {
+    yield* sweepKind({ keep: input.keep, kind });
+  }
+  yield* Effect.logInfo("pruning the build cache");
+  const exitCode = yield* Effect.mapError(
+    Effect.scoped(dockerStreamed(BUILD_CACHE_PRUNE_ARGV)),
+    asUnavailable
+  );
+  if (exitCode !== 0) {
+    yield* Effect.logWarning("docker refused to prune the build cache");
+  }
+});
+
 /** One image built, tagged twice, and reported by its immutable tag. */
 const buildImage = Effect.fn("BuildImages.buildImage")(function* (input: {
   readonly baseImage: string | null;
@@ -322,6 +550,7 @@ const versionsOf = (labels: Readonly<Record<string, string>> | null) =>
 
 /** One line per image saying whether it is here, how old it is, and what is in it. */
 const checkImage = Effect.fn("BuildImages.checkImage")(function* (input: {
+  readonly keep: number;
   readonly kind: ImageKind;
   readonly nowMs: number;
 }) {
@@ -343,6 +572,10 @@ const checkImage = Effect.fn("BuildImages.checkImage")(function* (input: {
   yield* Effect.logInfo(`  tags: ${found.RepoTags.join(" ")}`);
   for (const version of versionsOf(found.Config.Labels)) {
     yield* Effect.logInfo(`  ${version}`);
+  }
+  const stale = yield* staleTagsFor({ keep: input.keep, kind: input.kind });
+  if (stale.length > 0) {
+    yield* Effect.logInfo(`  a sweep would remove: ${stale.join(" ")}`);
   }
 });
 
@@ -380,16 +613,26 @@ const buildAll = Effect.fn("BuildImages.buildAll")(function* (
 const buildImages = Effect.gen(function* () {
   const argv = process.argv.slice(2);
   const targets = parseTargets(argv);
+  const keep = parseKeep(argv);
   if (isCheckOnly(argv)) {
     const nowMs = Date.now();
     for (const kind of targets) {
-      yield* checkImage({ kind, nowMs });
+      yield* checkImage({ keep, kind, nowMs });
     }
+    return;
+  }
+  if (isPruneOnly(argv)) {
+    yield* sweep({ keep, targets });
     return;
   }
   const built = yield* buildAll(targets);
   for (const image of built) {
     yield* Effect.logInfo(image);
+  }
+  // After the build, so the tags being counted include the one just written and
+  // `latest` already points at it.
+  if (shouldPrune(argv)) {
+    yield* sweep({ keep, targets });
   }
 });
 

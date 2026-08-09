@@ -32,10 +32,13 @@ dated tag rather than `latest`; which image actually ran is recorded on
 ## Building
 
 ```sh
-bun run images:build            # both, base first
+bun run images:build            # both, base first, then sweep what they replaced
 bun run images:build --base
 bun run images:build --browser  # on the base image's `latest`
-bun run images:build --check    # what exists here and how old it is; builds nothing
+bun run images:build --check    # what is here, how old, and what a sweep would remove
+bun run images:build --prune    # sweep only; builds nothing
+bun run images:build --no-prune # build and leave the old tags alone
+bun run images:build --keep=4   # how many dated builds survive a sweep; 2 by default
 ```
 
 Each build produces two tags: `YYYY-MM-DD-<12 hex of the Dockerfile digest>`,
@@ -52,6 +55,36 @@ below: one missed rebuild is not an alarm, two are.
 
 A base build takes several minutes, most of it the two agent CLIs. The daemon's
 output is streamed line by line as it goes.
+
+## What a build removes
+
+Every build ends by sweeping, because nothing else on the host does. It removes
+the dated tags of each image it built beyond the newest two, and then drops the
+whole build cache. Left alone, a weekly rebuild is about two gigabytes of images
+plus a few of cache per week, on a disk that has to hold the run data too.
+
+Removing tags **by name** is the whole safety of it. `docker image prune -a`
+reclaims the same bytes and takes `atm.local/base:latest` with it, and
+`atm.local` is a registry that does not exist — there is no pull to fall back
+on, so the next run fails until somebody spends several minutes rebuilding. The
+sweep never names `latest`, never names a dated tag pointing at the same image
+as `latest`, and never passes `--force`: an image a container is still holding
+is a refusal to log, not something to take out from under a run in flight.
+
+The build cache goes entirely, not by age. Cache is only worth keeping for a
+build that reuses it, and a rebuild that reuses it is a rebuild that picked up
+none of the Debian security updates it exists to pick up.
+
+Two dated builds is what a pin can count on. A task may set `sandbox_image` to a
+dated tag, and this script cannot see the board — making an image build read the
+database would be worse than the disk. So the number is the contract: at the
+weekly cadence, a pin older than two weeks is a pin that stops resolving, which
+is the same fortnight `--check` starts calling an image stale. An operator
+holding an older pin buys time with `--keep`, and `--no-prune` skips the sweep
+entirely.
+
+`--prune` is the same sweep with no build in front of it, which is what to run
+on a host that has been building for months and never removing.
 
 ## Rebuild cadence
 
