@@ -5,7 +5,7 @@ that container can do is what was baked in here.
 
 | Image | What it is | When a task takes it |
 | --- | --- | --- |
-| `atm.local/base` | bun, node, git, `gh`, ripgrep, the Claude CLI and the Codex CLI | everything, unless the task says otherwise |
+| `atm.local/base` | bun, node, git, `gh`, ripgrep, `python3`, `jq`, `bc`, the Claude CLI and the Codex CLI | everything, unless the task says otherwise |
 | `atm.local/browser` | base plus Chromium and `agent-browser` | a task that has to drive a real page |
 
 `atm.local` is a registry that does not exist, deliberately. A bare name like
@@ -81,8 +81,16 @@ making sense.
 
 ## What is in the base image, and why
 
-Read `base.Dockerfile`; every choice is commented there. The three that matter
+Read `base.Dockerfile`; every choice is commented there. The four that matter
 outside the file:
+
+**`python3`, `jq` and `bc` are on PATH.** They are there because they were
+missing: across 184 runs, `python3: command not found` came back 52 times, `jq`
+10 and `bc` 5, and every one of those cost a failed command and a rewrite. The
+three cost 26 MiB installed on an image of roughly 1.1 GiB. `turbo` is
+deliberately not among them — it is a repo's own build tool, pinned in that
+repo's `package.json`, and `bun run build` runs the pinned one. A global copy
+would be a second version answering to the same name.
 
 **uid 1000, gid 1000.** Bind mounts carry host ownership through — the kernel
 compares numbers, not names — so the container's uid must own `DATA_ROOT` on the
