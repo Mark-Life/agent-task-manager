@@ -101,6 +101,45 @@ describe("assistant blocks", () => {
     expect(JSON.stringify(event)).not.toContain("sk-live-abc123");
   });
 
+  test("keeps the third word, which is what tells two runner calls apart", () => {
+    const label = (command: string) =>
+      normalize(
+        makeCursor(),
+        assistantMessage([
+          { id: "call-1", input: { command }, name: "Bash", type: "tool_use" },
+        ])
+      )[0];
+
+    expect(label("bun run typecheck")).toMatchObject({
+      summary: "bun run typecheck",
+    });
+    expect(label("bun run build")).toMatchObject({ summary: "bun run build" });
+    // and the bare-word rule still ends the label wherever a value starts
+    expect(label("bun run test --coverage")).toMatchObject({
+      summary: "bun run test",
+    });
+    expect(label("psql 'postgres://user:pw@host/db'")).toMatchObject({
+      summary: "psql",
+    });
+  });
+
+  test("names the skill a call ran", () => {
+    const [event] = normalize(
+      makeCursor(),
+      assistantMessage([
+        {
+          id: "call-4",
+          input: { args: "sk-live-abc123", skill: "quality-code" },
+          name: "Skill",
+          type: "tool_use",
+        },
+      ])
+    );
+    expect(event).toMatchObject({ summary: "quality-code", toolName: "Skill" });
+    // the name is the whole summary: the arguments are caller text and stay off
+    expect(JSON.stringify(event)).not.toContain("sk-live-abc123");
+  });
+
   test("drops the query string of a fetched url", () => {
     const [event] = normalize(
       makeCursor(),

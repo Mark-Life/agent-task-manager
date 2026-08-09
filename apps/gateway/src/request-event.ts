@@ -12,7 +12,10 @@
  *
  * **The route pattern, never the path**, which is unbounded and would be a new
  * metric series per task. It comes off the `http.route` attribute the router
- * writes onto the request span, so it is the pattern that actually matched.
+ * writes onto the request span, so it is the pattern that actually matched. A
+ * request that matched nothing carries `pathShape` beside it — how far the path
+ * got into the contract before it stopped making sense — because otherwise
+ * every 404 is the same row and the population cannot be split.
  *
  * **One row per request, written when the request is over — for a stream, when
  * the stream ends.** An SSE response returns from its handler in milliseconds
@@ -82,6 +85,7 @@ import {
 import {
   HTTP_METHODS,
   moveSseConnections,
+  pathShapeOf,
   recordRequestMetrics,
   UNMATCHED_ROUTE,
 } from "./request-metrics";
@@ -194,6 +198,13 @@ export const RequestEvent = defineEvent(REQUEST_EVENT_MARKER, {
   bytesOut: Schema.NullOr(Schema.Natural),
   method: Schema.Literals(HTTP_METHODS),
   outcome: outcomeField(REQUEST_EXTRA_OUTCOMES),
+  /**
+   * How far the path got into the contract, for a request that matched no
+   * pattern; null when one matched, where `route` already says it. A 404's
+   * message is suppressed below, so this is the only thing those rows can be
+   * grouped by — and it is a bounded vocabulary, never the path.
+   */
+  pathShape: Schema.NullOr(SanitizedText),
   /** The pattern that matched — never the path, which is unbounded. */
   route: SanitizedText,
   sse: Schema.Boolean,
@@ -291,7 +302,8 @@ const nameOf = (thrown: unknown) =>
 /**
  * Failures whose whole message is the request line, path and query string
  * included. The class already says everything the message would, and the text
- * is the one place a caller-controlled URL could reach a durable sink.
+ * is the one place a caller-controlled URL could reach a durable sink. What the
+ * suppressed message was wanted for is on `pathShape`, bounded.
  */
 const REQUEST_ECHOING_CLASSES: ReadonlySet<string> = new Set([
   "RouteNotFound",
@@ -468,6 +480,7 @@ const requestRow = (
     errorMessage: progress.errorMessage,
     method: context.method,
     outcome: outcomeOf(progress, auth, exit),
+    pathShape: route === UNMATCHED_ROUTE ? pathShapeOf(context.path) : null,
     // A request is one row: a stream that outlives its answer is visible as a
     // live connection on the gauge, not as a start row nothing pairs with.
     phase: "end",

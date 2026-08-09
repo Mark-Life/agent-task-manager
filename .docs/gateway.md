@@ -78,7 +78,10 @@ project's or the global folder, which are read-only mounts everywhere else.
 **`atm.request`, one row per request, on every exit path.** Route *pattern* rather than path,
 method, status, `durationMs`, workspace, actor kind and id, token scope, bytes out, whether it
 held an event stream and for how long, outcome and `errorClass`. `traceId` comes off the
-caller's `traceparent` when there is one. A refused credential is `outcome: "rejected"` on that
+caller's `traceparent` when there is one. A request that matched nothing also carries
+`pathShape` — how far the path got into the contract before it stopped matching, `/tasks/:taskId/*`
+or just `/*` — which is what tells a probe from a client calling a real endpoint the wrong way,
+since a 404's message is suppressed and the path itself never reaches a row. A refused credential is `outcome: "rejected"` on that
 same row with the reason on it — never a 401 that vanished. Three metrics project the same row
 through a bounded vocabulary: `atm_requests_total`, `atm_request_duration_ms`, and an
 `atm_sse_connections` gauge.

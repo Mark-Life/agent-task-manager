@@ -14,6 +14,11 @@
  * the contract's own patterns pass through, everything else the process mounts
  * (the spec, the docs, the auth library's routes) shares one bucket, and the
  * ledger keeps the exact pattern either way.
+ *
+ * {@link pathShapeOf} is the same discipline applied to a path that matched no
+ * pattern at all. It lives here because bounding a caller-controlled value
+ * against the contract is what this file is for, but it is not a tag: it goes
+ * on the row only, so counting 404s by shape costs no time series.
  */
 
 import { Api } from "@workspace/api";
@@ -62,6 +67,94 @@ const KNOWN_ROUTES: ReadonlySet<string> = new Set(ROUTE_TAGS);
 /** The route as a tag: the pattern where the contract knows it, one bucket otherwise. */
 export const routeTag = (route: string) =>
   KNOWN_ROUTES.has(route) ? route : OTHER_ROUTE;
+
+/** Where a shape stops describing and the rest of the path is one mark. */
+const OPAQUE_SEGMENT = "*";
+
+/** The non-empty segments of a path or a pattern. */
+const segmentsOf = (path: string) =>
+  path.split("/").filter((segment) => segment.length > 0);
+
+/** One level of the contract's routes: the literals it accepts, and its one parameter. */
+interface RouteNode {
+  readonly children: Map<string, RouteNode>;
+  param: { readonly name: string; readonly node: RouteNode } | null;
+}
+
+const newRouteNode = (): RouteNode => ({ children: new Map(), param: null });
+
+/** Descends one level, adding it when the contract has not declared it yet. */
+const growNode = (node: RouteNode, segment: string) => {
+  if (segment.startsWith(":")) {
+    node.param ??= { name: segment, node: newRouteNode() };
+    return node.param.node;
+  }
+  const existing = node.children.get(segment);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const child = newRouteNode();
+  node.children.set(segment, child);
+  return child;
+};
+
+/**
+ * Every contract route as one tree, which is what makes {@link pathShapeOf}
+ * bounded: a shape is a prefix of a declared route, so the values it can take
+ * are the nodes of this tree and not a function of the traffic.
+ */
+const buildContractTrie = () => {
+  const root = newRouteNode();
+  for (const route of CONTRACT_ROUTES) {
+    let node = root;
+    for (const segment of segmentsOf(route)) {
+      node = growNode(node, segment);
+    }
+  }
+  return root;
+};
+
+const CONTRACT_TRIE = buildContractTrie();
+
+/** The level a segment reaches, by name, or null where the contract goes no further. */
+const stepInto = (node: RouteNode, segment: string) => {
+  const literal = node.children.get(segment);
+  if (literal !== undefined) {
+    return { label: segment, node: literal };
+  }
+  return node.param === null
+    ? null
+    : { label: node.param.name, node: node.param.node };
+};
+
+/**
+ * How far a path got into the contract before it stopped making sense, with a
+ * single `*` standing for everything after that. `/tasks/019.../comment` is
+ * `/tasks/:taskId/*`; `/wp-admin/setup.php` is `/*`.
+ *
+ * This is the field a request that matched no route is counted by. Such a
+ * request has `route: "unmatched"` and no error message — the platform's text
+ * for a 404 is the request line, which is caller-controlled and never reaches a
+ * durable sink — so without a shape the whole population is one number nobody
+ * can act on. The shape separates the probe traffic from the client that asked
+ * for a real endpoint the wrong way, and it carries no caller text at all: every
+ * word in it is a literal or a parameter name the contract declares.
+ */
+export const pathShapeOf = (path: string) => {
+  const labels: string[] = [];
+  let node = CONTRACT_TRIE;
+  for (const segment of segmentsOf(path)) {
+    const step = stepInto(node, segment);
+    if (step === null) {
+      labels.push(OPAQUE_SEGMENT);
+      break;
+    }
+    const { label, node: reached } = step;
+    labels.push(label);
+    node = reached;
+  }
+  return `/${labels.join("/")}`;
+};
 
 /**
  * Requests answered. The ceiling is the contract's route count times eight
