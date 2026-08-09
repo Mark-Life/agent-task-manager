@@ -313,13 +313,13 @@ describe("the atm.request row", () => {
   });
 
   test("a 404 on a real endpoint is a different shape from a probe", async () => {
-    // the contract declares /tasks/:taskId/comments; this router does not mount
+    // the contract declares /tasks/:taskId/messages; this router does not mount
     // it, so the request 404s exactly as a wrong method on it would
-    await get("/tasks/019a4c48-1f0f-7000-8000-000000000001/comments");
+    await get("/tasks/019a4c48-1f0f-7000-8000-000000000001/messages");
 
     const row = await onlyRow();
     expect(row.route).toBe("unmatched");
-    expect(row.pathShape).toBe("/tasks/:taskId/comments");
+    expect(row.pathShape).toBe("/tasks/:taskId/messages");
     // the id it asked for is still identity, not shape
     expect(JSON.stringify({ pathShape: row.pathShape })).not.toContain("019a");
   });
