@@ -17,6 +17,14 @@ audit trail. Never the docker socket — that one mount turns a sandbox into hos
 container that runs our own turn entrypoint gets one more, read-only: the bundled entrypoint
 at `/opt/atm/turn.js` (see below).
 
+**The two host bundles, read-only.** `/opt/atm/turn.js` and `/opt/atm/agent-mcp.js` are one file
+each under `${DATA_ROOT}/bin`, built on the host and mounted into every container that needs
+them. The board tools used to be copied onto the run mount instead, on the argument that a file
+copy cost less than a mount entry; at 1.7 MB a run and never deleted, 184 copies of four builds
+were 77% of everything under `runs/` on the first host that was measured. `agent-mcp:build`
+writes beside the file and renames onto it, so a rebuild on a live host cannot truncate a bundle
+a running container is reading.
+
 **The operator's skills, when there are any.** `ATM_SKILLS_DIR` names one host directory,
 mounted **ro** at `/agent-home/skills` — inside the agent home, because that is where a provider
 looks for the personal skills of whoever it is running as. It is the one bind inside another

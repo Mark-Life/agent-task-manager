@@ -28,12 +28,15 @@
  * is that pair, held together so a turn that fails cannot leave the credential
  * on disk.
  *
- * **The bundle is a copy onto the same mount.** The run directory is already
- * mounted read-write, so one file copy per turn costs less than another entry
- * in the mount set that every reader of `mountsFor` then has to account for.
- * The bundle is built once per host; a run that cannot find it fails rather
- * than starting an agent with no way to reach the board, because what such an
- * agent answers is a confident account of tasks it did not file.
+ * **The bundle is one file on the host, mounted read-only.** It was a copy onto
+ * the run mount, on the argument that one file copy per turn cost less than
+ * another entry in the mount set. It did not: the bundle is about 1.7 MB, a run
+ * directory keeps what it was given, and on the first host to be measured 184
+ * copies of four distinct builds were 77% of everything under `runs/`. So
+ * {@link agentBundlePath} checks the one built file and hands its path to the
+ * mount set instead. A run that cannot find it fails rather than starting an
+ * agent with no way to reach the board, because what such an agent answers is a
+ * confident account of tasks it did not file.
  *
  * Which actor the token speaks as is {@link bindingOf} and nothing else: a
  * worker is bound to its one task, a manager to its conversation. That single
@@ -43,12 +46,11 @@
 
 import {
   agentMcpBundlePathOf,
-  agentMcpRunCopyPathOf,
   agentMcpServersFile,
-  CONTAINER_AGENT_MCP_PATH,
   CONTAINER_AGENT_TOKEN_PATH,
 } from "@workspace/agent-tools";
 import type { WorkspaceId } from "@workspace/domain";
+import { CONTAINER_AGENT_MCP_PATH } from "@workspace/harness";
 import {
   type AgentBinding,
   mintAgentToken,
@@ -112,9 +114,18 @@ export const bindingOf = (context: DispatchContext): AgentBinding =>
         userId: context.attached.thread.userId,
       };
 
-/** Copies the board tools onto the run mount the container reads them from. */
-export const copyAgentBundle = Effect.fn("Run.copyAgentBundle")(
-  function* (input: { readonly dataRoot: string; readonly runDir: string }) {
+/**
+ * The board tools on this host, having checked they are there.
+ *
+ * The check is the whole of it, and it is why this is not simply
+ * `agentMcpBundlePathOf` at the call site. The path goes into the mount set, so
+ * a host that never bundled would otherwise fail as a mount source the daemon
+ * could not find — the same run lost, told as a Docker problem — and a turn
+ * running as a host process would get no error at all, only a provider that
+ * quietly starts no server.
+ */
+export const agentBundlePath = Effect.fn("Run.agentBundlePath")(
+  function* (input: { readonly dataRoot: string }) {
     const fs = yield* FileSystem;
     const bundlePath = agentMcpBundlePathOf(input.dataRoot);
     const present = yield* fs
@@ -123,13 +134,7 @@ export const copyAgentBundle = Effect.fn("Run.copyAgentBundle")(
     if (!present) {
       return yield* Effect.fail(new AgentBundleMissing({ path: bundlePath }));
     }
-    const copy = agentMcpRunCopyPathOf(input.runDir);
-    yield* fs
-      .copyFile(bundlePath, copy)
-      .pipe(
-        Effect.mapError(() => new AgentBundleMissing({ path: bundlePath }))
-      );
-    return copy;
+    return bundlePath;
   }
 );
 

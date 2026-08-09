@@ -138,5 +138,7 @@ conversation — the same credential, one bound narrower. `ORCHESTRATOR_GATEWAY_
 gateway **as a container resolves it** (`http://host.docker.internal:3100` on macOS); unset, a
 turn runs with no board tools and the loop says so once at boot. `bun run agent-mcp:build` has
 to have bundled the tools to `${DATA_ROOT}/bin/agent-mcp.js` first; a missing bundle fails the
-run rather than producing an agent that answers confidently with no board access.
+run rather than producing an agent that answers confidently with no board access. That one file
+is mounted read-only at `/opt/atm/agent-mcp.js` rather than copied per run — the copy was 77% of
+everything under `runs/` on the host that was measured.
 

@@ -145,9 +145,11 @@ then on the containers refresh the tokens in place and nothing re-seeds them.
 **8. Sandbox images and the two bundles.** The loop starts containers from
 images that exist only once somebody builds them; a loop without them fails
 every run it picks up. Minutes, and it needs the daemon. The two bundles are
-copied onto each run's mount rather than baked into the image, because they
+mounted read-only into each run rather than baked into the image, because they
 change with the code and the image does not — so they are rebuilt on every
-deploy, and a missing one fails the run by name.
+deploy, and a missing one fails the run by name. Rebuilding while runs are going
+is safe: each build writes beside its bundle and renames onto it, and a
+container that is already up keeps the file it started with.
 
 ```sh
 cd /opt/agent-task-manager
@@ -423,6 +425,15 @@ a restore, not a checkout.
 Stopping the loop is the slow half. It stops the containers it is holding and
 releases its leases; `TimeoutStopSec=60s` bounds that, and a `SIGKILL` through
 the middle leaves rows claiming a run is live and containers nobody will reap.
+
+**Upgrading past the board-tools mount, once.** Runs before that change each
+kept a 1.7 MB copy of `agent-mcp.js` in their own directory, and nothing deletes
+them. New runs make no more, and the old ones are safe to remove — the file is
+identical on every run and nothing reads it once the run has ended:
+
+```sh
+find ${DATA_ROOT}/runs -name agent-mcp.js -delete
+```
 
 ## Backups
 

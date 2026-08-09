@@ -25,9 +25,8 @@ export {
   AGENT_MCP_SEGMENT,
   AGENT_TOKEN_FILE,
   agentMcpBundlePathOf,
-  agentMcpRunCopyPathOf,
+  agentMcpPendingPathOf,
   agentTokenPathOf,
-  CONTAINER_AGENT_MCP_PATH,
   CONTAINER_AGENT_TOKEN_PATH,
 } from "./bundle";
 export type { GatewayClient } from "./client";

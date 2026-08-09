@@ -29,9 +29,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { BunFileSystem } from "@effect/platform-bun";
-import { agentTokenPathOf } from "@workspace/agent-tools";
+import { agentMcpBundlePathOf, agentTokenPathOf } from "@workspace/agent-tools";
 import { AgentSessionId, RunId, TaskId, WorkspaceId } from "@workspace/domain";
 import {
   type AgentBinding,
@@ -39,10 +39,15 @@ import {
   mintAgentToken,
   tokenSignerFrom,
 } from "@workspace/token";
-import { Effect, Redacted, type Scope } from "effect";
+import { Effect, Redacted, Result, type Scope } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { TestClock } from "effect/testing";
-import { refreshPeriodOf, scopedRollingToken } from "./agent-token";
+import {
+  AgentBundleMissing,
+  agentBundlePath,
+  refreshPeriodOf,
+  scopedRollingToken,
+} from "./agent-token";
 
 const signer = tokenSignerFrom(Redacted.make("test-secret-not-a-real-one"));
 
@@ -238,5 +243,51 @@ describe("a run that outlasts one token lifetime", () => {
     );
 
     expect(verdict).toBe(true);
+  });
+});
+
+/**
+ * The other half of what a turn's board access is made of, and the half that
+ * used to cost 1.7 MB of disk per run.
+ *
+ * The bundle is one file on the host now, named for the mount set rather than
+ * copied onto the run mount. What is worth asserting is what changed with it:
+ * that the answer is the host's own path and nothing under the run directory,
+ * so a reader who reintroduces the copy fails a test rather than filling a
+ * disk, and that a host which never bundled still fails the run by name.
+ */
+describe("the board tools bundle", () => {
+  const onDisk = <A, E>(program: Effect.Effect<A, E, FileSystem>) =>
+    Effect.runPromise(
+      Effect.result(program).pipe(Effect.provide(BunFileSystem.layer))
+    );
+
+  test("is the one file on the host, not a copy in the run directory", async () => {
+    const dataRoot = runDir();
+    const result = await onDisk(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem;
+        const path = agentMcpBundlePathOf(dataRoot);
+        yield* fs.makeDirectory(dirname(path), { recursive: true });
+        yield* fs.writeFileString(path, "// the bundle\n");
+        return yield* agentBundlePath({ dataRoot });
+      })
+    );
+
+    expect(result).toEqual(Result.succeed(agentMcpBundlePathOf(dataRoot)));
+  });
+
+  test("fails the run by name when the host never bundled it", async () => {
+    const dataRoot = runDir();
+    const result = await onDisk(agentBundlePath({ dataRoot }));
+
+    // Its own failure, not a warning: an agent with no way to reach the board
+    // answers anyway, and what it answers is an account of tasks it never filed.
+    expect(Result.isFailure(result)).toBe(true);
+    expect(result).toEqual(
+      Result.fail(
+        new AgentBundleMissing({ path: agentMcpBundlePathOf(dataRoot) })
+      )
+    );
   });
 });

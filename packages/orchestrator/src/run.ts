@@ -35,7 +35,6 @@
 
 import {
   agentTokenPathOf,
-  CONTAINER_AGENT_MCP_PATH,
   CONTAINER_AGENT_TOKEN_PATH,
   claudeManagerMcpServers,
 } from "@workspace/agent-tools";
@@ -44,6 +43,7 @@ import type { EnvFileWrite } from "@workspace/domain";
 import {
   type AgentEvent,
   AgentEventRecord,
+  CONTAINER_AGENT_MCP_PATH,
   entrypointBundlePathOf,
   MESSAGE_MARKER_ENV_VAR,
   mcpServersPathOf,
@@ -67,8 +67,8 @@ import { makeTokenSigner } from "@workspace/token";
 import { Cause, DateTime, Effect, Ref, Schema, Stream } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import {
+  agentBundlePath,
   bindingOf,
-  copyAgentBundle,
   scopedMcpServersFile,
   scopedRollingToken,
 } from "./agent-token";
@@ -229,6 +229,13 @@ export interface ExecuteRunInput {
  */
 const directoriesFor = Effect.fnUntraced(function* (input: {
   readonly agentHomeDir: string;
+  /**
+   * The board tools on the host, checked, or null on an install with no
+   * gateway. Handed in rather than derived here, because the same file is named
+   * again in the servers map a host turn is given, and a second derivation is
+   * where the mount and the command come to disagree.
+   */
+  readonly agentMcpPath: string | null;
   readonly context: DispatchContext;
   readonly dataRoot: string;
   readonly envFiles: readonly EnvFileWrite[];
@@ -237,6 +244,7 @@ const directoriesFor = Effect.fnUntraced(function* (input: {
 }) {
   const { context } = input;
   const extras = {
+    agentMcpPath: input.agentMcpPath,
     entrypointPath: entrypointBundlePathOf(input.dataRoot),
     skillsDir: input.skillsDir,
   };
@@ -337,8 +345,24 @@ export const executeRun = (input: ExecuteRunInput) =>
     // read them back, so the values are in the timeline the moment it does.
     const redact = makeRedactor(secretValuesOf(input.envFiles));
 
+    /**
+     * The board tools this turn gets, or null for a turn that gets none.
+     *
+     * Resolved before the directories because the mount set names it: the file
+     * is one bundle on the host, mounted read-only into every container, so the
+     * path has to be decided by the time `mountsFor` is called. An install that
+     * named no gateway gets neither half — see {@link mcpServers} — and a host
+     * that named one but never bundled fails the run here, which is the whole
+     * point of {@link agentBundlePath}.
+     */
+    const boardBundlePath =
+      input.gatewayUrl === null
+        ? null
+        : yield* agentBundlePath({ dataRoot: input.dataRoot });
+
     const made = yield* directoriesFor({
       agentHomeDir: input.agentHomeDir,
+      agentMcpPath: boardBundlePath,
       context,
       dataRoot: input.dataRoot,
       envFiles: input.envFiles,
@@ -552,13 +576,9 @@ export const executeRun = (input: ExecuteRunInput) =>
      */
     const mcpServers = yield* Effect.gen(function* () {
       const { gatewayUrl } = input;
-      if (gatewayUrl === null) {
+      if (gatewayUrl === null || boardBundlePath === null) {
         return null;
       }
-      const bundlePath = yield* copyAgentBundle({
-        dataRoot: input.dataRoot,
-        runDir: context.layout.runDir,
-      });
       const signer = yield* makeTokenSigner;
       const tokenPath = yield* scopedRollingToken({
         binding: bindingOf(context),
@@ -574,7 +594,7 @@ export const executeRun = (input: ExecuteRunInput) =>
       return claudeManagerMcpServers({
         // The container reads the bundle and the credential at their own mount
         // point; a host process reads them where they actually are.
-        bundlePath: contained ? CONTAINER_AGENT_MCP_PATH : bundlePath,
+        bundlePath: contained ? CONTAINER_AGENT_MCP_PATH : boardBundlePath,
         credential: {
           kind: "file",
           path: contained ? CONTAINER_AGENT_TOKEN_PATH : tokenPath,

@@ -1,11 +1,15 @@
 /**
- * Where the bundled server lives, on the host and inside the container.
+ * Where the bundled server lives on the host, and the credential it reads.
  *
  * One spelling of each path, exported rather than repeated: the build script
- * writes exactly here, the turn copies exactly this file onto the run mount,
- * and the provider is told exactly this command. A second spelling anywhere is
- * a manager whose board tools silently fail to start, which reads to a person
- * as the manager having decided not to use them.
+ * writes exactly here, the run mounts exactly this file, and the provider is
+ * told exactly this command. A second spelling anywhere is a manager whose
+ * board tools silently fail to start, which reads to a person as the manager
+ * having decided not to use them.
+ *
+ * The container's side of the bundle is `CONTAINER_AGENT_MCP_PATH` in
+ * `@workspace/harness`, beside the entrypoint's, because the mount set that
+ * puts it there is built by a package that cannot import this one.
  */
 
 import { join } from "node:path";
@@ -17,26 +21,33 @@ export const AGENT_MCP_SEGMENT = "bin";
 /** The bundle's file name, on the host and inside the container alike. */
 export const AGENT_MCP_BUNDLE_FILE = "agent-mcp.js";
 
-/** The bundle on the host, under the data root. The build script writes exactly here. */
+/**
+ * The bundle on the host, under the data root. The build script writes exactly
+ * here, and every run mounts exactly this file.
+ *
+ * One file for the whole host, read-only, rather than a copy per run. It used
+ * to be a copy, on the argument that the run directory was already mounted and
+ * one file copy per turn cost less than another entry in the mount set. The
+ * numbers did not hold: the bundle is about 1.7 MB and a run directory keeps
+ * everything it was given, so 191 runs on one host were carrying 321 MB of the
+ * same four builds — 77% of the whole `runs/` tree, growing with the run count
+ * and reclaimable only by hand. One entry in `mountsFor` is the price of a
+ * directory that stops growing.
+ */
 export const agentMcpBundlePathOf = (dataRoot: string) =>
   join(dataRoot, AGENT_MCP_SEGMENT, AGENT_MCP_BUNDLE_FILE);
 
 /**
- * The copy the provider launches, on the run mount.
+ * Where a build in progress is written before it is renamed into place.
  *
- * A copy per thread rather than a fourth read-only mount: the run directory is
- * already mounted read-write, and one file copy per turn costs less than
- * another entry in the mount set that every reader of `mountsFor` then has to
- * account for.
+ * The rename is what makes the shared file safe to mount. A bundler writing
+ * straight to the mounted path truncates it, and a container starting in that
+ * window launches half a file; a rename replaces the directory entry in one
+ * step, and a bind mount already made holds the old inode until its run ends —
+ * so a rebuild on a live host never reaches a turn that is already going.
  */
-export const CONTAINER_AGENT_MCP_PATH = join(
-  CONTAINER_RUN_DIR,
-  AGENT_MCP_BUNDLE_FILE
-);
-
-/** The bundle inside one thread's run directory on the host, which is what gets copied. */
-export const agentMcpRunCopyPathOf = (threadRunDir: string) =>
-  join(threadRunDir, AGENT_MCP_BUNDLE_FILE);
+export const agentMcpPendingPathOf = (dataRoot: string) =>
+  `${agentMcpBundlePathOf(dataRoot)}.next`;
 
 /**
  * The file the board credential is rolled through.

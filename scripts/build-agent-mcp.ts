@@ -5,13 +5,19 @@
  *
  * The same arrangement as the container entrypoint, for the same reason: the
  * image is rebuilt on a slow schedule and this code changes with the API
- * contract, so it is bundled here and copied onto the run mount per turn rather
- * than baked in. One file, no `node_modules` beside it, launched as
- * `bun /run/agent-mcp.js` by whichever provider is running the manager.
+ * contract, so it is bundled here and mounted read-only per turn rather than
+ * baked in. One file, no `node_modules` beside it, launched as
+ * `bun /opt/atm/agent-mcp.js` by whichever provider is running the manager.
  *
- * A copy per thread rather than a read-only mount of its own: the run directory
- * is already mounted read-write, and a file copy costs less than another entry
- * in the mount set every reader then has to account for.
+ * One file for the host rather than a copy per run, which is what it was. The
+ * copy cost 1.7 MB a run and never went away with the run, so it was 77% of
+ * everything under `runs/` on the first host to be measured.
+ *
+ * Written beside the bundle and renamed onto it, because that one file is now
+ * mounted into live containers: a bundler writing the mounted path in place
+ * truncates it under whatever is reading it, and a rename swaps the directory
+ * entry in one step while every mount already made keeps the inode it started
+ * with.
  *
  * `--target=bun`, not `--compile`, exactly as the entrypoint's bundle: the
  * plain bundle is small, builds in about a second, and is readable by a person
@@ -23,7 +29,7 @@
  *   bun run agent-mcp:build --check    whether it is there and how old; builds nothing
  *
  * The output path comes from `@workspace/agent-tools` rather than from a
- * string here, because the turn copies what this writes: a second spelling is a
+ * string here, because the turn mounts what this writes: a second spelling is a
  * manager whose board tools never start, which reads to a person as a manager
  * that decided not to use them.
  */
@@ -35,7 +41,10 @@ import { BunRuntime } from "@effect/platform-bun";
 import * as BunChildProcessSpawner from "@effect/platform-bun/BunChildProcessSpawner";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as BunPath from "@effect/platform-bun/BunPath";
-import { agentMcpBundlePathOf } from "@workspace/agent-tools";
+import {
+  agentMcpBundlePathOf,
+  agentMcpPendingPathOf,
+} from "@workspace/agent-tools";
 import { Config, Effect, Layer, Option, Schema, Stream } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
@@ -118,13 +127,19 @@ const runBundler = Effect.fn("BuildManagerMcp.runBundler")(function* (
   return yield* handle.exitCode;
 });
 
+/** Whatever data root this host is using. */
+const dataRoot = Config.string("DATA_ROOT").pipe(
+  Config.withDefault(DEFAULT_DATA_ROOT)
+);
+
+/** The bundle's path, and the path a build in progress is written to first. */
+const bundlePaths = Effect.map(dataRoot, (root) => ({
+  outFile: agentMcpBundlePathOf(root),
+  pending: agentMcpPendingPathOf(root),
+}));
+
 /** The bundle's path, under whatever data root this host is using. */
-const bundlePath = Effect.gen(function* () {
-  const dataRoot = yield* Config.string("DATA_ROOT").pipe(
-    Config.withDefault(DEFAULT_DATA_ROOT)
-  );
-  return agentMcpBundlePathOf(dataRoot);
-});
+const bundlePath = Effect.map(bundlePaths, (paths) => paths.outFile);
 
 /** Age in whole minutes, and in hours once it is old enough for that to read better. */
 export const describeAge = (ageMs: number) => {
@@ -169,10 +184,19 @@ const checkBundle = Effect.fn("BuildManagerMcp.checkBundle")(function* () {
   );
 });
 
-/** The bundle, written where each manager turn copies it from. */
+/**
+ * The bundle, written beside the file every run mounts and renamed onto it.
+ *
+ * The rename is the point, and it is why the bundler is not simply pointed at
+ * the final path: that path is bind-mounted into whatever containers are
+ * running right now, so a bundler truncating it would take the file out from
+ * under them mid-turn. A failed build leaves the pending file behind and the
+ * mounted one untouched, which is the right way round — the host keeps serving
+ * the bundle it had.
+ */
 const buildBundle = Effect.fn("BuildManagerMcp.buildBundle")(function* () {
   const fs = yield* FileSystem;
-  const outFile = yield* bundlePath;
+  const { outFile, pending } = yield* bundlePaths;
   yield* Effect.logInfo(`bundling ${ENTRY}`);
   yield* fs
     .makeDirectory(dirname(outFile), { recursive: true })
@@ -182,12 +206,17 @@ const buildBundle = Effect.fn("BuildManagerMcp.buildBundle")(function* () {
       )
     );
   const exitCode = yield* Effect.mapError(
-    Effect.scoped(runBundler(bundleArgv(outFile))),
+    Effect.scoped(runBundler(bundleArgv(pending))),
     (cause) => new BundlerUnavailable({ detail: String(cause) })
   );
   if (exitCode !== 0) {
+    yield* fs.remove(pending, { force: true }).pipe(Effect.ignore);
     return yield* Effect.fail(new BundleFailed({ exitCode, outFile }));
   }
+  yield* Effect.mapError(
+    fs.rename(pending, outFile),
+    (cause) => new BundlerUnavailable({ detail: String(cause) })
+  );
   return outFile;
 });
 

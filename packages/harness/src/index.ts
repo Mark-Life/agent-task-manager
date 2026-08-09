@@ -193,6 +193,7 @@ export {
   type TurnIdentity,
 } from "./turn-event";
 export {
+  CONTAINER_AGENT_MCP_PATH,
   CONTAINER_ENTRYPOINT_COMMAND,
   CONTAINER_ENTRYPOINT_PATH,
   containerEntrypointArgs,

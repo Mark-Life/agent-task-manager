@@ -97,6 +97,22 @@ export const mcpServersPathOf = (layout: RunLayout) =>
 export const CONTAINER_ENTRYPOINT_PATH = "/opt/atm/turn.js";
 
 /**
+ * Where the bundled board tools are mounted inside the container.
+ *
+ * Beside the entrypoint and for the same reasons: it is this repository's own
+ * code rather than the image's, it is bundled on the host once and bind-mounted
+ * read-only, and `/opt` is where a thing that arrived from outside the image
+ * belongs. The path a run's `mcp-servers.json` names, so the provider inside
+ * the container launches `bun /opt/atm/agent-mcp.js`.
+ *
+ * Here rather than in `@workspace/agent-tools`, which owns the host half of
+ * this path: the mount set is built by `@workspace/sandbox`, which depends on
+ * this package and not on that one — and a mount whose destination is spelled
+ * at the call site is the hole `mounts.ts` exists to close.
+ */
+export const CONTAINER_AGENT_MCP_PATH = "/opt/atm/agent-mcp.js";
+
+/**
  * The interpreter the bundle is run with inside the container. The bundle is
  * JavaScript for bun rather than a compiled executable, and the image pins the
  * same bun version this repository's `packageManager` does — see
