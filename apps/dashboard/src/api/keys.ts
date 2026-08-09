@@ -75,6 +75,14 @@ export const keys = {
   /** Every agent session of one task. */
   sessions: (taskId: TaskId) => [TASKS, taskId, "sessions"] as const,
 
+  /**
+   * What each of a task's sessions spent. One key for the whole panel, because
+   * the server answers it in one call: a bar per row would otherwise be a
+   * request per row.
+   */
+  sessionsUsage: (taskId: TaskId) =>
+    [TASKS, taskId, "sessions", "usage"] as const,
+
   /** One task's detail, and the prefix of everything that task owns. */
   task: (taskId: TaskId) => [TASKS, taskId] as const,
 

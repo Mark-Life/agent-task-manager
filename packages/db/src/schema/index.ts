@@ -17,6 +17,7 @@
  */
 
 export { agentSession } from "./agent-session";
+export { agentSessionUsage } from "./agent-session-usage";
 export { artifact } from "./artifact";
 export { auditEntry } from "./audit";
 export {

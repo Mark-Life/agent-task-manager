@@ -16,11 +16,18 @@
  * parsed by `@workspace/harness`, which `apps/gateway` does not depend on, and
  * a second parser here would be a second answer to "what did the model say". It
  * answers 501 until that dependency is declared or the reading moves.
+ *
+ * What a session spent is served, and from the store rather than from the file,
+ * for that same reason turned around: the orchestrator has already read the
+ * transcript and stored the summary, so this process needs no parser and no
+ * vendor SDK to answer — and the answer survives the transcript being cleaned
+ * up, which a read-on-demand one would not.
  */
 
 import { Api, NotFound, Principal } from "@workspace/api";
 import {
   AgentSessionRepo,
+  AgentSessionUsageRepo,
   type MalformedRow,
   type PersistenceError,
   NotFound as StoreNotFound,
@@ -104,7 +111,9 @@ export const sessionsHandlers = HttpApiBuilder.group(
   "sessions",
   (handlers) =>
     Effect.gen(function* () {
-      const on = yield* atBuild<AgentSessionRepo | TaskRepo>();
+      const on = yield* atBuild<
+        AgentSessionRepo | AgentSessionUsageRepo | TaskRepo
+      >();
 
       return handlers
         .handle("list", ({ params }) =>
@@ -127,6 +136,18 @@ export const sessionsHandlers = HttpApiBuilder.group(
             })
           )
         )
-        .handle("transcript", pending("sessions.transcript"));
+        .handle("transcript", pending("sessions.transcript"))
+        .handle("usage", ({ params }) =>
+          on(
+            Effect.gen(function* () {
+              const { workspaceId } = yield* Principal;
+              yield* requireTask({ taskId: params.taskId, workspaceId });
+              const usage = yield* AgentSessionUsageRepo;
+              return yield* wire(
+                usage.listByTask({ taskId: params.taskId, workspaceId })
+              );
+            })
+          )
+        );
     })
 );

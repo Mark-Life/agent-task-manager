@@ -69,10 +69,12 @@ export {
 } from "./schemas/run-command";
 export {
   AgentSession,
+  AgentSessionUsage,
   TRANSCRIPT_ROLES,
   Transcript,
   TranscriptEntry,
   TranscriptRole,
+  TranscriptUsage,
 } from "./schemas/session";
 export {
   BoardColumn,

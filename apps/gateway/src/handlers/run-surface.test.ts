@@ -29,6 +29,7 @@ import {
 } from "@workspace/api";
 import {
   AgentSessionRepo,
+  AgentSessionUsageRepo,
   CurrentActor,
   RunEventRepo,
   RunRepo,
@@ -40,6 +41,7 @@ import {
 import {
   Actor,
   type AgentSessionId,
+  CostUsd,
   newTaskId,
   type Run,
   type RunId,
@@ -242,6 +244,64 @@ const failSession = (id: AgentSessionId, errorMessage: string) =>
     })
   );
 
+/**
+ * A summary of the shape the ingest stores, written straight to the store.
+ *
+ * Built here rather than derived from a transcript on purpose: deriving one is
+ * `@workspace/harness`'s job and is tested there, and this file's claim is
+ * about the route, the workspace scoping and the decode on the way out.
+ */
+const recordUsage = (sessionId: AgentSessionId) =>
+  runStore(
+    Effect.gen(function* () {
+      const usage = yield* AgentSessionUsageRepo;
+      yield* usage.record({
+        sessionId,
+        usage: {
+          computedAt: DateTime.makeUnsafe("2026-08-08T00:00:00Z"),
+          contextWindow: 1_000_000,
+          contextWindowSource: "inferred",
+          cost: {
+            pricedRequests: 1,
+            priceTableEffective: "2026-08-08",
+            priceTableVersion: 1,
+            totalUsd: CostUsd.make("0.234000"),
+            unpricedModels: [],
+            unpricedRequests: 0,
+          },
+          entries: 5,
+          finalContextTokens: 24_298,
+          growth: [
+            {
+              cacheReadTokens: 13_870,
+              contextTokens: 24_298,
+              inputTokens: 2,
+              occurredAt: "2026-08-04T11:58:07.770Z",
+              outputTokens: 278,
+            },
+          ],
+          growthSampled: false,
+          largestEntries: [
+            { chars: 1200, line: 3, role: "tool_result", toolName: null },
+          ],
+          models: ["claude-opus-5"],
+          peakContextTokens: 24_298,
+          provider: "claude",
+          requests: 1,
+          toolCalls: [{ calls: 2, errors: 0, name: "Bash" }],
+          totals: {
+            cacheReadTokens: 13_870,
+            cacheWriteTokens: 10_426,
+            inputTokens: 2,
+            outputTokens: 278,
+            reasoningOutputTokens: null,
+          },
+        },
+        workspaceId,
+      });
+    })
+  );
+
 const makeRun = (taskId: TaskId, agentSessionId: AgentSessionId) =>
   runStore(
     Effect.gen(function* () {
@@ -401,6 +461,49 @@ test("the transcript is not served by this build", async () => {
     `/tasks/${task.id}/sessions/${session.id}/transcript`
   );
   expect(response.status).toBe(501);
+});
+
+test("a task's session usage comes back, and a session with none is absent", async () => {
+  const task = await makeTask("run surface: session usage");
+  const measured = await openSession(task.id);
+  await openSession(task.id);
+  await recordUsage(measured.id);
+
+  const response = await get(`/tasks/${task.id}/sessions/usage`);
+  expect(response.status).toBe(200);
+
+  const usage = (await response.json()) as {
+    sessionId: string;
+    usage: {
+      contextWindow: number | null;
+      contextWindowSource: string | null;
+      cost: { totalUsd: string } | null;
+      peakContextTokens: number | null;
+    };
+  }[];
+  // The second session has no summary and is not in the array. It has not spent
+  // nothing — nothing has been computed for it, which is a different answer.
+  expect(usage.map((row) => row.sessionId)).toEqual([measured.id]);
+  expect(usage.map((row) => row.usage.peakContextTokens)).toEqual([24_298]);
+  expect(usage.map((row) => row.usage.contextWindow)).toEqual([1_000_000]);
+  expect(usage.map((row) => row.usage.contextWindowSource)).toEqual([
+    "inferred",
+  ]);
+  expect(usage.map((row) => row.usage.cost?.totalUsd)).toEqual(["0.234000"]);
+});
+
+// `usage` is a static segment sitting where `:sessionId` also matches. The
+// router has to prefer the static one, and this is the test that says it does.
+test("the usage route is not swallowed by the session id route", async () => {
+  const task = await makeTask("run surface: usage routing");
+  const response = await get(`/tasks/${task.id}/sessions/usage`);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual([]);
+});
+
+test("usage for a task that does not exist is a 404", async () => {
+  const response = await get(`/tasks/${newTaskId()}/sessions/usage`);
+  expect(response.status).toBe(404);
 });
 
 test("a run belonging to another task is absent, not forbidden", async () => {

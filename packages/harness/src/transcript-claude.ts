@@ -19,7 +19,12 @@
  * process was killed — is dropped, not raised.
  */
 
-import type { Transcript, TranscriptEntry, TranscriptRole } from "./transcript";
+import type {
+  Transcript,
+  TranscriptEntry,
+  TranscriptRole,
+  TranscriptUsage,
+} from "./transcript";
 
 /** An envelope, once it is known to be an object. Fields are read defensively; none is guaranteed. */
 type Line = Readonly<Record<string, unknown>>;
@@ -50,6 +55,16 @@ const asRecord = (value: unknown) => (isRecord(value) ? value : null);
 
 /** A string field, or null when the field is absent or of another type. */
 const stringOf = (value: unknown) => (typeof value === "string" ? value : null);
+
+/**
+ * A token count, or null when the field is absent or of another type. Negative
+ * and fractional readings are refused rather than clamped: neither is a token
+ * count, and a clamp would turn a vendor's bug into our own plausible number.
+ */
+const countOf = (value: unknown) =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : null;
 
 /** One line of JSONL, or null when it is malformed or truncated mid-write. */
 const parseLine = (line: string) => {
@@ -190,6 +205,100 @@ const entriesOf = (record: Line, line: number): readonly TranscriptEntry[] => {
 };
 
 /**
+ * One assistant line's usage reading, or null where the line carries none.
+ *
+ * Claude's `input_tokens` is already fresh input — the cache halves are counted
+ * separately beside it — so nothing is subtracted here, unlike Codex. The
+ * context is the three added together, which is what the request actually put
+ * in front of the model.
+ *
+ * A reading of zero context is dropped rather than recorded. The SDK writes
+ * synthetic assistant messages — a refusal it generated itself, a cancelled
+ * request — with a `<synthetic>` model and an all-zero usage block, and those
+ * are not requests: on the curve they read as the context collapsing to nothing
+ * and back.
+ */
+const usageOf = (record: Line, line: number): TranscriptUsage | null => {
+  const message = asRecord(record.message);
+  const usage = message === null ? null : asRecord(message.usage);
+  if (usage === null) {
+    return null;
+  }
+  const input = countOf(usage.input_tokens);
+  const cacheRead = countOf(usage.cache_read_input_tokens);
+  const cacheWrite = countOf(usage.cache_creation_input_tokens);
+  const context = (input ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
+  if (context === 0) {
+    return null;
+  }
+  // The split between the two cache lifetimes, which are billed at different
+  // multiples of input. Absent on an older file, where the total is all there
+  // is and the summary prices it at the cheaper rate.
+  const creation = asRecord(usage.cache_creation);
+  return {
+    cacheRead,
+    cacheWrite,
+    cacheWrite1h:
+      creation === null ? null : countOf(creation.ephemeral_1h_input_tokens),
+    cacheWrite5m:
+      creation === null ? null : countOf(creation.ephemeral_5m_input_tokens),
+    context,
+    // Claude records no window of its own; the summary infers one from `model`.
+    contextWindow: null,
+    input,
+    line,
+    model: stringOf(message?.model),
+    occurredAt: stringOf(record.timestamp),
+    output: countOf(usage.output_tokens),
+    // Thinking is billed as output and Claude does not separate it.
+    reasoningOutput: null,
+    speed: stringOf(usage.speed),
+  };
+};
+
+/**
+ * The readings the file holds, one per request rather than one per line.
+ *
+ * Both halves of that are load-bearing. **One response is written as several
+ * lines** — the prose and each tool call arrive as their own `assistant`
+ * envelope, all carrying the same `requestId` and the same usage block — so
+ * counting lines inflates a session's output tokens and its cost by however
+ * many tool calls it made. The first line of each request wins.
+ *
+ * **Sidechain lines are skipped.** Those are a subagent's conversation, which
+ * has its own window and its own transcript; folded into this curve they read
+ * as the main context jumping and falling back. A line with no `requestId` is
+ * kept under its own ordinal rather than merged with its neighbours: an unnamed
+ * request is not the same request as the last one.
+ */
+const usageStream = (
+  records: readonly (Line | null)[]
+): readonly TranscriptUsage[] => {
+  const seen = new Set<string>();
+  return records.flatMap((record, line) => {
+    if (record === null || stringOf(record.type) !== "assistant") {
+      return [];
+    }
+    if (record.isSidechain === true) {
+      return [];
+    }
+    // An empty id is an absent one. Left as a key it would merge every
+    // unnamed request in the file into the first of them.
+    const named = stringOf(record.requestId);
+    const key = named === null || named.length === 0 ? `line-${line}` : named;
+    if (seen.has(key)) {
+      return [];
+    }
+    const usage = usageOf(record, line);
+    if (usage === null) {
+      return [];
+    }
+    seen.add(key);
+    return [usage];
+  });
+};
+
+/**
  * Parses a Claude transcript. Pure over the file's lines, so the vendor half of
  * the reader is testable against a fixture with no provider and no disk.
  */
@@ -206,5 +315,6 @@ export const parseClaudeTranscript = (lines: readonly string[]): Transcript => {
       record === null ? [] : entriesOf(record, line)
     ),
     providerSessionId,
+    usage: usageStream(records),
   };
 };

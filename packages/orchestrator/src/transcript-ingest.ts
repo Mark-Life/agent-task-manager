@@ -20,10 +20,16 @@
  * the credentials stay behind in the home and go with it.
  *
  * So after a run, durable in Postgres are the provider session id on the
- * session row and the timeline in `run_events` — clipped, and restored from the
- * transcript only when the stream left nothing. Durable on disk, and nowhere
- * else, is the whole conversation at full length in the run directory: no query
- * returns it, and removing the run directory removes it.
+ * session row, the timeline in `run_events` — clipped, and restored from the
+ * transcript only when the stream left nothing — and one `agent_session_usage`
+ * row holding what the session has spent. Durable on disk, and nowhere else, is
+ * the whole conversation at full length in the run directory: no query returns
+ * it, and removing the run directory removes it.
+ *
+ * **The usage summary is the one thing here that is a derived aggregate rather
+ * than a copy.** It is stored precisely because it must outlive the bytes it
+ * came from: a transcript cleaned up off the disk should not take the answer to
+ * "what did this task cost" with it. See {@link recordUsage}.
  *
  * **The timeline is written from the transcript only when the event stream left
  * none.** A run that streamed normally already has its timeline: those rows are
@@ -48,7 +54,11 @@
  */
 
 import { join } from "node:path";
-import { AgentSessionRepo, RunEventRepo } from "@workspace/db";
+import {
+  AgentSessionRepo,
+  AgentSessionUsageRepo,
+  RunEventRepo,
+} from "@workspace/db";
 import {
   RUN_EVENT_SUMMARY_BUDGET_BYTES,
   RUN_EVENT_TEXT_BUDGET_BYTES,
@@ -60,6 +70,8 @@ import {
   type RunLayout,
   readTranscript,
   readTranscriptAt,
+  summarizeSession,
+  type Transcript,
   type TranscriptEntry,
   transcriptChars,
 } from "@workspace/harness";
@@ -340,6 +352,46 @@ const readRunTranscript = Effect.fnUntraced(function* (
   });
 });
 
+/**
+ * Derives what the session has spent and stores it against the session row.
+ *
+ * **Here, rather than on read.** The alternative was for the gateway to parse
+ * the transcript when somebody opened the panel, and it fails on both counts:
+ * the gateway has no transcript parser and giving it one means pulling both
+ * vendor SDKs into the public-facing process, and a transcript that has been
+ * cleaned up off the disk would take the session's history with it. This runs
+ * where the bytes are already in hand — the ingest has just read the file to
+ * preserve it — and what it leaves behind outlives the file.
+ *
+ * **Over the whole transcript, every time.** A session's file accumulates
+ * across the runs that resume it, so each pass recomputes the total rather than
+ * adding to it, and the write replaces the row. That is what makes a re-ingest
+ * of the same run produce the same summary, and an ingest of a file that has
+ * since grown produce the larger one.
+ *
+ * The consequence, which the UI has to say out loud: a session with a run in
+ * flight shows the figures as of its last completed run, and `computedAt` is
+ * how a reader knows that.
+ */
+const recordUsage = Effect.fnUntraced(function* (input: {
+  readonly context: DispatchContext;
+  readonly transcript: Pick<Transcript, "entries" | "usage">;
+}) {
+  const usage = yield* AgentSessionUsageRepo;
+  const computedAt = yield* DateTime.now;
+  const summary = summarizeSession({
+    computedAt,
+    provider: input.context.provider,
+    transcript: input.transcript,
+  });
+  yield* usage.record({
+    sessionId: sessionIdOf(input.context),
+    usage: summary,
+    workspaceId: workspaceIdOf(input.context),
+  });
+  return summary.requests;
+});
+
 /** What one pass over a run's transcript did. */
 export interface TranscriptIngestReport {
   /** Rows this pass inserted. Zero when the stream already covered the run, and on a re-ingest. */
@@ -352,6 +404,8 @@ export interface TranscriptIngestReport {
   readonly path: string | null;
   /** The provider's own conversation id, as the file names it. */
   readonly providerSessionId: string | null;
+  /** Model requests the transcript recorded, and the summary now covers. */
+  readonly requests: number;
   /** True when the timeline was rebuilt here because the event stream left none. */
   readonly restored: boolean;
 }
@@ -363,6 +417,7 @@ const NOT_FOUND: TranscriptIngestReport = {
   found: false,
   path: null,
   providerSessionId: null,
+  requests: 0,
   restored: false,
 };
 
@@ -413,7 +468,8 @@ const recordProviderSession = Effect.fnUntraced(function* (input: {
 
 /**
  * Reads the run's transcript, stamps the provider's session id on the session
- * row, and restores the timeline where the event stream left none.
+ * row, stores what the session has spent, and restores the timeline where the
+ * event stream left none.
  *
  * A missing transcript is a report rather than a failure. A container that died
  * before the provider started wrote no file, and the run still has to close
@@ -450,6 +506,10 @@ export const ingestTranscript = Effect.fn("Ingest.transcript")(function* (
     );
   }
 
+  const requests = yield* recordUsage({ context, transcript }).pipe(
+    failingRun(context)
+  );
+
   const streamed = yield* hasStreamedTimeline(context).pipe(
     failingRun(context)
   );
@@ -461,6 +521,7 @@ export const ingestTranscript = Effect.fn("Ingest.transcript")(function* (
     found: true,
     path: transcript.path,
     providerSessionId,
+    requests,
     restored: false,
   } satisfies TranscriptIngestReport;
 

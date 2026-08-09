@@ -5,7 +5,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useQuery } from "@tanstack/react-query";
-import type { AgentSession, Task } from "@workspace/api";
+import type { AgentSession, AgentSessionUsage, Task } from "@workspace/api";
 import type { TaskId } from "@workspace/domain";
 import { Badge } from "@workspace/ui/components/badge";
 import { Button } from "@workspace/ui/components/button";
@@ -23,9 +23,14 @@ import {
   ItemMedia,
   ItemTitle,
 } from "@workspace/ui/components/item";
-import { sessionsQuery, useTranscript } from "@/api/sessions";
+import {
+  sessionsQuery,
+  sessionsUsageQuery,
+  useTranscript,
+} from "@/api/sessions";
 import { EmptyState } from "@/components/empty-state";
 import { Pending } from "@/components/query-state";
+import { SessionUsagePanel } from "@/features/task/session-usage";
 import { formatRelative } from "@/lib/format";
 
 /** Enough of a session id to recognise it beside a message that names it. */
@@ -42,6 +47,12 @@ const ID_PREFIX = 8;
  */
 export const TaskSessions = ({ task }: { readonly task: Task }) => {
   const sessions = useQuery(sessionsQuery(task.id));
+  // One request for every row's figures. A session absent from the answer has
+  // nothing recorded, which the row says in words rather than as a zero.
+  const usage = useQuery(sessionsUsageQuery(task.id));
+  const usageBySession = new Map(
+    (usage.data ?? []).map((row) => [row.sessionId, row])
+  );
 
   if (sessions.isPending) {
     return <Pending label="Loading sessions" lines={3} />;
@@ -60,7 +71,12 @@ export const TaskSessions = ({ task }: { readonly task: Task }) => {
   return (
     <ItemGroup className="gap-1">
       {sessions.data.map((session) => (
-        <SessionRow key={session.id} session={session} taskId={task.id} />
+        <SessionRow
+          key={session.id}
+          session={session}
+          taskId={task.id}
+          usage={usageBySession.get(session.id)}
+        />
       ))}
     </ItemGroup>
   );
@@ -69,15 +85,23 @@ export const TaskSessions = ({ task }: { readonly task: Task }) => {
 interface SessionRowProps {
   readonly session: AgentSession;
   readonly taskId: TaskId;
+  /** Absent until a run on this session has finished and left figures. */
+  readonly usage: AgentSessionUsage | undefined;
 }
 
 /**
- * One session: what it is talking to, whether it can still be resumed, and why
- * it stopped if it failed. A failed session stays in the list because it is
- * part of what happened on the task — hiding it would leave a gap between two
- * runs that a reader cannot account for.
+ * One session: what it is talking to, whether it can still be resumed, why it
+ * stopped if it failed, and how much of its context window it is holding. A
+ * failed session stays in the list because it is part of what happened on the
+ * task — hiding it would leave a gap between two runs that a reader cannot
+ * account for.
+ *
+ * The window figure is on the row rather than behind the disclosure because it
+ * is the one that changes what a person does next: a session near the end of
+ * its window is one to stop and continue in a fresh one, and that decision is
+ * made while scanning the list.
  */
-const SessionRow = ({ session, taskId }: SessionRowProps) => (
+const SessionRow = ({ session, taskId, usage }: SessionRowProps) => (
   <Collapsible className="rounded-md border border-border">
     <Item size="sm">
       <ItemMedia variant="icon">
@@ -106,6 +130,10 @@ const SessionRow = ({ session, taskId }: SessionRowProps) => (
             {session.errorMessage}
           </ItemDescription>
         )}
+        <SessionUsagePanel
+          running={session.status === "running"}
+          usage={usage}
+        />
       </ItemContent>
       <ItemActions>
         <CollapsibleTrigger

@@ -26,6 +26,12 @@
  * `gh` command line and therefore a credential. A caller putting one on a
  * durable event summarizes or sanitizes it first; the reader's job is fidelity
  * to the file.
+ *
+ * The economics come out of the same read, as {@link TranscriptUsage} — one
+ * reading per model request, beside the conversation rather than inside it.
+ * Both vendors write their token counts into these files and nothing else in
+ * the system was reading them, which left "how full is this session's context
+ * window" answerable only by opening the file by hand.
  */
 
 import { basename, join } from "node:path";
@@ -89,18 +95,90 @@ export const TranscriptEntry = Schema.Struct({
 export interface TranscriptEntry
   extends Schema.Schema.Type<typeof TranscriptEntry> {}
 
-/** One parsed transcript file: the conversation, and whose it was. */
+/**
+ * What one model request cost, as the provider recorded it.
+ *
+ * A parallel stream rather than a field on {@link TranscriptEntry}, because the
+ * two do not line up: one Claude line explodes into a thinking block, some
+ * prose and four tool calls — six entries against one usage reading — and
+ * repeating the reading on each of them is a number that gets summed six times
+ * by the first person who tries. A request is its own thing and is counted as
+ * one.
+ *
+ * Every field is nullable and none is invented. The providers report different
+ * halves of the same picture, and a zero standing in for a figure a provider
+ * never wrote is the one mistake that makes the whole record untrustworthy.
+ * What is normalized is meaning, never presence: {@link TranscriptUsage.input}
+ * is *fresh* prompt tokens on both providers, because Codex's own
+ * `input_tokens` includes what it read from cache and Claude's does not, and
+ * adding those two together as if they were the same quantity is a total that
+ * counts a large cache twice.
+ */
+export const TranscriptUsage = Schema.Struct({
+  /** A cache hit's tokens. */
+  cacheRead: Schema.NullOr(Schema.Natural),
+  /** Tokens written into the prompt cache, however long they live. */
+  cacheWrite: Schema.NullOr(Schema.Natural),
+  /**
+   * The part of {@link TranscriptUsage.cacheWrite} written for an hour, which
+   * Claude bills at twice input against 1.25x for five minutes. Null where the
+   * provider does not split the total, and the summary then prices the whole
+   * write at the cheaper rate — which makes the estimate a floor, not a guess.
+   */
+  cacheWrite1h: Schema.NullOr(Schema.Natural),
+  /** The five-minute part of the same total. */
+  cacheWrite5m: Schema.NullOr(Schema.Natural),
+  /**
+   * The window this request occupied: fresh input plus cache reads plus cache
+   * writes. The one figure the growth curve is drawn from, and the only field
+   * here that is not nullable — a reading that could not produce it is not a
+   * reading and is dropped.
+   */
+  context: Schema.Natural,
+  /**
+   * The provider's own context window for this request. Codex writes it into
+   * every `token_count`; Claude writes nothing of the kind, and a null here is
+   * what sends the summary to the model-id lookup.
+   */
+  contextWindow: Schema.NullOr(Schema.Natural),
+  /** Fresh prompt tokens: what neither cache covered. */
+  input: Schema.NullOr(Schema.Natural),
+  /** The 0-based line of the file this reading came from. */
+  line: Schema.Natural,
+  /** What actually answered, which is not always what was asked for. */
+  model: Schema.NullOr(Schema.String),
+  /** The provider's own stamp, verbatim, or null on the lines that carry none. */
+  occurredAt: Schema.NullOr(Schema.String),
+  output: Schema.NullOr(Schema.Natural),
+  /** The thinking half of output, where the provider separates it. Claude does not. */
+  reasoningOutput: Schema.NullOr(Schema.Natural),
+  /**
+   * The speed tier the request ran at, where the provider names one. Claude
+   * writes `standard` or `fast` on every usage block, and fast mode is twice
+   * the price — so this is the difference between a cost estimate and a wrong
+   * one.
+   */
+  speed: Schema.NullOr(Schema.String),
+});
+
+export interface TranscriptUsage
+  extends Schema.Schema.Type<typeof TranscriptUsage> {}
+
+/** One parsed transcript file: the conversation, what it spent, and whose it was. */
 export interface Transcript {
   /** In file order, which is the order things happened. */
   readonly entries: readonly TranscriptEntry[];
   /** The provider's own session id, as the file names or declares it. Null when the file never said. */
   readonly providerSessionId: string | null;
+  /** One reading per model request, in file order. Empty where the provider recorded none. */
+  readonly usage: readonly TranscriptUsage[];
 }
 
 /** A file that parsed to nothing, and the value a parser starts from. */
 export const EMPTY_TRANSCRIPT: Transcript = {
   entries: [],
   providerSessionId: null,
+  usage: [],
 };
 
 /**

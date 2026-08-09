@@ -13,6 +13,7 @@
 import { expect, test } from "bun:test";
 import type {
   AgentSession,
+  AgentSessionUsage,
   Artifact,
   AuditEntry,
   ChatMessage,
@@ -28,6 +29,7 @@ import type {
   Workspace,
 } from "@workspace/domain";
 import type { decodeAgentSession } from "./agent-session";
+import type { decodeAgentSessionUsage } from "./agent-session-usage";
 import type { decodeArtifact } from "./artifact";
 import type { decodeAuditEntry } from "./audit";
 import type {
@@ -71,6 +73,14 @@ test("a decoded agent session is an AgentSession", () => {
   expect(conforms<Decoded<typeof decodeAgentSession>, AgentSession>(true)).toBe(
     true
   );
+});
+
+// The summary is a whole domain value inside one `jsonb` column, so this is the
+// check that the stored shape and the shape the harness derives are one shape.
+test("a decoded session usage row is an AgentSessionUsage", () => {
+  expect(
+    conforms<Decoded<typeof decodeAgentSessionUsage>, AgentSessionUsage>(true)
+  ).toBe(true);
 });
 
 test("a decoded run is a Run", () => {

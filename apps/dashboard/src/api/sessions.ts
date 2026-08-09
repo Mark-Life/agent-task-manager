@@ -25,6 +25,21 @@ export const sessionsQuery = (taskId: TaskId) =>
     client.sessions.list({ params: { taskId } })
   );
 
+/**
+ * What each of a task's sessions spent, keyed by session id.
+ *
+ * One request for the whole panel: the figure a reader wants at a glance —
+ * how full is this context window — belongs on every row, and a per-row query
+ * would turn a five-session task into five calls to draw five bars.
+ *
+ * A session with nothing recorded is absent from the answer rather than present
+ * and zeroed, so the map lookup returning nothing is the honest empty state.
+ */
+export const sessionsUsageQuery = (taskId: TaskId) =>
+  apiQuery(keys.sessionsUsage(taskId), (client) =>
+    client.sessions.usage({ params: { taskId } })
+  );
+
 /** One session: its provider, its status, and why it failed if it did. */
 export const sessionQuery = (taskId: TaskId, sessionId: AgentSessionId) =>
   apiQuery(keys.session(taskId, sessionId), (client) =>

@@ -11,6 +11,7 @@ import { RunRepo } from "./repositories/run";
 import { RunCommandRepo } from "./repositories/run-command";
 import { RunEventRepo } from "./repositories/run-event";
 import { AgentSessionRepo } from "./repositories/session";
+import { AgentSessionUsageRepo } from "./repositories/session-usage";
 import { TaskRepo } from "./repositories/task";
 import { TaskMessageRepo } from "./repositories/task-message";
 import { WorkspaceRepo } from "./repositories/workspace";
@@ -31,6 +32,7 @@ import { WorkspaceRepo } from "./repositories/workspace";
  */
 export const repositoriesLayer = Layer.mergeAll(
   AgentSessionRepo.layer,
+  AgentSessionUsageRepo.layer,
   ArtifactRepo.layer,
   AuditLogRepo.layer,
   ChatMessageRepo.layer,
