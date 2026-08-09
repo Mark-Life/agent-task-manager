@@ -1,0 +1,56 @@
+# The nightly backup, as a systemd *user* service.
+#
+# Started by atm-backup.timer, never enabled on its own — a `Type=oneshot` unit
+# with no timer would run once at boot and never again, which looks enabled and
+# is not a schedule.
+#
+# What it copies and where it puts it is `scripts/backup.ts`. What matters here:
+# it needs `DATABASE_URL` and `DATA_ROOT` from common.env, and it needs the
+# docker socket, because the client it prefers is the one inside the Postgres
+# container — a `pg_dump` older than the server refuses to run, and that is the
+# way a backup schedule turns out to have been failing for months. A user
+# service is the operator, who is already in the `docker` group, so there is
+# nothing to grant here.
+#
+#   systemctl --user enable --now atm-backup.timer   # or: bun run service:install
+#   bun run backup                                   # the same thing, right now
+#
+# Taking a backup while a run is live is safe: `pg_dump` reads one MVCC
+# snapshot, so it sees the database as of the moment it started and no writer
+# blocks on it. The artifact tar is not snapshotted, so a file a run writes
+# mid-tar can land half-copied; the next night's set has it whole, and the
+# alternative is stopping the loop every night for three megabytes.
+
+[Unit]
+Description=Agent Task Manager backup (user)
+Documentation=file:%h/projects/agent-task-manager/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/agent-task-manager
+
+EnvironmentFile=%h/.config/agent-task-manager/common.env
+
+ExecStart=%h/.bun/bin/bun run scripts/backup.ts take
+
+# A dump that hangs on a lock is worse than one that failed: the timer would
+# not fire again while it held. `pg_dump` takes no exclusive locks, so this is
+# a backstop against a wedged docker daemon rather than against Postgres.
+TimeoutStartSec=30min
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=atm-backup
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+
+# No [Install] section. The timer is what gets enabled; enabling this unit
+# directly would run one backup at boot and call it a schedule.

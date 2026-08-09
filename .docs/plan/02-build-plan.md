@@ -538,6 +538,11 @@ reads back in full.
    workspace has a second member. The shared agent home is the same shortcut in a second
    place: nothing prunes it, so any run can read any other run's conversation.
 5. **Backups**: database dump plus the artifact tree, on a schedule, restore tested once.
+   **Shipped** as `scripts/backup.ts` and `deploy/user/atm-backup.{service,timer}` — 14 daily
+   sets and 4 weekly, and `bun run backup:verify` restores one into a scratch database and
+   compares every table's row count against the manifest, rather than reading a table of
+   contents and calling that a restore. The event ledger is deliberately not in a set; it
+   joins one when item 6 gives it a bounded size.
 6. **Event ledger rotation and retention** enforced — size-capped rotation on the JSONL,
    a stated retention window, and the backup covers the ledger too.
 7. **OTLP destination chosen and pointed at** — Axiom or a collector, endpoint and headers
