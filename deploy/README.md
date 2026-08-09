@@ -156,6 +156,13 @@ sudo -u atm bun run entrypoint:build   # ${DATA_ROOT}/bin/turn.js — the contai
 sudo -u atm bun run agent-mcp:build    # ${DATA_ROOT}/bin/agent-mcp.js — the board tools
 ```
 
+`images:build` also sweeps: each image's dated tags beyond the newest two, and
+the whole build cache. That is the only thing on this host that removes docker
+data, and without it a weekly rebuild adds a few gigabytes a week to a disk that
+also holds every run's checkout. `bun run images:build --prune` is the sweep on
+its own, for a host that has been building for a while; `docker/README.md` says
+what it will not remove and why.
+
 **9. The services.**
 
 ```sh
