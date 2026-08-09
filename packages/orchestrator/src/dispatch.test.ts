@@ -26,13 +26,18 @@ import {
 import {
   Actor,
   NextSession,
+  type RunOutcome,
   type Task,
   type TaskId,
   UserId,
 } from "@workspace/domain";
 import { DateTime, Effect, Layer, ManagedRuntime, Schema } from "effect";
 import { attemptAfter, Dispatch, isParked, type Skipped } from "./dispatch";
-import { type DispatchContext, resumeSessionIdOf } from "./dispatch-context";
+import {
+  type DispatchContext,
+  resumeSessionIdOf,
+  sessionIdOf,
+} from "./dispatch-context";
 import { openRun } from "./open-run";
 import { workerAttachment } from "./subject";
 
@@ -125,6 +130,50 @@ const claimedOf = (decision: DispatchContext | Skipped) => {
   }
   return decision;
 };
+
+/**
+ * Gives the run's session the id the harness would have reported, which is the
+ * only thing a resume can be built from: a session without one resolves as
+ * fresh however resumable it is.
+ */
+const nameConversation = (
+  context: DispatchContext,
+  providerSessionId: string
+) =>
+  Effect.gen(function* () {
+    const sessions = yield* AgentSessionRepo;
+    yield* asLoop(
+      sessions.recordProviderSession({
+        id: sessionIdOf(context),
+        providerSessionId,
+        workspaceId,
+      })
+    );
+  });
+
+/**
+ * Ends the run a claim opened, the way the terminal path ends one: the outcome
+ * onto the run row, and the session ended to match. Every ending that is not a
+ * clean finish lands as `failed`, which is exactly the flattening the resume
+ * gate has to see through — a session the clock killed and a session that
+ * crashed carry the same status and differ only in the run's outcome.
+ */
+const endRun = (context: DispatchContext, outcome: RunOutcome) =>
+  Effect.gen(function* () {
+    const runs = yield* RunRepo;
+    const sessions = yield* AgentSessionRepo;
+    const sessionId = sessionIdOf(context);
+    yield* asLoop(runs.close({ id: context.runId, outcome, workspaceId }));
+    yield* asLoop(
+      outcome === "done"
+        ? sessions.finish({ id: sessionId, workspaceId })
+        : sessions.fail({
+            errorMessage: `the run ended as ${outcome}`,
+            id: sessionId,
+            workspaceId,
+          })
+    );
+  });
 
 /** The ids the dispatcher would spend its next slots on, whole column. */
 const queueIds = Effect.gen(function* () {
@@ -348,6 +397,110 @@ describe("Dispatch.plan", () => {
     expect(result.claimed.session.selected).toBe("new");
     expect(result.claimed.session.session.id).not.toBe(result.earlierId);
     expect(result.stored.nextSessionNew).toBe(false);
+  });
+});
+
+/**
+ * What the next attempt inherits, which is the difference between a retry that
+ * carries on and a retry that pays for the whole task again.
+ *
+ * A session is `failed` for every ending that is not a clean finish, so the
+ * status alone cannot tell the wall clock apart from a crash. These claim, end
+ * the run with one outcome or another, and claim again — the shape the loop
+ * actually produces, which is why they are here against the database rather
+ * than beside the predicate they exercise.
+ */
+describe("Dispatch, on a task whose last run ended", () => {
+  test("resumes the conversation the wall clock cut off", async () => {
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const task = yield* fileTask("dispatch: resume after a timeout");
+
+        const first = claimedOf(yield* asLoop(claim(task)));
+        yield* nameConversation(first, "claude-timed-out-1");
+        yield* endRun(first, "timeout");
+
+        return { first, second: claimedOf(yield* asLoop(claim(task))) };
+      })
+    );
+
+    expect(result.second.session.mode).toBe("resumed");
+    expect(resumeSessionIdOf(result.second)).toBe("claude-timed-out-1");
+    expect(sessionIdOf(result.second)).toBe(sessionIdOf(result.first));
+  });
+
+  test("starts clean after a crash rather than resuming into it", async () => {
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const task = yield* fileTask("dispatch: fresh after a crash");
+
+        const first = claimedOf(yield* asLoop(claim(task)));
+        yield* nameConversation(first, "claude-crashed-1");
+        yield* endRun(first, "errored");
+
+        return { first, second: claimedOf(yield* asLoop(claim(task))) };
+      })
+    );
+
+    expect(result.second.session.mode).toBe("fresh");
+    expect(resumeSessionIdOf(result.second)).toBeNull();
+    expect(sessionIdOf(result.second)).not.toBe(sessionIdOf(result.first));
+  });
+
+  test("offers the same wall once — a second timeout starts clean", async () => {
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const task = yield* fileTask("dispatch: one resume per wall");
+
+        const first = claimedOf(yield* asLoop(claim(task)));
+        yield* nameConversation(first, "claude-timed-out-2");
+        yield* endRun(first, "timeout");
+
+        const second = claimedOf(yield* asLoop(claim(task)));
+        yield* endRun(second, "timeout");
+
+        return { second, third: claimedOf(yield* asLoop(claim(task))) };
+      })
+    );
+
+    expect(result.second.session.mode).toBe("resumed");
+    expect(result.third.session.mode).toBe("fresh");
+    expect(sessionIdOf(result.third)).not.toBe(sessionIdOf(result.second));
+  });
+
+  test("puts the session it resumes back to running, so the next ending lands", async () => {
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const sessions = yield* AgentSessionRepo;
+        const task = yield* fileTask("dispatch: a resumed session runs again");
+
+        const first = claimedOf(yield* asLoop(claim(task)));
+        yield* nameConversation(first, "claude-finished-1");
+        yield* endRun(first, "done");
+
+        const second = claimedOf(yield* asLoop(claim(task)));
+        const resumed = yield* sessions.byId({
+          id: sessionIdOf(second),
+          workspaceId,
+        });
+        yield* endRun(second, "timeout");
+
+        return {
+          ended: yield* sessions.byId({
+            id: sessionIdOf(second),
+            workspaceId,
+          }),
+          resumed,
+          second,
+        };
+      })
+    );
+
+    expect(result.second.session.mode).toBe("resumed");
+    expect(result.resumed.status).toBe("running");
+    expect(result.resumed.endedAt).toBeNull();
+    expect(result.ended.status).toBe("failed");
+    expect(result.ended.errorMessage).toBe("the run ended as timeout");
   });
 });
 

@@ -1,6 +1,8 @@
 import type {
   AgentSession,
   ChatMessageId,
+  ResumeCandidate,
+  RunOutcome,
   RunSubject,
   SessionProvider,
   TaskId,
@@ -11,19 +13,22 @@ import type {
 } from "@workspace/domain";
 import {
   AgentSessionId,
+  isResumable,
   newAgentSessionId,
   SessionStatus,
   UnreadWatermarkId,
 } from "@workspace/domain";
-import { and, desc, eq, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, type SQL } from "drizzle-orm";
 import { Context, DateTime, Effect, Layer, Schema } from "effect";
 import { Database } from "../client";
 import {
   AgentSessionInsert,
   AgentSessionUpdate,
   decodeAgentSession,
+  decodeSessionRunOutcome,
 } from "../rows";
 import { agentSession } from "../schema/agent-session";
+import { run } from "../schema/run";
 import {
   auditCreate,
   audited,
@@ -45,6 +50,9 @@ const ONE = 1;
 
 /** The table these rows live in, and what an error names them as. */
 const ENTITY = "agent_session";
+
+/** The other table read here: a session's runs are where its failure has a cause. */
+const ENTITY_RUN = "run";
 
 /** What an encoded patch looks like once the domain values have become columns. */
 type SessionValues = BrandedEncoded<typeof AgentSessionUpdate>;
@@ -114,6 +122,14 @@ const subjectOf = (subject: RunSubject) =>
   subject.kind === "task"
     ? eq(agentSession.taskId, subject.id)
     : eq(agentSession.threadId, subject.id);
+
+/**
+ * A session, and how its runs ended. What {@link isResumable} is asked about,
+ * with the whole row kept so the caller that accepts one can use it.
+ */
+export interface SessionResumeCandidate extends ResumeCandidate {
+  readonly session: AgentSession;
+}
 
 const make = Effect.gen(function* () {
   const db = yield* Database;
@@ -287,6 +303,34 @@ const make = Effect.gen(function* () {
   });
 
   /**
+   * Puts a session back to running, for the run that is resuming it.
+   *
+   * `status`, `endedAt` and `errorMessage` describe the session's most recent
+   * run — that is what the column comment on `endedAt` says and what the session
+   * list shows — and a resumed session is about to have a newer one. Without
+   * this the row keeps the old ending forever: {@link stop} refuses to end a
+   * session that is not running, so every close after the first is refused and
+   * the session goes on reading as finished, or as failed with a message about a
+   * failure this run has already superseded.
+   *
+   * Only the ending is cleared. The provider's own session id and the watermark
+   * are exactly what the resume is built from, and a resume that forgot the
+   * watermark would re-read the conversation from the beginning.
+   */
+  const reopen = Effect.fn("AgentSessionRepo.reopen")(function* (
+    input: SessionRef
+  ) {
+    yield* Effect.annotateCurrentSpan({ sessionId: input.id });
+    return yield* revise(input, "AgentSessionRepo.reopen", () =>
+      encodeWrite({
+        entity: ENTITY,
+        schema: AgentSessionUpdate,
+        value: { endedAt: null, errorMessage: null, status: "running" },
+      })
+    );
+  });
+
+  /**
    * Records the id the harness minted for this conversation, which is only known
    * once the harness has answered. Kept apart from `provider` so the provider can
    * change without rewriting the session.
@@ -391,11 +435,103 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * The session a task resumes by default: its newest one that did not fail.
-   * Having ended disqualifies nothing — a cleanly finished session is the normal
-   * resume target, which is what "continue the task's latest session" means — so
-   * only a failure is excluded. Null means there is nothing to resume and the
-   * dispatcher opens a fresh session instead.
+   * How the runs on each of these sessions ended, newest first, keyed by
+   * session.
+   *
+   * A second query rather than a subquery on the first. The obvious `array_agg`
+   * correlated on the session's id does not survive drizzle: inside a raw `sql`
+   * template it renders column references unqualified, so `agent_session_id =
+   * id` compares two columns of `run` and every session comes back with no
+   * outcomes at all — a wrong answer rather than an error. Two reads that the
+   * query builder can name the tables in are worth one round trip.
+   */
+  const outcomesOf = (operation: string, sessions: readonly AgentSession[]) =>
+    Effect.gen(function* () {
+      const bySession = new Map<AgentSessionId, RunOutcome[]>();
+      if (sessions.length === 0) {
+        return bySession;
+      }
+      const rows = yield* execute(
+        operation,
+        db
+          .select({
+            agentSessionId: run.agentSessionId,
+            outcome: run.outcome,
+          })
+          .from(run)
+          .where(
+            and(
+              inArray(
+                run.agentSessionId,
+                sessions.map((session) => session.id)
+              ),
+              isNotNull(run.outcome)
+            )
+          )
+          .orderBy(desc(run.createdAt), desc(run.id))
+      );
+      const ended = yield* decodeMany({
+        decode: decodeSessionRunOutcome,
+        entity: ENTITY_RUN,
+        rows,
+      });
+      for (const row of ended) {
+        const found = bySession.get(row.agentSessionId);
+        if (found === undefined) {
+          bySession.set(row.agentSessionId, [row.outcome]);
+        } else {
+          found.push(row.outcome);
+        }
+      }
+      return bySession;
+    });
+
+  /**
+   * Sessions matching `where`, newest first, each with the outcomes of its runs.
+   *
+   * Unbounded on purpose, and bounded in fact: a subject accumulates a session
+   * per deliberate restart and a run per retry before the ladder parks the task,
+   * so both lists are short. A limit here would instead be a number the resume
+   * rule silently depends on.
+   */
+  const candidatesWhere = (operation: string, where: SQL | undefined) =>
+    Effect.gen(function* () {
+      const rows = yield* execute(
+        operation,
+        db
+          .select()
+          .from(agentSession)
+          .where(where)
+          .orderBy(desc(agentSession.createdAt), desc(agentSession.id))
+      );
+      const sessions = yield* decodeMany({
+        decode: decodeAgentSession,
+        entity: ENTITY,
+        rows,
+      });
+      const outcomes = yield* outcomesOf(operation, sessions);
+      return sessions.map(
+        (session) =>
+          ({
+            outcomes: outcomes.get(session.id) ?? [],
+            session,
+          }) satisfies SessionResumeCandidate
+      );
+    });
+
+  /**
+   * The session a task resumes by default: its newest one {@link isResumable}
+   * accepts. Null means there is nothing to resume and the dispatcher opens a
+   * fresh session instead.
+   *
+   * A search rather than a check, which is why the rule is applied in here
+   * rather than by the caller: the answer is *which* session, and the newest is
+   * not always it. A failed one is stepped over to reach an older resumable
+   * session behind it, the same way it always was — what has changed is that
+   * "failed" is no longer the whole of the question. A session the wall clock
+   * ended is picked up rather than stepped over, because the conversation behind
+   * it is intact and the alternative is the next attempt deriving it again from
+   * nothing.
    */
   const latestResumable = Effect.fn("AgentSessionRepo.latestResumable")(
     function* (input: SubjectRef) {
@@ -403,27 +539,34 @@ const make = Effect.gen(function* () {
         subjectId: input.subject.id,
         subjectKind: input.subject.kind,
       });
-      const rows = yield* execute(
+      const candidates = yield* candidatesWhere(
         "AgentSessionRepo.latestResumable",
-        db
-          .select()
-          .from(agentSession)
-          .where(
-            and(
-              eq(agentSession.workspaceId, input.workspaceId),
-              subjectOf(input.subject),
-              ne(agentSession.status, "failed")
-            )
-          )
-          .orderBy(desc(agentSession.createdAt), desc(agentSession.id))
-          .limit(ONE)
+        and(
+          eq(agentSession.workspaceId, input.workspaceId),
+          subjectOf(input.subject)
+        )
       );
-      const found = yield* decodeMany({
-        decode: decodeAgentSession,
-        entity: ENTITY,
-        rows,
-      });
-      return found[0] ?? null;
+      return candidates.find(isResumable)?.session ?? null;
+    }
+  );
+
+  /**
+   * One session by id, with what the resume gate needs to judge it. For a task
+   * pinned to a specific session: the caller asks {@link isResumable} itself,
+   * because a pin is a check on a session already chosen rather than a search
+   * for one, and the two answers are worth reading in the same place.
+   *
+   * Null for a pin whose session has been deleted, which the dispatcher degrades
+   * to a fresh session rather than failing on.
+   */
+  const resumeCandidate = Effect.fn("AgentSessionRepo.resumeCandidate")(
+    function* (input: SessionRef) {
+      yield* Effect.annotateCurrentSpan({ sessionId: input.id });
+      const candidates = yield* candidatesWhere(
+        "AgentSessionRepo.resumeCandidate",
+        refOf(input)
+      );
+      return candidates[0] ?? null;
     }
   );
 
@@ -437,6 +580,8 @@ const make = Effect.gen(function* () {
     listByThread,
     open,
     recordProviderSession,
+    reopen,
+    resumeCandidate,
   } as const;
 });
 

@@ -46,7 +46,12 @@ export type SessionProvider = typeof SessionProvider.Type;
 /** A session that died producing nothing stays visible as `failed` rather than as an absence. */
 export const SESSION_STATUSES = ["running", "finished", "failed"] as const;
 
-/** Whether a session can still be resumed. `finished` is the normal resume target. */
+/**
+ * How a session ended, which is most but not all of whether it can be resumed:
+ * `failed` covers the agent breaking and the wall clock running out alike, and
+ * telling those apart needs the last run's outcome. `isResumable` is the whole
+ * of the question; this is one of its two inputs.
+ */
 export const SessionStatus = Schema.Literals(SESSION_STATUSES);
 export type SessionStatus = typeof SessionStatus.Type;
 

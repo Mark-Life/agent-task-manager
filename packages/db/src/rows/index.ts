@@ -84,7 +84,14 @@ export {
   ProposalRow,
   ProposalUpdate,
 } from "./proposal";
-export { decodeRun, RunInsert, RunRow, RunUpdate } from "./run";
+export {
+  decodeRun,
+  decodeSessionRunOutcome,
+  RunInsert,
+  RunRow,
+  RunUpdate,
+  SessionRunOutcomeRow,
+} from "./run";
 export {
   decodeRunCommand,
   RunCommandInsert,

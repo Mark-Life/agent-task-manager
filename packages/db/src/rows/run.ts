@@ -65,3 +65,25 @@ export const RunUpdate = createUpdateSchema(run, columns);
 
 /** Turns a raw row into the domain entity. */
 export const decodeRun = Schema.decodeUnknownEffect(RunRow);
+
+/**
+ * The two columns the resume decision reads off a run: which session it belongs
+ * to, and how it ended.
+ *
+ * A projection rather than the whole row, because "should this session be picked
+ * up again" is a two-column question and a session with a long history should
+ * not cost a page of columns to ask it.
+ *
+ * `outcome` is not null here where it is nullable on {@link RunRow}: the query
+ * behind this excludes the live runs, which are the only ones without one. A
+ * null reaching this decode is that filter having been dropped, and failing is
+ * the right answer to it.
+ */
+export const SessionRunOutcomeRow = Schema.Struct({
+  agentSessionId: AgentSessionId,
+  outcome: RunOutcome,
+});
+
+/** Turns one `(session, outcome)` projection into the pair the resume gate counts. */
+export const decodeSessionRunOutcome =
+  Schema.decodeUnknownEffect(SessionRunOutcomeRow);
