@@ -24,9 +24,9 @@ import {
   RunRepo,
   storeLayer,
   TaskRepo,
-  WorkspaceRepo,
   withActor,
 } from "@workspace/db";
+import { ensureFixtureWorkspace } from "@workspace/db/testing";
 import type { RunEvent, RunEventPayload } from "@workspace/domain";
 import {
   Actor,
@@ -65,12 +65,6 @@ const WAIT_TIMEOUT = "10 seconds";
 /** Enough for a whole test to finish twice over on a laptop. */
 const TEST_TIMEOUT_MS = 30_000;
 
-/** The database has never been seeded, so there is no workspace to hang a task on. */
-class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
-  "SseTest.NoWorkspace",
-  { detail: Schema.String }
-) {}
-
 /** The listener count is not what it will be yet. Retried, never reported. */
 class NotSettled extends Schema.TaggedErrorClass<NotSettled>()(
   "SseTest.NotSettled",
@@ -96,14 +90,10 @@ const asOrchestrator = withActor(orchestrator);
 
 const workspaceId = await runtime.runPromise(
   Effect.gen(function* () {
-    const workspaces = yield* WorkspaceRepo;
-    const [first] = yield* workspaces.list();
-    if (first === undefined) {
-      return yield* Effect.fail(
-        new NoWorkspace({ detail: "run `bun run db:seed` first" })
-      );
-    }
-    return first.id;
+    const { workspace } = yield* ensureFixtureWorkspace({
+      suite: APPLICATION_NAME,
+    });
+    return workspace.id;
   })
 );
 

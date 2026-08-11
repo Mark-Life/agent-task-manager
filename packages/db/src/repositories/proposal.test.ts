@@ -25,24 +25,18 @@ import type {
   WorkspaceId,
 } from "@workspace/domain";
 import { Actor, UserId } from "@workspace/domain";
-import { Cause, Effect, Layer, ManagedRuntime, Schema } from "effect";
+import { Cause, Effect, Layer, ManagedRuntime } from "effect";
 import { CurrentActor, withActor } from "../actor";
 import { storeLayer } from "../store";
+import { ensureFixtureWorkspace } from "../testing/fixtures";
 import { ProjectRepo } from "./project";
 import { ProposalRepo } from "./proposal";
 import { RunRepo } from "./run";
 import { AgentSessionRepo } from "./session";
 import { TaskRepo } from "./task";
-import { WorkspaceRepo } from "./workspace";
 
 /** Reported as `application_name`, so `pg_stat_activity` names this process. */
 const APPLICATION_NAME = "db-proposal-test";
-
-/** The database has never been seeded, so there is no workspace to hang a task on. */
-class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
-  "ProposalRepoTest.NoWorkspace",
-  { detail: Schema.String }
-) {}
 
 const caller = Actor.cases.system.make({ reason: APPLICATION_NAME });
 
@@ -100,23 +94,20 @@ const auditFor = Effect.fnUntraced(function* (id: string) {
 beforeAll(async () => {
   const built = await runtime.runPromise(
     Effect.gen(function* () {
-      const workspaces = yield* WorkspaceRepo;
-      const [first] = yield* workspaces.list();
-      if (first === undefined) {
-        return yield* Effect.fail(
-          new NoWorkspace({ detail: "run `bun run db:seed` first" })
-        );
-      }
+      const { workspace } = yield* ensureFixtureWorkspace({
+        suite: APPLICATION_NAME,
+      });
+      const scope = workspace.id;
       const projects = yield* ProjectRepo;
       const tasks = yield* TaskRepo;
       const made = yield* projects.create({
         name: "proposals: the rules a run wanted changed",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       const raised = yield* tasks.create({
         projectId: made.id,
         title: "proposals: the run that asked",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       // A real run, because the row names the attempt that asked: a person
       // deciding a rule change wants the thread back to the work behind it.
@@ -126,20 +117,20 @@ beforeAll(async () => {
       const session = yield* sessions.open({
         provider: "claude",
         subject,
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       const attempt = yield* runs.create({
         agentSessionId: session.id,
         provider: "claude",
         subject,
         trigger: "status_change",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       return {
         project: made,
         run: attempt,
         task: raised,
-        workspaceId: first.id,
+        workspaceId: scope,
       };
     }).pipe(withActor(caller))
   );

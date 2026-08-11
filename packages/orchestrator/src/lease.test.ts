@@ -23,12 +23,14 @@ import { join } from "node:path";
 import { BunFileSystem } from "@effect/platform-bun";
 import {
   AgentSessionRepo,
+  type Auth,
   RunRepo,
   storeLayer,
   TaskRepo,
-  WorkspaceRepo,
+  type WorkspaceRepo,
   withActor,
 } from "@workspace/db";
+import { ensureFixtureWorkspace } from "@workspace/db/testing";
 import {
   Actor,
   newRunId,
@@ -393,18 +395,19 @@ describe("holding a lease around work", () => {
  */
 const databaseUrl = process.env.DATABASE_URL;
 
+/** Names this process in `pg_stat_activity`, and its fixture workspace. */
+const LEASE_SUITE = "orchestrator-lease-test";
+
 describe.skipIf(databaseUrl === undefined)("reconciling lost runs", () => {
   const storeAndLeases = () =>
-    Layer.mergeAll(
-      leaseLayer(),
-      storeLayer({ applicationName: "orchestrator-lease-test" })
-    );
+    Layer.mergeAll(leaseLayer(), storeLayer({ applicationName: LEASE_SUITE }));
 
   const runWithStore = <A, E>(
     program: Effect.Effect<
       A,
       E,
       | AgentSessionRepo
+      | Auth
       | FileSystem
       | LeaseStore
       | RunRepo
@@ -413,16 +416,13 @@ describe.skipIf(databaseUrl === undefined)("reconciling lost runs", () => {
     >
   ) => Effect.runPromise(program.pipe(Effect.provide(storeAndLeases())));
 
-  // The seed script's workspace. Every row below is created inside it and
-  // deleted again, and the cascade takes the session and the run with the task.
-  const seededWorkspace = Effect.gen(function* () {
-    const workspaces = yield* WorkspaceRepo;
-    const [first] = yield* workspaces.list();
-    if (first === undefined) {
-      return yield* Effect.die("no workspace — run `bun run db:seed` first");
-    }
-    return first;
-  });
+  // This suite's own workspace, made on first use. Every row below is created
+  // inside it and deleted again, and the cascade takes the session and the run
+  // with the task.
+  const seededWorkspace = Effect.map(
+    ensureFixtureWorkspace({ suite: LEASE_SUITE }),
+    (fixture) => fixture.workspace
+  );
 
   const actor = Actor.cases.system.make({ reason: "lease test" });
 

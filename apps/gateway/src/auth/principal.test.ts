@@ -24,6 +24,7 @@ import {
   WorkspaceRepo,
   withActor,
 } from "@workspace/db";
+import { ensureFixtureWorkspace } from "@workspace/db/testing";
 import {
   Actor,
   AgentSessionId,
@@ -206,18 +207,15 @@ const asAlice = () =>
 beforeAll(async () => {
   const seeded = await runtime.runPromise(
     Effect.gen(function* () {
-      const workspaces = yield* WorkspaceRepo;
-      const [first] = yield* workspaces.list();
-      return first === undefined
-        ? yield* Effect.fail(
-            new SetupFailed({ detail: "run `bun run db:seed` first" })
-          )
-        : first.id;
+      const fixture = yield* ensureFixtureWorkspace({
+        suite: APPLICATION_NAME,
+      });
+      return fixture.workspace.id;
     })
   );
 
-  // Alice writes, so she works in the seeded workspace: the audit rows her
-  // tasks leave behind outlive this test file and pin the workspace in place.
+  // Alice writes, so she works in this suite's fixture workspace: the audit
+  // rows her tasks leave behind outlive this test file and pin it in place.
   alice = await makePerson("alice", seeded);
 
   const bobsWorkspace = await makePerson("bob", seeded).then(

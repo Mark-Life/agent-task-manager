@@ -20,9 +20,9 @@ import {
   RunRepo,
   storeLayer,
   TaskRepo,
-  WorkspaceRepo,
   withActor,
 } from "@workspace/db";
+import { ensureFixtureWorkspace } from "@workspace/db/testing";
 import type {
   RunSubject,
   Task,
@@ -31,7 +31,7 @@ import type {
   WorkspaceId,
 } from "@workspace/domain";
 import { Actor, parseTraceparent, UserId } from "@workspace/domain";
-import { DateTime, Effect, Layer, Schema, Tracer } from "effect";
+import { DateTime, Effect, Layer, Tracer } from "effect";
 import {
   type DispatchRequest,
   RunCommands,
@@ -46,12 +46,6 @@ const CALLER_SPAN_ID = "00f067aa0ba902b7";
 
 /** Reported as `application_name`, so `pg_stat_activity` names this process. */
 const APPLICATION_NAME = "orchestrator-commands-test";
-
-/** The database has no workspace, so nothing below it can be written. */
-class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
-  "CommandsTest.NoWorkspace",
-  {}
-) {}
 
 /** Everything the stubbed run control was asked to do. */
 interface ControlCalls {
@@ -132,12 +126,10 @@ const createdTaskIds: Task["id"][] = [];
 beforeAll(async () => {
   workspaceId = await runStore(
     Effect.gen(function* () {
-      const workspaces = yield* WorkspaceRepo;
-      const [workspace] = yield* workspaces.list();
-      if (workspace === undefined) {
-        return yield* Effect.fail(new NoWorkspace());
-      }
-      return workspace.id;
+      const fixture = yield* ensureFixtureWorkspace({
+        suite: APPLICATION_NAME,
+      });
+      return fixture.workspace.id;
     })
   );
 });
