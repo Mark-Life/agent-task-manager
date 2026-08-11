@@ -23,10 +23,10 @@ describe("RESUMABLE_OUTCOMES", () => {
     }
   });
 
-  test("leaves out the three endings that say the run's own state went wrong", () => {
+  test("leaves out every ending that is neither clean nor the wall clock", () => {
     const listed = new Set<string>(RESUMABLE_OUTCOMES);
     const rest = RUN_OUTCOMES.filter((outcome) => !listed.has(outcome));
-    expect(rest).toEqual(["errored", "interrupted", "lost"]);
+    expect(rest).toEqual(["errored", "interrupted", "stopped", "lost"]);
   });
 });
 
@@ -44,13 +44,14 @@ describe("isResumable", () => {
     expect(isResumable(candidate("failed", "timeout"))).toBe(true);
   });
 
-  test("a failed session that crashed or went quiet is not", () => {
+  test("a failed session that crashed, went quiet or was interrupted is not", () => {
     expect(isResumable(candidate("failed", "errored"))).toBe(false);
     expect(isResumable(candidate("failed", "lost"))).toBe(false);
+    expect(isResumable(candidate("failed", "interrupted"))).toBe(false);
   });
 
   test("a failed session somebody stopped is not — the stop is the answer", () => {
-    expect(isResumable(candidate("failed", "interrupted"))).toBe(false);
+    expect(isResumable(candidate("failed", "stopped"))).toBe(false);
   });
 
   test("only the newest run decides; older ones are history", () => {
