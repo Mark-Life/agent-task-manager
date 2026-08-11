@@ -33,8 +33,8 @@ import { Config, Effect } from "effect";
  * CLI plus a node/bun toolchain plus a checkout, which sits around 1.5–2 GB
  * resident and will take a whole core whenever the model is not the thing being
  * waited on. Three of those leaves the database competing for memory with the
- * agents, and the browser image adds a Chromium on top. Two runs and a core of
- * headroom is the shape that fits.
+ * agents, before any of them starts the Chromium the image now carries. Two runs
+ * and a core of headroom is the shape that fits.
  *
  * It is a global cap rather than a per-kind one because the constraint is the
  * box, not the work: a trip-planning run and a feature run cost the same

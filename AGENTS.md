@@ -24,6 +24,13 @@ type errors. Errors and warnings fail; suggestions print and do not.
   `bunx effect-tsgo patch --typescript --no-oxlint` if it was skipped. After changing plugin
   options, delete `**/*.tsbuildinfo` — `incremental` caches the old severities.
 
+## Changes you can see
+When a change touches `apps/dashboard` or `packages/ui`, load the browser-check skill:
+`.agents/skills/browser-check/SKILL.md`. The container has a real headless Chromium, so a layout,
+a colour or a control that has to be reachable is something to look at rather than argue from the
+components. The skill covers how to render a surface with no dev server, gateway or database, and
+the four traps that make a correct screenshot come back wrong.
+
 ## Tests that touch the database
 The repository tests write real rows, so they get a database and a workspace of their own. Both
 walls already exist; keep them.

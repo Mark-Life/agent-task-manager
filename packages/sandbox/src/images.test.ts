@@ -28,8 +28,8 @@ describe("image names", () => {
   });
 
   test("a reference is its repository and tag, and nothing is implied", () => {
-    expect(imageRef({ kind: "browser", tag: "2026-01-02-abcdef123456" })).toBe(
-      "atm.local/browser:2026-01-02-abcdef123456"
+    expect(imageRef({ kind: "base", tag: "2026-01-02-abcdef123456" })).toBe(
+      "atm.local/base:2026-01-02-abcdef123456"
     );
   });
 });
@@ -41,8 +41,8 @@ describe("sandboxImageFor", () => {
   });
 
   test("a named image is passed through untouched, including one this file never heard of", () => {
-    expect(sandboxImageFor("atm.local/browser:2026-01-02-abcdef123456")).toBe(
-      "atm.local/browser:2026-01-02-abcdef123456"
+    expect(sandboxImageFor("atm.local/base:2026-01-02-abcdef123456")).toBe(
+      "atm.local/base:2026-01-02-abcdef123456"
     );
     expect(sandboxImageFor("ghcr.io/someone/experiment:v3")).toBe(
       "ghcr.io/someone/experiment:v3"

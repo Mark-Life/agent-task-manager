@@ -26,12 +26,14 @@
  * policy and gave up how a reply is phrased. What is left in this file is
  * therefore the smaller half and the load-bearing one.
  *
- * Four blocks and a function, and the split is the whole of what a role is
+ * Five blocks and a function, and the split is the whole of what a role is
  * allowed to change. {@link SHARED_RULES} is true of anything this system runs.
  * {@link artifactRulesOf} is true of a run with an artifacts folder, which is
  * every worker and no manager, and {@link CREDENTIAL_RULES} of one with a
- * repository to push. {@link WORKER_RULES} and {@link MANAGER_RULES} are the
- * per-role text, and they are the only per-role text there is.
+ * repository to push. {@link BROWSER_RULES} is true of every container, and is
+ * given to workers because they are the ones with something to look at.
+ * {@link WORKER_RULES} and {@link MANAGER_RULES} are the per-role text, and they
+ * are the only per-role text there is.
  *
  * **Every block is written the way it asks to be answered.** A model mirrors
  * the register of its instructions, so a rule demanding two sentences inside
@@ -297,6 +299,39 @@ export const CREDENTIAL_RULES = `## The GitHub credential you hold
 \`git\` and \`gh\` are authenticated as the person who owns this board, with one token on your environment as \`GH_TOKEN\`. \`gh auth status\` prints what it carries. Use it for the whole change: push the branch, open the pull request, and reach repository settings through \`gh api\` when a task is about them.
 
 If GitHub refuses one of those, stop and report it. Say which operation was refused and which scope or permission the refusal named, in your message on the task and in the pull request if you opened one. Do not route around it: a patch file for a human to apply by hand, a pull request that describes the half it could not include, a plan quietly narrowed to what the token allowed. Each of those reads as finished work and is not, and half a change nobody can review as a unit is worse than a run that stops and names the wall.`;
+
+/**
+ * That the container has a browser in it, which is the half of this change that
+ * does any work.
+ *
+ * The image carried a Chromium for a week before this block existed and not one
+ * run used it, because nothing anywhere told a model it was there: not the
+ * seeded documents, not a skill, not the system prompt, not a tool description.
+ * Two runs that needed a page went and built themselves a browser out of `.deb`
+ * files instead, and seven closed by handing a person a check they could have
+ * made themselves. An image with no instruction is the same as no image, which
+ * is why this ships in the same commit as `docker/base.Dockerfile`'s chromium
+ * layer and rolls back with it.
+ *
+ * **It states a capability and one expectation, and stops.** How to drive a
+ * page, what to screenshot, how to render a component without a server — all of
+ * that is repository-specific and belongs in a skill in the repository, where it
+ * can be wrong without a release. What is here is the part the build makes true:
+ * the binary is on PATH, and the flags a container this confined needs are
+ * already on the environment.
+ *
+ * **Workers only, though every container has it.** A manager turn has no
+ * checkout and no acceptance criteria to see for itself, so the paragraph would
+ * be tokens spent on a capability it has no use for. If that stops being true,
+ * this moves into {@link SHARED_RULES} rather than being written twice.
+ */
+export const BROWSER_RULES = `## The browser in your container
+
+\`agent-browser\` is on your PATH and drives a real headless Chromium, already installed at \`/usr/bin/chromium\`. Nothing needs downloading, and the two launch flags this confinement requires are already on the environment.
+
+Use it when the claim you are about to make is about something rendered: a layout, a colour, a control that has to be reachable at a given width, a page that has to load at all. Reading the components and reasoning about the result is a different and weaker claim, and "not verified in a browser" hands a person a check you were holding the tools to make.
+
+If you could not look, say which claim went unchecked and why.`;
 
 /**
  * The rule the stop hook enforces, in its positive form, and the one thing to

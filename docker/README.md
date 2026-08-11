@@ -1,12 +1,9 @@
-# Sandbox images
+# Sandbox image
 
-Two arm64 images. Every run gets a container from one of them, and everything
-that container can do is what was baked in here.
-
-| Image | What it is | When a task takes it |
-| --- | --- | --- |
-| `atm.local/base` | bun, node, git, `gh`, ripgrep, `python3`, `jq`, `bc`, the Claude CLI and the Codex CLI | everything, unless the task says otherwise |
-| `atm.local/browser` | base plus Chromium and `agent-browser` | a task that has to drive a real page |
+One arm64 image. Every run gets a container from it, and everything that
+container can do is what was baked in here: bun, node, git, `gh`, ripgrep,
+`python3`, `jq`, `bc`, the Claude CLI, the Codex CLI, Chromium and
+`agent-browser`.
 
 `atm.local` is a registry that does not exist, deliberately. A bare name like
 `atm-base` is a valid Docker Hub coordinate, so a container started before the
@@ -23,18 +20,33 @@ untouched: an operator pinning a dated tag, or naming an image built by hand, is
 making a decision, and rejecting it in code would mean a redeploy to try a new
 image.
 
-Two things follow from that. The browser image is opt-in per task, because it is
-several hundred megabytes heavier and image size is start latency on a host that
-fits three containers. And a task that must not move with the fleet pins the
-dated tag rather than `latest`; which image actually ran is recorded on
-`run.sandbox_image` either way.
+With one image the field is no longer how a run asks for a capability — it is
+how a task that must not move with the fleet pins a build. Which image actually
+ran is recorded on `run.sandbox_image` either way.
+
+### There were two, and why there is one
+
+`atm.local/browser` was this image plus Chromium, opted into per task, because
+several hundred megabytes was held to be start latency every run would otherwise
+pay. Both halves were wrong.
+
+Nothing pulls at container start. The images are built on the host that runs
+them, `atm.local` resolves nowhere, and `--pull=missing` therefore either mounts
+local layers or fails — it never downloads, so the size is a mount cost, not a
+download. Nor does the split save disk: the browser image was built **on** this
+one, so the host stored `base + delta` either way.
+
+What the split did cost was the capability. Not one run was ever started from
+the browser image: `task.sandbox_image` was a free-text box, hidden until it had
+a value, that no rule, prompt or tool description ever mentioned. Meanwhile two
+runs that needed a page staged a Chromium into `$HOME` at run time — the
+per-run download the second image existed to avoid — and seven more closed with
+"not verified in a browser" and handed the check to a person.
 
 ## Building
 
 ```sh
-bun run images:build            # both, base first, then sweep what they replaced
-bun run images:build --base
-bun run images:build --browser  # on the base image's `latest`
+bun run images:build            # build, then sweep what it replaced
 bun run images:build --check    # what is here, how old, and what a sweep would remove
 bun run images:build --prune    # sweep only; builds nothing
 bun run images:build --no-prune # build and leave the old tags alone
@@ -44,23 +56,20 @@ bun run images:build --keep=4   # how many dated builds survive a sweep; 2 by de
 Each build produces two tags: `YYYY-MM-DD-<12 hex of the Dockerfile digest>`,
 which never moves, and `latest`, which is repointed. The date is what an
 operator actually asks about an image; the digest is what keeps the tag honest
-when two builds happen on the same day. When both images are built in one
-invocation, the browser image is built against the base image's dated tag rather
-than against `latest`, so the pair cannot drift while both look current.
+when two builds happen on the same day.
 
 `--check` reads `docker image inspect` and prints age, size and the pinned
-versions each image recorded about itself as OCI labels — no container is
+versions the image recorded about itself as OCI labels — no container is
 started. It calls an image stale after 14 days, which is twice the cadence
 below: one missed rebuild is not an alarm, two are.
 
-A base build takes several minutes, most of it the two agent CLIs. The daemon's
-output is streamed line by line as it goes.
+A build takes several minutes, most of it the two agent CLIs and Chromium. The
+daemon's output is streamed line by line as it goes.
 
 ## What a build removes
 
 Every build ends by sweeping, because nothing else on the host does. It removes
-the dated tags of each image it built beyond the newest two, and then drops the
-whole build cache. Left alone, a weekly rebuild is about two gigabytes of images
+the dated tags beyond the newest two, and then drops the whole build cache. Left alone, a weekly rebuild is about two gigabytes of images
 plus a few of cache per week, on a disk that has to hold the run data too.
 
 Removing tags **by name** is the whole safety of it. `docker image prune -a`
@@ -112,15 +121,15 @@ pinned beside it — both harnesses parse a protocol that is versioned with the
 binary, so a CLI ahead of the harness is a turn that starts fine and then stops
 making sense.
 
-## What is in the base image, and why
+## What is in the image, and why
 
-Read `base.Dockerfile`; every choice is commented there. The four that matter
+Read `base.Dockerfile`; every choice is commented there. The five that matter
 outside the file:
 
 **`python3`, `jq` and `bc` are on PATH.** They are there because they were
 missing: across 184 runs, `python3: command not found` came back 52 times, `jq`
 10 and `bc` 5, and every one of those cost a failed command and a rewrite. The
-three cost 26 MiB installed on an image of roughly 1.1 GiB. `turbo` is
+three cost 26 MiB installed on an image of roughly 1.9 GiB. `turbo` is
 deliberately not among them — it is a repo's own build tool, pinned in that
 repo's `package.json`, and `bun run build` runs the pinned one. A global copy
 would be a second version answering to the same name.
@@ -151,19 +160,22 @@ orchestrator controls.
 **No git identity.** `user.name` and `user.email` are policy, not tooling, and
 belong to whatever starts the run.
 
-## What is in the browser image, and why
+**Chromium and `agent-browser`.** Debian's `chromium`, which drags in its own
+runtime stack as ordinary package dependencies, plus two font packages Chromium
+does not depend on and is visibly broken without. 695 MB installed across 159
+packages, more than half the image, and the reason it is the last layer built.
 
-Debian's `chromium`, which drags in its own runtime stack as ordinary package
-dependencies, plus two font packages Chromium does not depend on and is visibly
-broken without. Nothing is fetched from Chrome for Testing: `agent-browser
-install` downloads a Chrome into the user's home, which here is a per-run agent
-home that is thrown away, so it would be a several-hundred-megabyte download
-every run.
+Nothing is fetched from Chrome for Testing: `agent-browser install` downloads a
+Chrome into the user's home, which here is a per-run agent home that is thrown
+away, so it would be a several-hundred-megabyte download every run.
+`AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium` is what stops it trying.
+`AGENT_BROWSER_ARGS=--no-sandbox,--disable-dev-shm-usage` is set for the same
+reason: both flags are consequences of the confinement in `hardening.ts` rather
+than preferences — `--cap-drop=ALL` with `no-new-privileges` removes what
+Chromium's own sandbox needs, and docker's default 64 MB `/dev/shm` crashes a
+renderer on any page of weight. Both failures are hangs rather than clean
+errors, which is why they are set in the image and not left to a caller.
 
-The image sets `AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium` and
-`AGENT_BROWSER_ARGS=--no-sandbox,--disable-dev-shm-usage`. Both flags are
-consequences of the confinement in `hardening.ts` rather than preferences:
-`--cap-drop=ALL` with `no-new-privileges` removes what Chromium's own sandbox
-needs, and docker's default 64 MB `/dev/shm` crashes a renderer on any page of
-weight. Both failures are hangs rather than clean errors, which is why they are
-set in the image and not left to a caller.
+The build's last step renders `about:blank` rather than running
+`chromium --version`, because a missing library, a font stack with no fonts and
+a too-small `/dev/shm` all leave `--version` answering perfectly.
