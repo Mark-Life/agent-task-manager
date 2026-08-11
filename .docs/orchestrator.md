@@ -117,6 +117,19 @@ moving the task, and writing the terminus row the killed process could not. A ru
 `atm.run` rows sharing one `runId`: a `start` when it is claimed and a terminus on every exit
 path, so a start with no end is a countable `lost` run rather than silence.
 
+**The same boot pass reclaims the disk and the daemon.** A teardown registered before a
+container starts covers every ordinary ending and cannot cover its own process being killed, so
+after the rows are closed the loop joins what is on the host against what the database still
+owns: labelled containers against the live runs, then `runs/<runId>` against the run rows,
+`workspaces/<runId>` and `composed-skills/<runId>` against the live ones, and
+`${DATA_ROOT}/mirrors` against the repositories projects and tasks still name. A run directory
+is kept while its **row** exists rather than while the run is live, because the transcript on
+disk is the whole conversation and the contract serves it back; a checkout is the opposite, a
+repo clone with the project's env files in it that nothing but this would ever remove. A read
+that failed sweeps nothing rather than treating an unreachable database as one that owns
+nothing. `${DATA_ROOT}/caches` is deliberately not in that list — nothing evicts from it, which
+is a decision with a threshold and a procedure in [disk](./disk.md).
+
 ```bash
 bun run loop:start           # the loop, against DATABASE_URL; Ctrl-C for a graceful stop
 bun run loop:check           # stub provider, turn as a host process, own data root, seconds, free
@@ -126,7 +139,8 @@ bun run loop:check --live    # the same, on the real provider — this one costs
 
 `loop:check` files a task, watches the loop run it into *review*, opens a conversation and
 watches the same loop answer it as a `role: manager` run with no task, then kills a second loop
-mid-run with `SIGKILL` and proves the restart closes the killed run as `lost`.
+mid-run with `SIGKILL` and proves the restart closes the killed run as `lost` and removes the
+checkout that kill stranded on disk.
 
 `--docker` runs that first half with the turn inside `atm.local/base:latest` and adds the three
 claims a host process cannot make: the `atm.run` rows say `kind: docker` on that image, the

@@ -74,17 +74,24 @@ import {
 } from "@workspace/harness";
 import {
   cachesDirOf,
+  checkoutsOf,
+  compositionsOf,
   credentialNotes,
   GH_TOKEN_ENV_VAR,
   githubTokenEnv,
   MANAGER_TOKEN_ENV_VAR,
+  mirrorKeyOf,
+  mirrorsOf,
   orphansOf,
   probeGithubCredential,
   readGithubToken,
   readManagerGithubToken,
+  removeStrays,
+  runDirectoriesOf,
   Sandbox,
   ScopeHistory,
   sandboxImageFor,
+  strandedOf,
 } from "@workspace/sandbox";
 import { DEFAULT_AGENT_TOKEN_TTL_MS } from "@workspace/token";
 import {
@@ -145,6 +152,18 @@ import { ingestTranscript } from "./transcript-ingest";
 import { type DispatchSignal, dispatchSignals } from "./trigger";
 import { runEconomicsOf } from "./turn-rollup";
 
+/** What one boot pass over the data root reclaimed, by kind of directory. */
+export interface DirectorySweep {
+  /** Checkouts of runs that are no longer live — a repo clone each, with the project's env files in it. */
+  readonly checkouts: number;
+  /** Skills compositions of runs that are no longer live, which have a checkout's lifetime. */
+  readonly compositions: number;
+  /** Bare mirrors of repositories no project and no task names any more. */
+  readonly mirrors: number;
+  /** Run directories whose row is gone, which is the only thing that ever removes one. */
+  readonly runDirectories: number;
+}
+
 /** What a boot found the previous process had left behind. */
 export interface RecoveryReport {
   /** Containers left by a process that was killed before its teardown could run. */
@@ -153,15 +172,19 @@ export interface RecoveryReport {
   readonly leasesReclaimed: number;
   /** Run rows still marked live with nobody working on them, closed as `lost`. */
   readonly runsClosed: number;
+  /** Directories under the data root that nothing owns any more. */
+  readonly swept: DirectorySweep;
 }
 
 /** The loop, as the process hosting it uses it. Two operations, in this order. */
 export interface OrchestratorInterface {
   /**
-   * Clears the debris a crashed loop leaves: leases nobody holds, and runs the
-   * database still believes are live. Run before anything is dispatched — both
-   * kinds of debris lie to a fresh loop, one by making a free task look claimed
-   * and the other by making a finished run look unfinished forever.
+   * Clears the debris a crashed loop leaves: leases nobody holds, runs the
+   * database still believes are live, and the containers and directories a
+   * killed process could not take with it. Run before anything is dispatched —
+   * the first two kinds of debris lie to a fresh loop, one by making a free task
+   * look claimed and the other by making a finished run look unfinished forever,
+   * and the last two are disk and CPU nobody will otherwise ever reclaim.
    *
    * Total: every step is best-effort and logged, because a boot that refuses to
    * start over one stuck row is a factory that stays down.
@@ -209,6 +232,18 @@ const underCaller = <A, E, R>(
 
 /** How many events a run with no ledger on disk is reported to have produced. */
 const NO_EVENTS = 0;
+
+/**
+ * What a sweep that removed nothing reports. Also what a sweep that could not
+ * establish who owns what reports, which is the same number for the operator and
+ * a warning in the log for whoever is looking into it.
+ */
+const NOTHING_SWEPT: DirectorySweep = {
+  checkouts: 0,
+  compositions: 0,
+  mirrors: 0,
+  runDirectories: 0,
+};
 
 /**
  * Logs a failure this loop is committed to surviving, then continues with a
@@ -977,6 +1012,179 @@ const make = Effect.gen(function* () {
     return orphans.length;
   }).pipe(Effect.withSpan("Orchestrator.reap"));
 
+  /**
+   * One read the keep sets below cannot be built without. Null is a failure
+   * rather than an empty answer, which is the difference the whole sweep turns
+   * on: `bestEffort`'s empty fallback would be read as "nothing owns any of
+   * this" and delete the lot.
+   */
+  const needed = <A, E, R>(step: string, effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.tapCause((cause) => Effect.logWarning(`loop: ${step}`, cause)),
+      Effect.catchCause(() => Effect.succeed<A | null>(null))
+    );
+
+  /** Says what a sweep took, by path, or nothing where it took nothing. */
+  const announceSwept = (what: string, paths: readonly string[]) =>
+    paths.length === 0
+      ? Effect.void
+      : Effect.logInfo(`swept ${paths.length} orphan ${what}`, { paths });
+
+  /**
+   * One keep set out of a workspace's worth of answers each, or null when any
+   * one workspace could not be asked.
+   *
+   * All-or-nothing rather than per workspace, because a directory is keyed by a
+   * run id and not by a workspace: a run whose workspace was unreadable is
+   * indistinguishable here from a run nothing owns, and the two have opposite
+   * answers.
+   */
+  const keepSet = (parts: readonly (readonly string[] | null)[]) =>
+    parts.some((part) => part === null)
+      ? null
+      : new Set(parts.flatMap((part) => part ?? []));
+
+  /** The mirrors a set of repository urls keeps, dropping what names no repo. */
+  const mirrorKeysOf = (urls: readonly string[]) =>
+    urls.flatMap((repoUrl) => {
+      const key = mirrorKeyOf({ dataRoot: config.dataRoot, repoUrl });
+      return key === null ? [] : [key];
+    });
+
+  /**
+   * The three sets the four trees are kept by, asked once per workspace.
+   *
+   * Three rather than one because they are three different questions — see
+   * {@link sweepDirectories}, where the checkout and the composition share an
+   * answer because they share a lifetime — and the run ids are the ones on disk,
+   * so the read is bounded by what is being decided about.
+   */
+  const keepSetsFor = Effect.fnUntraced(function* (input: {
+    readonly onDisk: readonly RunId[];
+    readonly workspaceIds: readonly WorkspaceId[];
+  }) {
+    const rows: (readonly string[] | null)[] = [];
+    const live: (readonly string[] | null)[] = [];
+    const repos: (readonly string[] | null)[] = [];
+    for (const workspaceId of input.workspaceIds) {
+      rows.push(
+        yield* needed(
+          "run rows could not be read for the directory sweep",
+          runs.existing({ ids: input.onDisk, workspaceId })
+        )
+      );
+      live.push(
+        yield* needed(
+          "live runs could not be read for the directory sweep",
+          runs
+            .listLive({ workspaceId })
+            .pipe(Effect.map((found) => found.map((row) => row.id)))
+        )
+      );
+      repos.push(
+        yield* needed(
+          "the repositories in use could not be read for the directory sweep",
+          Effect.all([
+            projects.repoUrls({ workspaceId }),
+            tasks.repoUrls({ workspaceId }),
+          ]).pipe(Effect.map((named) => mirrorKeysOf(named.flat())))
+        )
+      );
+    }
+    return {
+      live: keepSet(live),
+      repos: keepSet(repos),
+      rows: keepSet(rows),
+    };
+  });
+
+  /**
+   * Removes the directories under the data root that nothing owns any more, and
+   * answers with how many of each kind.
+   *
+   * The same join `reap` does over containers, over the four trees that outlive
+   * a process the same way: run directories, checkouts, skills compositions and
+   * bare mirrors. The sandbox lists and removes; which of them is an orphan is a
+   * database question and it is asked here, because this is the only side that
+   * can see both.
+   *
+   * The three keep sets are not the same question, and using one of them twice
+   * would be a data-loss bug either way round. A **run directory** is kept while
+   * its row exists at all: the transcript on disk is the whole conversation at
+   * full length and the contract serves it back long after the run is over, so
+   * only a run whose row is gone — a deleted task takes its runs with it — has a
+   * directory nothing can ever ask for. A **checkout** and the **skills
+   * composition** beside it are kept only while the run is live, because both
+   * are scratch that a release already removes on every ordinary ending. A
+   * **mirror** is kept while any project or task still names the repo, and is a
+   * cache, so the worst a wrong answer costs is one cold clone.
+   *
+   * Every read has to succeed for the set it feeds to be used, and a database
+   * that answers nothing at all cancels the sweep outright. That asymmetry is
+   * deliberate: a boot that reclaims no disk costs an operator a `du`, and a
+   * boot that deletes a live run's checkout because Postgres blinked costs a
+   * run.
+   */
+  const sweepDirectories = Effect.gen(function* () {
+    const { dataRoot } = config;
+    const runDirectories = yield* runDirectoriesOf(dataRoot);
+    const checkouts = yield* checkoutsOf(dataRoot);
+    const compositions = yield* compositionsOf(dataRoot);
+    const mirrors = yield* mirrorsOf(dataRoot);
+    const onDisk: readonly RunId[] = [
+      ...new Set(
+        [...runDirectories, ...checkouts, ...compositions].map((dir) => dir.key)
+      ),
+    ];
+    if (onDisk.length === 0 && mirrors.length === 0) {
+      return NOTHING_SWEPT;
+    }
+
+    // A data root with directories in it and a database with no workspace at
+    // all is not an empty board — it is a wrong `DATABASE_URL` or a database
+    // nobody has migrated, and it is the one shape where every join below says
+    // "delete everything" and none of it is what the operator meant.
+    const found = yield* needed(
+      "the workspace list could not be read for the directory sweep",
+      workspaces.list()
+    );
+    if (found === null || found.length === 0) {
+      yield* Effect.logWarning(
+        "directory sweep skipped: no workspace to attribute anything under the data root to"
+      );
+      return NOTHING_SWEPT;
+    }
+
+    const keep = yield* keepSetsFor({
+      onDisk,
+      workspaceIds: found.map((workspace) => workspace.id),
+    });
+
+    const removedRunDirectories = yield* removeStrays(
+      strandedOf({ found: runDirectories, keep: keep.rows })
+    );
+    const removedCheckouts = yield* removeStrays(
+      strandedOf({ found: checkouts, keep: keep.live })
+    );
+    const removedCompositions = yield* removeStrays(
+      strandedOf({ found: compositions, keep: keep.live })
+    );
+    const removedMirrors = yield* removeStrays(
+      strandedOf({ found: mirrors, keep: keep.repos })
+    );
+    yield* announceSwept("run directories", removedRunDirectories);
+    yield* announceSwept("checkouts", removedCheckouts);
+    yield* announceSwept("skills compositions", removedCompositions);
+    yield* announceSwept("repository mirrors", removedMirrors);
+
+    return {
+      checkouts: removedCheckouts.length,
+      compositions: removedCompositions.length,
+      mirrors: removedMirrors.length,
+      runDirectories: removedRunDirectories.length,
+    } satisfies DirectorySweep;
+  }).pipe(Effect.withSpan("Orchestrator.sweepDirectories"));
+
   /** This loop, as the audit log names it. */
   const loopInstance = () =>
     actor.kind === "orchestrator" ? actor.loopInstance : leases.instanceId;
@@ -1006,10 +1214,18 @@ const make = Effect.gen(function* () {
       bestEffort("containers could not be reaped", 0)
     );
 
+    // Last, and for the same reason the reap is not first: the checkout of a
+    // run this pass just closed is only strandable once its row has stopped
+    // saying the run is live.
+    const swept = yield* sweepDirectories.pipe(
+      bestEffort("the data root could not be swept", NOTHING_SWEPT)
+    );
+
     return {
       containersReaped,
       leasesReclaimed: reclaimed.length,
       runsClosed,
+      swept,
     } satisfies RecoveryReport;
   }).pipe(Effect.withSpan("Orchestrator.recover"));
 

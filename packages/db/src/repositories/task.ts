@@ -21,6 +21,7 @@ import {
   canDeleteTask,
   canTransition,
   DEFAULT_NEXT_SESSION,
+  FIXTURE_METADATA_KEY,
   movesFreely,
   newTaskId,
   type Task,
@@ -29,7 +30,7 @@ import {
   TaskStatus,
   type WorkspaceId,
 } from "@workspace/domain";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { Context, DateTime, Effect, Layer, Schema } from "effect";
 import { Database } from "../client";
 import { decodeTask, TaskInsert, TaskUpdate } from "../rows";
@@ -69,6 +70,19 @@ const DEFAULT_STATUS = "ideas" satisfies Task["status"];
 
 /** The one column that is a dispatch trigger: entering it asks for a run. */
 const DISPATCHES = "in_progress" satisfies Task["status"];
+
+/**
+ * Everything a board column is allowed to hold: not a card the test suite left
+ * behind. See `FIXTURE_METADATA_KEY` for why the row stays and only the listing
+ * changes.
+ *
+ * `is distinct from` rather than `<>` because the key is absent on every real
+ * card, and `null <> 'true'` is null, which a `where` reads as false — the
+ * spelling that filters the whole board away. The cast is what tells Postgres
+ * which `->>` is meant: the operator is overloaded on integer and text, and an
+ * unadorned parameter is neither.
+ */
+const NOT_A_FIXTURE = sql`(${task.metadata} ->> ${FIXTURE_METADATA_KEY}::text) is distinct from 'true'`;
 
 /**
  * The trace to stamp on a task landing in this column, and the reason the
@@ -434,6 +448,11 @@ const make = Effect.gen(function* () {
    * One board column, in the order the board renders it and the dispatcher
    * takes from it: by rank, oldest first where two cards share one. The index
    * is built for exactly this ordering.
+   *
+   * Fixture cards are not in it. This is the one read both the board and the
+   * dispatch queue come through, so excluding them here is what makes a flagged
+   * card invisible *and* undispatchable in one place rather than two — and a
+   * fixture the tests forgot to erase should be neither drawn nor run.
    */
   const byStatus = Effect.fn("TaskRepo.byStatus")(function* (options: {
     readonly status: TaskStatus;
@@ -452,13 +471,38 @@ const make = Effect.gen(function* () {
         .where(
           and(
             eq(task.workspaceId, options.workspaceId),
-            eq(task.status, options.status)
+            eq(task.status, options.status),
+            NOT_A_FIXTURE
           )
         )
         .orderBy(asc(task.rank), asc(task.createdAt), asc(task.id))
     );
 
     return yield* decodeMany({ decode: decodeTask, entity: ENTITY, rows });
+  });
+
+  /**
+   * Every repository this workspace's tasks name for themselves, once each.
+   *
+   * The other half of what the mirror sweep keeps, beside the projects'. A task
+   * may override its project's repository or carry one with no project at all,
+   * so a keep set built from projects alone would delete the bare clone a card
+   * on the board is about to be run against.
+   */
+  const repoUrls = Effect.fn("TaskRepo.repoUrls")(function* (options: {
+    readonly workspaceId: WorkspaceId;
+  }) {
+    yield* Effect.annotateCurrentSpan({ workspaceId: options.workspaceId });
+
+    const rows = yield* execute(
+      "TaskRepo.repoUrls",
+      db
+        .selectDistinct({ repoUrl: task.repoUrl })
+        .from(task)
+        .where(eq(task.workspaceId, options.workspaceId))
+    );
+
+    return rows.flatMap((row) => (row.repoUrl === null ? [] : [row.repoUrl]));
   });
 
   /**
@@ -547,6 +591,7 @@ const make = Effect.gen(function* () {
     create,
     delete: remove,
     place,
+    repoUrls,
     selectNextSession,
     transition,
     update,

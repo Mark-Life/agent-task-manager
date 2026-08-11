@@ -33,6 +33,21 @@
  * backoff before parking the task — a network blip costs an attempt, not the
  * card.
  *
+ * **A rerun continues the branch it already pushed.** The freshness rule above
+ * is about cutting a branch, and it used to be applied to every checkout: the
+ * branch was reset to the base every time, so a second run on a task whose first
+ * run had pushed commits started on an empty tree with its own work sitting on
+ * the remote, unreferenced. A run that noticed spent its turn recovering by
+ * hand; a run that did not rebuilt work that was already there, and then could
+ * not push it without a force. So {@link startPointFor} asks first, and the
+ * checkout starts at `origin/<branch>` when there is one. Freshness is not given
+ * up: the clone is still made after the fetch, so `origin/<base>` in the run's
+ * checkout is the remote's tip and an agent that wants to catch up has it. What
+ * this deliberately does not do is merge or rebase the base into the branch on
+ * the way in — an unattended three-way merge hands the run a conflicted tree
+ * instead of a checkout, which is worse than either thing it is choosing
+ * between.
+ *
  * The workspace clone is a plain local clone, and **not** `--reference` or
  * `--shared`. Those make the checkout borrow objects from the mirror through
  * `objects/info/alternates`, which is faster still and is exactly wrong here:
@@ -43,6 +58,14 @@
  * object file it uses and the mirror can do whatever it likes. Moving the fetch
  * onto the dispatch path makes that concurrent repack likelier, not rarer, which
  * is the second reason this stays a copy.
+ *
+ * **A mirror is a cache, and `./sweep` is what finally gives it a lifetime.**
+ * One bare clone per repo the board has ever touched used to be forever:
+ * deleting the project in the dashboard left its mirror on disk with nothing
+ * that would ever look at it again. The boot sweep removes a mirror no project
+ * and no task still names, and the asymmetry is what makes that safe — the cost
+ * of removing one somebody wants back is the cold clone {@link ensureMirror}
+ * already does on first use, and never a byte of anybody's work.
  *
  * **No worktrees.** The previous generation of this machinery gave each task a
  * `git worktree` off one shared checkout, and carried the tax that implies: a
@@ -126,17 +149,29 @@ export const DEFAULT_COMMITTER: Committer = {
 /** A single trailing `.git`, stripped from a mirror directory to recover its name. */
 const TRAILING_GIT_RE = /\.git$/;
 
+/**
+ * The suffix a bare mirror directory carries, and the whole of what tells one
+ * apart from the staging directory a killed `clone --mirror` leaves beside it.
+ */
+export const MIRROR_SUFFIX = ".git";
+
+/**
+ * The directory every mirror is nested under. Read by `./sweep`, which is the
+ * one caller that walks the tree instead of composing a path into it.
+ */
+export const mirrorsRootOf = (dataRoot: string) =>
+  join(dataRoot, MIRRORS_SEGMENT);
+
 /** Where a repo's bare mirror lives on the host. Pure; the path encodes the slug. */
 export const mirrorDirOf = (input: {
   readonly dataRoot: string;
   readonly repo: RepoIdentity;
 }) =>
   join(
-    input.dataRoot,
-    MIRRORS_SEGMENT,
+    mirrorsRootOf(input.dataRoot),
     input.repo.host,
     input.repo.owner,
-    `${input.repo.name}.git`
+    `${input.repo.name}${MIRROR_SUFFIX}`
   );
 
 /**
@@ -381,6 +416,80 @@ export const refreshMirror = Effect.fn("Repo.refreshMirror")(function* (
     );
 });
 
+/**
+ * Where a run's branch already is on the remote, if it is anywhere.
+ *
+ * Spelled in full rather than as `origin/<branch>` because a short name goes
+ * through git's whole disambiguation ladder, and the full one can only ever mean
+ * the remote-tracking ref the clone made.
+ */
+const remoteBranchRefOf = (branch: string) => `refs/remotes/origin/${branch}`;
+
+/** Where a run's branch starts, and whether that is work it already pushed. */
+export interface StartPoint {
+  /** What `checkout -B` is given. */
+  readonly ref: string;
+  /** True when {@link StartPoint.ref} is the branch's own remote tip. */
+  readonly resumed: boolean;
+}
+
+/**
+ * Decides what this run's branch starts at, in a workspace that has already
+ * been cloned from a freshly fetched mirror.
+ *
+ * The rule is one sentence: **resume when the remote's copy of the branch holds
+ * commits the base does not.** Both halves are load-bearing.
+ *
+ * That the branch is *on the remote* is the whole of "is there work to
+ * continue". The mirror is prune-fetched before the clone, so a branch a merged
+ * pull request deleted is gone from this checkout too and the run starts from
+ * the base, which is where its work now lives — resuming onto a ref the remote
+ * no longer has is not possible here, and that is the right answer rather than a
+ * gap.
+ *
+ * That the branch is *not already contained in the base* is what keeps the
+ * freshness rule from being quietly undone. A branch whose commits the base
+ * already has offers a run nothing except an older tree — the ordinary shape of
+ * a merged pull request whose branch nobody deleted — so it is not resumed from,
+ * and the run cuts a new one from the tip exactly as a first run does.
+ *
+ * Neither probe is a failure: `rev-parse --verify --quiet` answering "no branch"
+ * and `merge-base --is-ancestor` answering "not contained" are both this
+ * function's input, which is why they go through `run` and not `mustRun`.
+ */
+export const startPointFor = Effect.fn("Repo.startPoint")(function* (input: {
+  readonly baseRef: string;
+  readonly branch: string;
+  /** What a failure is named after — a slug, never the clone URL. */
+  readonly repo: string;
+  readonly workspaceDir: string;
+}) {
+  const git = yield* Git;
+  const inWorkspace = {
+    cwd: input.workspaceDir,
+    executable: "git",
+    repo: input.repo,
+  } as const;
+  const remote = remoteBranchRefOf(input.branch);
+
+  const pushed = yield* git.run({
+    ...inWorkspace,
+    args: ["rev-parse", "--verify", "--quiet", `${remote}^{commit}`],
+  });
+  if (pushed.exitCode !== 0) {
+    return { ref: input.baseRef, resumed: false } satisfies StartPoint;
+  }
+  // Exit 0 is "yes, contained". Anything else is "no" — and the refs are both
+  // verified by the time this runs, so there is no third answer to tell apart.
+  const contained = yield* git.run({
+    ...inWorkspace,
+    args: ["merge-base", "--is-ancestor", remote, input.baseRef],
+  });
+  return contained.exitCode === 0
+    ? ({ ref: input.baseRef, resumed: false } satisfies StartPoint)
+    : ({ ref: remote, resumed: true } satisfies StartPoint);
+});
+
 /** What to check out, where, and who its commits belong to. */
 export interface MaterializeRepoInput {
   /** Null takes {@link DEFAULT_COMMITTER}. */
@@ -397,13 +506,21 @@ export interface RepoCheckout {
   readonly headSha: string;
   /** True when the mirror had to be fetched first, which is the slow path. */
   readonly mirrorCreated: boolean;
+  /**
+   * True when the checkout continued the branch's own remote tip instead of
+   * cutting it from the base — see {@link startPointFor}. Recorded because
+   * "which runs picked up work a previous one pushed" is the question this
+   * flag's absence made unanswerable for three runs in a row.
+   */
+  readonly resumed: boolean;
   readonly strategy: MaterializeStrategy;
   readonly workspaceDir: string;
 }
 
 /**
- * Gives one run its checkout: mirror if needed, fetch it, clone from it, cut the
- * branch, point `origin` back at the real remote, and name the committer.
+ * Gives one run its checkout: mirror if needed, fetch it, clone from it, put the
+ * branch where {@link startPointFor} says it starts, point `origin` back at the
+ * real remote, and name the committer.
  *
  * The fetch is what makes the base the remote's tip at *dispatch* rather than
  * whenever this repo was first seen. It is skipped only when {@link ensureMirror}
@@ -466,12 +583,24 @@ export const materializeRepo = Effect.fn("Repo.materialize")(function* (
       stderr: `base ref ${source.baseRef} does not exist on ${repo} after fetching`,
     });
   }
+  // Asked after the base is verified, because the answer is a comparison
+  // against it: the branch is only worth continuing if it holds something the
+  // base does not.
+  const start = yield* startPointFor({
+    baseRef: source.baseRef,
+    branch: source.branch,
+    repo,
+    workspaceDir,
+  });
   // `--no-track` so the new branch has no upstream. With one, an agent's plain
   // `git push` argues with the base branch it was cut from instead of creating
-  // the run's own head.
+  // the run's own head. It stays off on a resumed branch too, where the upstream
+  // would be right: one rule about what a `push` here does beats two, and the
+  // push is a fast-forward either way now that the branch starts where the
+  // remote has it.
   yield* git.mustRun({
     ...inWorkspace,
-    args: ["checkout", "--no-track", "-B", source.branch, source.baseRef],
+    args: ["checkout", "--no-track", "-B", source.branch, start.ref],
   });
   yield* git.mustRun({
     ...inWorkspace,
@@ -504,16 +633,22 @@ export const materializeRepo = Effect.fn("Repo.materialize")(function* (
   // `baseRef` is on the span because "what did this run branch from" is the
   // question a reviewer holding a suspicious diff actually asks, and answering
   // it from a trace beats reconstructing it from the merge-base afterwards.
+  // `resumed` is the other half of that answer: it is what separates a run that
+  // started on its predecessor's work from one that started on an empty tree,
+  // and a `headSha` alone does not say which.
   yield* Effect.annotateCurrentSpan({
     baseRef: source.baseRef,
     branch: source.branch,
     repo,
+    resumed: start.resumed,
+    startRef: start.ref,
   });
 
   return {
     branch: source.branch,
     headSha: head.stdout.trim(),
     mirrorCreated: mirror.created,
+    resumed: start.resumed,
     strategy: "mount",
     workspaceDir,
   } satisfies RepoCheckout;

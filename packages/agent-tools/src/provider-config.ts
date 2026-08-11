@@ -92,6 +92,15 @@ const stdioEnv = (server: AgentMcpStdio) => ({
  * The `options.mcpServers` map for the Claude Agent SDK, or null when no
  * gateway was configured — the caller spreads it in conditionally rather than
  * setting the key to nothing.
+ *
+ * There is an `alwaysLoad` on this config, and it is deliberately not set: it
+ * is per-server, so it would write all nineteen board tools into every prompt
+ * to keep one of them out of tool search. The one tool that has to be there
+ * asks for itself, in `_meta` on the listing in `./server`. What this config
+ * would additionally buy is startup: a server marked here is connected before
+ * the first prompt is built, and one that is not may miss the first request of
+ * the first turn while it connects. That is a request, not a turn — the tools
+ * are there for the rest of it — so it is not worth eighteen schemas.
  */
 export const claudeManagerMcpServers = (
   server: AgentMcpStdio | null

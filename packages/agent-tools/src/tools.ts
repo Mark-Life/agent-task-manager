@@ -254,8 +254,15 @@ const messagesList = defineTool({
  * Say something on the task. The author is not a field: it comes off the
  * credential, so the message is attributed to the manager and the chat thread
  * behind it whatever the body says.
+ *
+ * The one tool in this table that is never deferred behind tool search. The
+ * stop hook refuses to end a turn until a message is posted, so a client that
+ * hides this one makes every run search for the tool it cannot finish without —
+ * which is what runs did, hundreds of times. Only this one: the other eighteen
+ * stay deferred, and a run that needs them still pays a search for them.
  */
 const messagesPost = defineTool({
+  alwaysLoad: true,
   description:
     "Post a message on a task. This is how the next session on that task finds out what was decided.",
   endpoint: "POST /tasks/:taskId/messages",

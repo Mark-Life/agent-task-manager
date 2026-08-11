@@ -45,19 +45,19 @@ import {
 import { Unauthorized } from "@workspace/api";
 import {
   AgentSessionRepo,
-  Auth,
   RunEventRepo,
   RunRepo,
   storeLayer,
   TaskMessageRepo,
   TaskRepo,
-  WorkspaceRepo,
   withActor,
 } from "@workspace/db";
+import { ensureFixtureWorkspace } from "@workspace/db/testing";
 import {
   Actor,
   type AgentSessionId,
   CostUsd,
+  FIXTURE_METADATA,
   HANDOFF_FILENAME,
   type Task,
   type TaskId,
@@ -117,10 +117,6 @@ const LOOP_INSTANCE = "orchestrator-test";
 const TURN_TIMEOUT_MS = 60_000;
 
 /** The workspace the seed creates and every script reuses. */
-const WORKSPACE_SLUG = "personal";
-const WORKSPACE_NAME = "Personal";
-const OWNER_EMAIL = "owner@agent-task-manager.local";
-const OWNER_NAME = "Owner";
 
 /**
  * A second call is a no-op when the preload already ran, and the safety net for
@@ -239,41 +235,14 @@ const registryLayer = (input: Parameters<typeof providerOf>[0]) => {
   return Layer.succeed(ProviderRegistry, makeProviderRegistry(table));
 };
 
-/** The workspace every row hangs off, created through the auth library if absent. */
-const ensureWorkspace = Effect.gen(function* () {
-  const workspaces = yield* WorkspaceRepo;
-  const auth = yield* Auth;
-
-  const owner = yield* Effect.tryPromise(async () => {
-    const context = await auth.$context;
-    const found = await context.internalAdapter.findUserByEmail(OWNER_EMAIL);
-    return (
-      found?.user ??
-      (await context.internalAdapter.createUser(
-        { email: OWNER_EMAIL, name: OWNER_NAME },
-        { method: "admin" }
-      ))
-    );
-  });
-  const ownerId = UserId.make(owner.id);
-
-  const existing = (yield* workspaces.list()).find(
-    (found) => found.slug === WORKSPACE_SLUG
-  );
-  if (existing !== undefined) {
-    return { owner: ownerId, workspace: existing };
-  }
-
-  yield* Effect.tryPromise(() =>
-    auth.api.createOrganization({
-      body: { name: WORKSPACE_NAME, slug: WORKSPACE_SLUG, userId: ownerId },
-    })
-  );
-  const created = (yield* workspaces.list()).find(
-    (found) => found.slug === WORKSPACE_SLUG
-  );
-  return { owner: ownerId, workspace: created as NonNullable<typeof created> };
-});
+/**
+ * The workspace every row hangs off: this suite's own, created on first use.
+ *
+ * It used to be `workspaces.list()[0]` — the first organization in whatever
+ * database `DATABASE_URL` named, which on this box is the live board. Four of
+ * the cards below are still on it.
+ */
+const ensureWorkspace = ensureFixtureWorkspace({ suite: APPLICATION_NAME });
 
 const telemetry = Telemetry.layer({ serviceName: APPLICATION_NAME });
 
@@ -290,20 +259,30 @@ const baseLayer = Layer.mergeAll(
 /** Tasks this file created, deleted at the end whatever happened in between. */
 const created: { id: TaskId; workspaceId: WorkspaceId }[] = [];
 
-/** A task sitting in *in progress*, which is where a dispatch picks one up. */
-const seedTask = (input: { readonly owner: UserId; readonly title: string }) =>
+/**
+ * A task sitting in *in progress*, which is where a dispatch picks one up.
+ *
+ * Flagged as a fixture, which keeps it out of every column listing — the board
+ * and the dispatch queue are one read — so a row this file fails to erase can
+ * neither be drawn nor dispatched. The workspace is named by the caller rather
+ * than looked up, because looking it up is what put these cards on the board.
+ */
+const seedTask = (input: {
+  readonly owner: UserId;
+  readonly title: string;
+  readonly workspaceId: WorkspaceId;
+}) =>
   Effect.gen(function* () {
-    const workspaces = yield* WorkspaceRepo;
     const tasks = yield* TaskRepo;
-    const [workspace] = yield* workspaces.list();
     const task = yield* withActor(
       Actor.cases.human.make({ userId: input.owner })
     )(
       tasks.create({
         brief: "A brief the scripted provider never reads.",
+        metadata: FIXTURE_METADATA,
         status: "in_progress",
         title: input.title,
-        workspaceId: (workspace as NonNullable<typeof workspace>).id,
+        workspaceId: input.workspaceId,
       })
     );
     created.push({ id: task.id, workspaceId: task.workspaceId });
@@ -345,8 +324,12 @@ const runOnce = (input: {
   readonly title: string;
 }) =>
   Effect.gen(function* () {
-    const { owner } = yield* ensureWorkspace;
-    const task = yield* seedTask({ owner, title: input.title });
+    const { owner, workspace } = yield* ensureWorkspace;
+    const task = yield* seedTask({
+      owner,
+      title: input.title,
+      workspaceId: workspace.id,
+    });
     input.onSeeded?.(task);
     const outcome = yield* performRun({
       ...RUN_SETTINGS,
@@ -805,8 +788,12 @@ test("a run that kept the board is untouched by any of it", async () => {
 test("the close hook copies the transcript out of the shared home and reads it there", async () => {
   const seen = await provide(
     Effect.gen(function* () {
-      const { owner } = yield* ensureWorkspace;
-      const task = yield* seedTask({ owner, title: "transcript ingest" });
+      const { owner, workspace } = yield* ensureWorkspace;
+      const task = yield* seedTask({
+        owner,
+        title: "transcript ingest",
+        workspaceId: workspace.id,
+      });
       const context = yield* openRun(claimOf(task));
       const ingested: TranscriptIngestReport[] = [];
 

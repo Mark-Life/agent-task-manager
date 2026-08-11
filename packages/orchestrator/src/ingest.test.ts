@@ -36,9 +36,9 @@ import {
   RunRepo,
   storeLayer,
   TaskRepo,
-  WorkspaceRepo,
   withActor,
 } from "@workspace/db";
+import { ensureFixtureWorkspace } from "@workspace/db/testing";
 import type {
   AgentSession,
   Project,
@@ -77,12 +77,6 @@ const APPLICATION_NAME = "orchestrator-ingest-test";
 const PROVIDER_SESSION = "b3144824-0ff3-4ded-bf94-fa5dd51f9f10";
 
 const SANDBOX_IMAGE = "ghcr.io/test/base:latest";
-
-/** The database has never been seeded, so there is no workspace to hang a task on. */
-class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
-  "IngestTest.NoWorkspace",
-  { detail: Schema.String }
-) {}
 
 const loop = Actor.cases.orchestrator.make({ loopInstance: APPLICATION_NAME });
 const seeder = Actor.cases.system.make({ reason: "ingest-test" });
@@ -316,34 +310,31 @@ beforeAll(async () => {
 
   const built = await runtime.runPromise(
     Effect.gen(function* () {
-      const workspaces = yield* WorkspaceRepo;
-      const [first] = yield* workspaces.list();
-      if (first === undefined) {
-        return yield* Effect.fail(
-          new NoWorkspace({ detail: "run `bun run db:seed` first" })
-        );
-      }
+      const { workspace } = yield* ensureFixtureWorkspace({
+        suite: APPLICATION_NAME,
+      });
+      const scope = workspace.id;
       const one = yield* fixture({
         title: "ingest: a run that streamed its events",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       const two = yield* fixture({
         title: "ingest: a run whose events never came back",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       const projects = yield* ProjectRepo;
       const made = yield* withActor(seeder)(
         projects.create({
           name: "ingest: the project a run writes into",
-          workspaceId: first.id,
+          workspaceId: scope,
         })
       );
       const three = yield* fixture({
         projectId: made.id,
         title: "ingest: a run that left a document for the next task",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
-      return { made, one, three, two, workspaceId: first.id };
+      return { made, one, three, two, workspaceId: scope };
     })
   );
 

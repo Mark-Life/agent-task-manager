@@ -23,7 +23,8 @@
  * home is in the run directory once that home has been torn down, and no
  * credential came out with it; the run leaves exactly one `atm.run` start row
  * and one terminus row; and a loop killed with the run in flight is recovered
- * on restart with the killed run recorded as `lost`.
+ * on restart with the killed run recorded as `lost` and the checkout it
+ * stranded swept off the disk.
  *
  * `bun run loop:check --docker` makes every claim on that list except the kill
  * and the recovery, with the turn served by a real container on
@@ -175,6 +176,7 @@ import { type Duration, Effect, Layer, Schedule, Schema, Tracer } from "effect";
 import {
   CheckFailed,
   check,
+  checkoutLeftBehind,
   runDirEvidence,
   runRows,
 } from "./loop-check-claims";
@@ -751,14 +753,40 @@ const crashPath = (workspaceId: WorkspaceId) =>
       step: "the killed run left a start row and no terminus",
     });
 
+    // The run reached `running`, which is the harness answering, which is after
+    // the checkout was made — so this is a directory that certainly exists and
+    // certainly has nobody left committed to removing it.
+    const stranded = checkoutLeftBehind({
+      dataRoot: CHECK_ROOT,
+      runId: live.id,
+    });
+    yield* check({
+      detail: `${stranded.path} is ${stranded.present ? "still there" : "already gone"}`,
+      ok: stranded.present,
+      step: "the killed run's checkout outlives the process that promised to remove it",
+    });
+
     const recovered = yield* orchestrator.recover;
     yield* Effect.logInfo(
-      `recovered — ${recovered.leasesReclaimed} leases reclaimed, ${recovered.runsClosed} runs closed as lost`
+      `recovered — ${recovered.leasesReclaimed} leases reclaimed, ${recovered.runsClosed} runs closed as lost, ${recovered.swept.checkouts} checkouts swept`
     );
     yield* check({
       detail: `the reconcile closed ${recovered.runsClosed} runs`,
       ok: recovered.runsClosed >= 1,
       step: "a restart closes the run nobody is working on",
+    });
+
+    // After the row claim and not before, because that is the order the recover
+    // itself works in: the checkout is only strandable once the run's row has
+    // stopped saying it is live.
+    const afterSweep = checkoutLeftBehind({
+      dataRoot: CHECK_ROOT,
+      runId: live.id,
+    });
+    yield* check({
+      detail: `${afterSweep.path} is ${afterSweep.present ? "still there" : "gone"}`,
+      ok: !afterSweep.present,
+      step: "a restart sweeps the checkout the killed run stranded",
     });
 
     const closed = yield* runsFor({ taskId: task.id, workspaceId });

@@ -53,17 +53,17 @@ import process from "node:process";
 import { BunFileSystem } from "@effect/platform-bun";
 import {
   AgentSessionRepo,
-  Auth,
   RunEventRepo,
   RunRepo,
   storeLayer,
   TaskRepo,
-  WorkspaceRepo,
   withActor,
 } from "@workspace/db";
+import { ensureFixtureWorkspace } from "@workspace/db/testing";
 import {
   Actor,
   type AgentSessionId,
+  FIXTURE_METADATA,
   type Task,
   type TaskId,
   UserId,
@@ -117,11 +117,6 @@ const APPLICATION_NAME = "orchestrator-container-test";
 
 /** Which loop the audit rows are attributed to. */
 const LOOP_INSTANCE = "orchestrator-container-test";
-
-const WORKSPACE_SLUG = "personal";
-const WORKSPACE_NAME = "Personal";
-const OWNER_EMAIL = "owner@agent-task-manager.local";
-const OWNER_NAME = "Owner";
 
 /**
  * The loop's cap for these runs. Generous, because it is the outermost of three
@@ -480,57 +475,37 @@ const baseLayer = Layer.mergeAll(
   registryLayer
 ).pipe(Layer.provideMerge(BunFileSystem.layer));
 
-/** The workspace every row hangs off, created through the auth library if absent. */
-const ensureWorkspace = Effect.gen(function* () {
-  const workspaces = yield* WorkspaceRepo;
-  const auth = yield* Auth;
-
-  const owner = yield* Effect.tryPromise(async () => {
-    const context = await auth.$context;
-    const found = await context.internalAdapter.findUserByEmail(OWNER_EMAIL);
-    return (
-      found?.user ??
-      (await context.internalAdapter.createUser(
-        { email: OWNER_EMAIL, name: OWNER_NAME },
-        { method: "admin" }
-      ))
-    );
-  });
-  const ownerId = UserId.make(owner.id);
-
-  const existing = (yield* workspaces.list()).find(
-    (found) => found.slug === WORKSPACE_SLUG
-  );
-  if (existing !== undefined) {
-    return { owner: ownerId, workspace: existing };
-  }
-  yield* Effect.tryPromise(() =>
-    auth.api.createOrganization({
-      body: { name: WORKSPACE_NAME, slug: WORKSPACE_SLUG, userId: ownerId },
-    })
-  );
-  const created = (yield* workspaces.list()).find(
-    (found) => found.slug === WORKSPACE_SLUG
-  );
-  return { owner: ownerId, workspace: created as NonNullable<typeof created> };
-});
+/**
+ * The workspace every row hangs off: this suite's own, created on first use.
+ * It used to be the first organization in whatever database `DATABASE_URL`
+ * named, which on this box is the live board.
+ */
+const ensureWorkspace = ensureFixtureWorkspace({ suite: APPLICATION_NAME });
 
 /** Tasks this file created, deleted at the end whatever happened in between. */
 const created: { id: TaskId; workspaceId: WorkspaceId }[] = [];
 
-const seedTask = (input: { readonly owner: UserId; readonly title: string }) =>
+/**
+ * Flagged as a fixture, which keeps it out of every column listing — the board
+ * and the dispatch queue are one read — so a row this file fails to erase can
+ * neither be drawn nor dispatched.
+ */
+const seedTask = (input: {
+  readonly owner: UserId;
+  readonly title: string;
+  readonly workspaceId: WorkspaceId;
+}) =>
   Effect.gen(function* () {
-    const workspaces = yield* WorkspaceRepo;
     const tasks = yield* TaskRepo;
-    const [workspace] = yield* workspaces.list();
     const task = yield* withActor(
       Actor.cases.human.make({ userId: input.owner })
     )(
       tasks.create({
         brief: "A brief the stub entrypoint never reads.",
+        metadata: FIXTURE_METADATA,
         status: "in_progress",
         title: input.title,
-        workspaceId: (workspace as NonNullable<typeof workspace>).id,
+        workspaceId: input.workspaceId,
       })
     );
     created.push({ id: task.id, workspaceId: task.workspaceId });
@@ -704,8 +679,12 @@ test.skipIf(!containerized)(
 
     const seen = await provide(
       Effect.gen(function* () {
-        const { owner } = yield* ensureWorkspace;
-        const task = yield* seedTask({ owner, title: "container run" });
+        const { owner, workspace } = yield* ensureWorkspace;
+        const task = yield* seedTask({
+          owner,
+          title: "container run",
+          workspaceId: workspace.id,
+        });
         const [outcome] = yield* Effect.all(
           [
             performRun({
@@ -796,8 +775,12 @@ test.skipIf(!containerized)(
 
     const seen = await provide(
       Effect.gen(function* () {
-        const { owner } = yield* ensureWorkspace;
-        const task = yield* seedTask({ owner, title: "silent container" });
+        const { owner, workspace } = yield* ensureWorkspace;
+        const task = yield* seedTask({
+          owner,
+          title: "silent container",
+          workspaceId: workspace.id,
+        });
         const outcome = yield* performRun({
           ...RUN_SETTINGS,
           claim: claimOf(task),
@@ -861,8 +844,12 @@ test.skipIf(!containerized)(
 
     const seen = await provide(
       Effect.gen(function* () {
-        const { owner } = yield* ensureWorkspace;
-        const task = yield* seedTask({ owner, title: "contained credentials" });
+        const { owner, workspace } = yield* ensureWorkspace;
+        const task = yield* seedTask({
+          owner,
+          title: "contained credentials",
+          workspaceId: workspace.id,
+        });
         const context = yield* openRun(claimOf(task));
         const ingested: TranscriptIngestReport[] = [];
 

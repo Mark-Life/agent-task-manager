@@ -33,6 +33,11 @@ export class ToolFailed extends Schema.TaggedErrorClass<ToolFailed>()(
 
 /** One tool as the server lists it and calls it, with its input already erased. */
 export interface AgentTool {
+  /**
+   * Whether this tool is kept out of the client's deferred set and written into
+   * every prompt. False for all but the one tool a turn cannot end without.
+   */
+  readonly alwaysLoad: boolean;
   /** Decodes the arguments, calls the gateway, and renders the answer as text. */
   readonly call: (
     client: GatewayClient,
@@ -241,6 +246,8 @@ const renderResult = (value: unknown) =>
 export const defineTool = <
   S extends Schema.Top & { readonly DecodingServices: never },
 >(options: {
+  /** See `AgentTool.alwaysLoad`. Deferred unless a tool asks not to be. */
+  readonly alwaysLoad?: boolean;
   readonly description: string;
   readonly endpoint: string;
   readonly input: S;
@@ -256,6 +263,7 @@ export const defineTool = <
     readonly input: S["Type"];
   }) => Effect.Effect<unknown, unknown>;
 }): AgentTool => ({
+  alwaysLoad: options.alwaysLoad ?? false,
   call: (client, args) =>
     Schema.decodeUnknownEffect(options.input)(args ?? {}).pipe(
       Effect.flatMap((input) => options.run({ client, input })),

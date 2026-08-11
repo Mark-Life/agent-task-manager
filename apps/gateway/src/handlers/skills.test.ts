@@ -44,12 +44,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunFileSystem } from "@effect/platform-bun";
 import type { PrincipalShape } from "@workspace/api";
-import {
-  CurrentActor,
-  storeLayer,
-  WorkspaceRepo,
-  withActor,
-} from "@workspace/db";
+import { CurrentActor, storeLayer, withActor } from "@workspace/db";
+import { ensureFixtureWorkspace } from "@workspace/db/testing";
 import type { FileScope, SkillName, WorkspaceId } from "@workspace/domain";
 import {
   Actor,
@@ -70,12 +66,6 @@ import {
 
 /** Reported as `application_name`, so `pg_stat_activity` names this process. */
 const APPLICATION_NAME = "gateway-skills-test";
-
-/** The database has never been seeded, so there is no workspace to scope a principal to. */
-class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
-  "SkillsTest.NoWorkspace",
-  { detail: Schema.String }
-) {}
 
 const seeder = Actor.cases.system.make({ reason: APPLICATION_NAME });
 
@@ -193,13 +183,10 @@ beforeAll(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), "gateway-skills-"));
   workspaceId = await runtime.runPromise(
     Effect.gen(function* () {
-      const workspaces = yield* WorkspaceRepo;
-      const [first] = yield* workspaces.list();
-      return first === undefined
-        ? yield* Effect.fail(
-            new NoWorkspace({ detail: "run `bun run db:seed` first" })
-          )
-        : first.id;
+      const fixture = yield* ensureFixtureWorkspace({
+        suite: APPLICATION_NAME,
+      });
+      return fixture.workspace.id;
     }).pipe(withActor(seeder))
   );
   principal = { actor: person, scope: "admin", workspaceId };
