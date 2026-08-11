@@ -83,6 +83,7 @@ import {
   projectIdOf,
   type RunTerminus,
   resumeSessionIdOf,
+  roleOf,
   runIdentityOf,
   subjectOf,
   taskIdOf,
@@ -627,6 +628,7 @@ export const executeRun = (input: ExecuteRunInput) =>
       yield* scopedMcpServersFile({
         gatewayUrl,
         path: mcpServersPathOf(context.layout),
+        role: roleOf(context),
       });
       return claudeManagerMcpServers({
         // The container reads the bundle and the credential at their own mount
@@ -637,6 +639,7 @@ export const executeRun = (input: ExecuteRunInput) =>
           path: contained ? CONTAINER_AGENT_TOKEN_PATH : tokenPath,
         },
         gatewayUrl,
+        role: roleOf(context),
       });
     });
 

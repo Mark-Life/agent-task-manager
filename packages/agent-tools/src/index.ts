@@ -33,6 +33,7 @@ export type { GatewayClient } from "./client";
 export { makeGatewayClient } from "./client";
 export type { GatewayConfig, GatewayCredential } from "./config";
 export {
+  AGENT_ROLE_ENV_VAR,
   currentGatewayToken,
   GATEWAY_TOKEN_ENV_VAR,
   GATEWAY_TOKEN_FILE_ENV_VAR,
@@ -51,4 +52,4 @@ export {
 } from "./provider-config";
 export type { AgentTool } from "./tool";
 export { describeFailure, ToolFailed, toolInputJsonSchema } from "./tool";
-export { AGENT_TOOLS, agentToolByName } from "./tools";
+export { AGENT_TOOLS, agentToolByName, agentToolsFor } from "./tools";

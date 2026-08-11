@@ -368,7 +368,13 @@ const drive = (input: {
     });
     yield* artifactClaims({ caller, taskId, token: adminToken });
     refused.push(
-      yield* bindingClaims({ caller, otherTaskId, taskId, workerToken })
+      yield* bindingClaims({
+        caller,
+        otherTaskId,
+        projectId,
+        taskId,
+        workerToken,
+      })
     );
     yield* threadClaims({ caller, token: adminToken, userId: CHECK_USER });
 

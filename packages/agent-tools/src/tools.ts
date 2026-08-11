@@ -15,6 +15,19 @@
  * is good for writes on its own task, so who may erase a task is answered past
  * the binding, on the actor, and a worker calling this gets `IllegalDeletion`.
  *
+ * **What a role changes is the listing, and only the listing.** Three of these
+ * are refused for a worker on every call it could ever make — `projects_create`
+ * and `tasks_create` are writes on no task, which the binding refuses as
+ * `unscoped_route`, and `tasks_delete` is the refusal above. Showing a worker a
+ * tool whose every call is a `403` costs it prompt on each turn and buys it a
+ * refusal, so {@link agentToolsFor} leaves them out of what that role is told
+ * about. That is not a second tool table: it is this one, filtered by
+ * `reachedByWorker`, which is *derived* from the endpoint each tool already
+ * declares rather than restated beside it. Nothing about authorization moves —
+ * `callAgentTool` still runs any name in this table, and a worker that calls a
+ * hidden one still gets the gateway's own refusal, which is the true answer and
+ * a better one than "no such tool".
+ *
  * Inputs are the API's own request schemas wherever one exists, picked off the
  * contract rather than restated, so a field the board calls optional is optional
  * here by construction. Outputs are the endpoint's success value as JSON, with
@@ -39,6 +52,7 @@ import {
   ArtifactId,
   ProjectId,
   RunId,
+  type RunRole,
   TaskId,
   TaskStatus,
   ThreadId,
@@ -199,6 +213,12 @@ const tasksMove = defineTool({
  * person what they are about to lose. The rules say to confirm first; the
  * gateway does not, which is the honest division — a confirmation is a property
  * of the conversation, and there is nobody to ask inside an HTTP call.
+ *
+ * The one tool whose refusal for a worker its endpoint cannot show. `DELETE
+ * /tasks/:taskId` is nested under a task like `tasks_edit` is, so the binding
+ * lets a run through on its own card; `canDeleteTask` in `@workspace/domain`
+ * then refuses `worker_run` whatever the card, so that a run cannot erase the
+ * task it was dispatched for and take its own evidence with it.
  */
 const tasksDelete = defineTool({
   description:
@@ -206,6 +226,7 @@ const tasksDelete = defineTool({
   endpoint: "DELETE /tasks/:taskId",
   input: TaskRef,
   name: "tasks_delete",
+  refusedToWorker: true,
   run: ({ client, input }) =>
     client.tasks
       .delete({ params: input })
@@ -446,6 +467,18 @@ export const AGENT_TOOLS: readonly AgentTool[] = [
   threadsMessages,
   threadsRuns,
 ];
+
+/**
+ * The tools one role is told about, in the same order.
+ *
+ * A manager gets the whole table; a worker gets the ones its credential can
+ * succeed at. Both roles can still *call* everything — this is what a listing
+ * says, not what the server will run, for the reason the module note gives.
+ */
+export const agentToolsFor = (role: RunRole): readonly AgentTool[] =>
+  role === "manager"
+    ? AGENT_TOOLS
+    : AGENT_TOOLS.filter((tool) => tool.reachedByWorker);
 
 /** One tool by the name an MCP client calls it by. */
 export const agentToolByName = (name: string) =>

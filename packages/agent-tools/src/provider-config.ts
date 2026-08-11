@@ -25,8 +25,10 @@
 
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import type { CodexOptions } from "@openai/codex-sdk";
+import type { RunRole } from "@workspace/domain";
 import { Redacted } from "effect";
 import {
+  AGENT_ROLE_ENV_VAR,
   GATEWAY_TOKEN_ENV_VAR,
   GATEWAY_TOKEN_FILE_ENV_VAR,
   GATEWAY_URL_ENV_VAR,
@@ -54,20 +56,35 @@ export interface AgentMcpStdio {
   readonly credential: GatewayCredential;
   /** The gateway's base url as the container sees it. */
   readonly gatewayUrl: string;
+  /**
+   * Which job the turn is doing, and therefore which tools it is listed.
+   *
+   * The server has no other way to learn this. Its credential says which task a
+   * run may write to, which is a narrower fact and a different one — a manager
+   * is bound to no task at all, so "bound to nothing" and "not told anything"
+   * are the same value on the wire. So the role is stated here, in the same
+   * environment the gateway's url travels in.
+   */
+  readonly role: RunRole;
 }
 
 /**
- * The two variables the server reads, filled in for one turn.
+ * The three variables the server reads, filled in for one turn.
  *
  * A rolling credential puts a path here and no token, so nothing in the
  * provider's configuration — which is written to a file and handed across a
  * pipe — carries the secret itself. A fixed one still puts the value here,
  * because a process that was handed a token has nowhere else to keep it.
+ *
+ * The role is not a secret and is not a permission: it decides which tools the
+ * turn is *told* about, and the credential beside it is what any of them can
+ * actually do.
  */
 const stdioEnv = (server: AgentMcpStdio) => ({
   ...(server.credential.kind === "file"
     ? { [GATEWAY_TOKEN_FILE_ENV_VAR]: server.credential.path }
     : { [GATEWAY_TOKEN_ENV_VAR]: Redacted.value(server.credential.token) }),
+  [AGENT_ROLE_ENV_VAR]: server.role,
   [GATEWAY_URL_ENV_VAR]: server.gatewayUrl,
 });
 

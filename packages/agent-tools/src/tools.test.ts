@@ -7,13 +7,24 @@
  * refuses the tool outright), a tool pointed at an endpoint other than the one
  * it documents, and a failure rendered as a stack instead of a sentence.
  *
+ * Two of them are about size rather than correctness, and are here because
+ * everything this file describes is in the prompt of every turn: a definition
+ * carried under `$defs` that no `$ref` reaches is bytes a client cannot use,
+ * and a tool listed to a role whose credential refuses it on every call is a
+ * schema bought with a `403`. Both are invisible to a test that only asks
+ * whether the table works.
+ *
  * The calls themselves are covered by the check script against a real gateway —
  * a mocked HTTP client would prove only that this file agrees with itself.
+ * Which of them a worker is actually refused is checked there too, against a
+ * real token, because that is the fact the listing is filtered on.
  */
 
 import { describe, expect, it } from "bun:test";
-import { describeFailure, ToolFailed } from "./tool";
-import { AGENT_TOOLS, agentToolByName } from "./tools";
+import { TaskCreate } from "@workspace/api";
+import { Schema } from "effect";
+import { describeFailure, ToolFailed, toolInputJsonSchema } from "./tool";
+import { AGENT_TOOLS, agentToolByName, agentToolsFor } from "./tools";
 
 /** The names the manager's rules and the tool table both spell out. */
 const EXPECTED_NAMES = [
@@ -83,6 +94,30 @@ const THREAD_SCOPED = [
   "threads_messages",
   "threads_runs",
 ] as const;
+
+/**
+ * The three a worker's credential is refused on whatever it passes, and
+ * therefore the three it is not told about. Restated here on purpose, for the
+ * reason `EXPECTED_ENDPOINTS` is: the table derives this from the endpoints,
+ * and a derivation nobody pinned is a filter that can quietly widen.
+ */
+const REFUSED_TO_A_WORKER = [
+  "projects_create",
+  "tasks_create",
+  "tasks_delete",
+] as const;
+
+/** The definitions a schema carries, and the ones something inside it points at. */
+const definitionsOf = (schema: ReturnType<typeof toolInputJsonSchema>) => {
+  const carried = Object.keys((schema.$defs ?? {}) as Record<string, unknown>);
+  const text = JSON.stringify(schema);
+  return {
+    carried,
+    reached: carried.filter((name) =>
+      text.includes(`"$ref":"#/$defs/${name}"`)
+    ),
+  };
+};
 
 /** The fields of a tool's input schema, as the object an MCP client is handed. */
 const propertiesOf = (name: string): Record<string, unknown> => {
@@ -180,6 +215,107 @@ describe("the agent tool table", () => {
 
   it("answers an unknown name with nothing rather than a guess", () => {
     expect(agentToolByName("tasks_archive")).toBeUndefined();
+  });
+});
+
+/**
+ * Every character of a tool's input schema is in the prompt of every turn that
+ * is shown the tool, so a definition nothing can follow is a cost with no
+ * reader. Resolving the top-level `$ref` inlines the named schema into the root
+ * and leaves the definition behind it — `tasks_create` used to ship its whole
+ * schema twice that way.
+ */
+describe("the input schema of a tool", () => {
+  it("carries no definition nothing in it points at", () => {
+    for (const tool of AGENT_TOOLS) {
+      const { carried, reached } = definitionsOf(tool.inputJsonSchema);
+      expect([tool.name, carried]).toEqual([tool.name, reached]);
+    }
+  });
+
+  it("still says everything the request schema said", () => {
+    expect([...Object.keys(propertiesOf("tasks_create"))].sort()).toEqual(
+      [...Object.keys(TaskCreate.fields)].sort()
+    );
+  });
+
+  it("keeps a definition two fields share, rather than pruning it", () => {
+    const shared = toolInputJsonSchema(
+      Schema.Struct({ one: TaskCreate, two: TaskCreate })
+    );
+    expect(definitionsOf(shared).carried).toEqual(["TaskCreate"]);
+  });
+
+  it("keeps one reached only through another definition", () => {
+    const outer = Schema.Struct({ inner: TaskCreate }).annotate({
+      identifier: "Outer",
+    });
+    const through = toolInputJsonSchema(Schema.Struct({ outer }));
+    expect(definitionsOf(through).carried.sort()).toEqual([
+      "Outer",
+      "TaskCreate",
+    ]);
+  });
+});
+
+/**
+ * Which tools a role is told about.
+ *
+ * A worker's token is bound to one task, so a write on no task at all is
+ * refused as `unscoped_route` however the call is written, and erasing a task
+ * is refused on the actor. Three tools are therefore a schema in every worker's
+ * prompt and a `403` every time one is called. What is filtered is the listing
+ * and only the listing: `AGENT_TOOLS` is still one table and the gateway still
+ * answers every name in it.
+ */
+describe("the tools a role is listed", () => {
+  it("gives a manager the whole table", () => {
+    expect(agentToolsFor("manager")).toEqual(AGENT_TOOLS);
+  });
+
+  it("leaves a worker the ones its binding can never reach", () => {
+    const listed = agentToolsFor("worker").map((tool) => tool.name);
+    expect(listed).toEqual(
+      AGENT_TOOLS.map((tool) => tool.name).filter(
+        (name) => !REFUSED_TO_A_WORKER.includes(name as never)
+      )
+    );
+  });
+
+  it("hides exactly those three and nothing that reads", () => {
+    const hidden = AGENT_TOOLS.filter((tool) => !tool.reachedByWorker);
+    expect(hidden.map((tool) => tool.name)).toEqual([...REFUSED_TO_A_WORKER]);
+    for (const tool of hidden) {
+      expect([tool.name, tool.endpoint.startsWith("GET ")]).toEqual([
+        tool.name,
+        false,
+      ]);
+    }
+  });
+
+  it("still lists every write a run makes on its own card", () => {
+    const listed = new Set(agentToolsFor("worker").map((tool) => tool.name));
+    for (const name of [
+      "messages_post",
+      "tasks_edit",
+      "tasks_move",
+      "runs_stop",
+      "runs_rerun",
+    ]) {
+      expect([name, listed.has(name)]).toEqual([name, true]);
+    }
+  });
+
+  /**
+   * The listing is not the authorization. A worker whose model calls a hidden
+   * name — off a cached listing, or because the rules quote it — must reach the
+   * gateway and be told `unscoped_route`, which is the real rule, rather than
+   * this process inventing that the board no longer has the tool.
+   */
+  it("finds a hidden tool by name anyway, so the gateway answers it", () => {
+    for (const name of REFUSED_TO_A_WORKER) {
+      expect(agentToolByName(name)?.name).toBe(name);
+    }
   });
 });
 

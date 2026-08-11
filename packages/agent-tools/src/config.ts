@@ -22,6 +22,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import type { RunRole } from "@workspace/domain";
 import { Config, Effect, Redacted, Schema } from "effect";
 
 /** The gateway's base url **as the container sees it**, e.g. `http://host.docker.internal:3100`. */
@@ -32,6 +33,20 @@ export const GATEWAY_TOKEN_ENV_VAR = "ATM_GATEWAY_TOKEN";
 
 /** The file the turn's bearer token is read from, re-read on every request. */
 export const GATEWAY_TOKEN_FILE_ENV_VAR = "ATM_GATEWAY_TOKEN_FILE";
+
+/**
+ * Which of the two jobs the turn this server was launched for is doing.
+ *
+ * Read only to decide which tools are *listed*; nothing here authorizes
+ * anything, and the credential the tools present is what actually decides what
+ * a call may do. That is why absence is not an error and why an unrecognized
+ * value is not either: the only thing this variable can do is take tools out of
+ * a listing, so a value nobody here recognises takes none out and the turn sees
+ * the whole table — which is the state before the variable existed. Failing the
+ * server over a misspelling would instead cost the turn every board tool, which
+ * is the loud version of exactly the wrong outcome.
+ */
+export const AGENT_ROLE_ENV_VAR = "ATM_AGENT_ROLE";
 
 /**
  * Where a request's bearer token comes from.
@@ -45,10 +60,12 @@ export type GatewayCredential =
   | { readonly kind: "file"; readonly path: string }
   | { readonly kind: "value"; readonly token: Redacted.Redacted };
 
-/** Where the tools send their requests, and what they authenticate with. */
+/** Where the tools send their requests, what they authenticate with, and for whom. */
 export interface GatewayConfig {
   readonly baseUrl: string;
   readonly credential: GatewayCredential;
+  /** Whose listing this server serves. See {@link AGENT_ROLE_ENV_VAR}. */
+  readonly role: RunRole;
 }
 
 /**
@@ -115,13 +132,30 @@ const credentialConfig: Config.Config<GatewayCredential> = Config.string(
 );
 
 /**
+ * The role, defaulting to the one that is told about everything.
+ *
+ * The default is `manager` rather than the narrower one on purpose: a role that
+ * failed to arrive should cost a turn nothing, and a worker shown three tools
+ * it cannot use is what happened before this existed, while a manager silently
+ * missing `tasks_create` is a chat that cannot file work and cannot say why.
+ */
+const roleConfig: Config.Config<RunRole> = Config.string(
+  AGENT_ROLE_ENV_VAR
+).pipe(
+  Config.map((value): RunRole => (value === "worker" ? "worker" : "manager")),
+  Config.withDefault<RunRole>("manager")
+);
+
+/**
  * The gateway configuration, or a failed layer build naming what is missing.
- * There is no default and no fallback: a server that starts with no credential
- * at all would answer every tool call with a 401 the model then narrates as a
- * board problem.
+ * There is no default and no fallback for the credential: a server that starts
+ * with no credential at all would answer every tool call with a 401 the model
+ * then narrates as a board problem. The role is the one thing here that does
+ * have a default, for the reason above it.
  */
 export const readGatewayConfig = Effect.gen(function* () {
   const baseUrl = yield* Config.string(GATEWAY_URL_ENV_VAR);
   const credential = yield* credentialConfig;
-  return { baseUrl, credential } satisfies GatewayConfig;
+  const role = yield* roleConfig;
+  return { baseUrl, credential, role } satisfies GatewayConfig;
 });
