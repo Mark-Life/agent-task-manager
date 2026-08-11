@@ -50,7 +50,10 @@ describe("isResumable", () => {
     expect(isResumable(candidate("failed", "interrupted"))).toBe(false);
   });
 
-  test("a failed session somebody stopped is not — the stop is the answer", () => {
+  // Nothing files this state today — a stop finishes the session rather than
+  // failing it, so the gate never sees one. The case is here because the gate is
+  // total over `RUN_OUTCOMES` and should stay that way.
+  test("a failed session whose last run was stopped is not resumable either", () => {
     expect(isResumable(candidate("failed", "stopped"))).toBe(false);
   });
 
