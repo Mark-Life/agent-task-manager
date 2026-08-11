@@ -28,32 +28,34 @@ import {
 } from "./build-images";
 
 describe("parseTargets", () => {
-  test("naming nothing means both, so a cron line does not have to say so", () => {
-    expect(parseTargets([])).toEqual(["base", "browser"]);
+  test("naming nothing means every kind, so a cron line does not have to say so", () => {
+    expect(parseTargets([])).toEqual(["base"]);
   });
 
   test("naming one builds one", () => {
-    expect(parseTargets(["--browser"])).toEqual(["browser"]);
+    expect(parseTargets(["--base"])).toEqual(["base"]);
   });
 
-  test("--check alone still reports on both", () => {
-    expect(parseTargets(["--check"])).toEqual(["base", "browser"]);
+  test("a flag that is not an image kind selects nothing and so builds everything", () => {
+    expect(parseTargets(["--check"])).toEqual(["base"]);
     expect(isCheckOnly(["--check"])).toBe(true);
     expect(isCheckOnly(["--base"])).toBe(false);
   });
 });
 
+/** The recipe file name, as the digest reads it off disk. */
+const BASE_RECIPE = /base\.Dockerfile$/;
+
 describe("recipeFilesFor", () => {
-  test("the browser recipe includes the base recipe, because it is built on it", () => {
-    const browser = recipeFilesFor("browser");
-    expect(browser).toHaveLength(2);
-    expect(browser[0]).toBe(recipeFilesFor("base")[0] as string);
+  test("a kind's recipe is the Dockerfile it is built from", () => {
+    const base = recipeFilesFor("base");
+    expect(base).toHaveLength(1);
+    expect(base[0]).toMatch(BASE_RECIPE);
   });
 });
 
 describe("buildArgv", () => {
   const argv = buildArgv({
-    baseImage: null,
     kind: "base",
     tag: "2026-01-02-abc",
   });
@@ -68,14 +70,8 @@ describe("buildArgv", () => {
     expect(argv).toContain("atm.local/base:latest");
   });
 
-  test("the base build passes no base image; the browser build passes the one it was given", () => {
-    expect(argv.some((arg) => arg.startsWith("BASE_IMAGE="))).toBe(false);
-    const browser = buildArgv({
-      baseImage: "atm.local/base:2026-01-02-abc",
-      kind: "browser",
-      tag: "2026-01-02-def",
-    });
-    expect(browser).toContain("BASE_IMAGE=atm.local/base:2026-01-02-abc");
+  test("passes no build args, so the recipe digest is the whole recipe", () => {
+    expect(argv).not.toContain("--build-arg");
   });
 });
 
@@ -124,8 +120,8 @@ describe("prune flags", () => {
     expect(isPruneOnly(["--prune"])).toBe(true);
   });
 
-  test("--prune with no image named sweeps both repositories", () => {
-    expect(parseTargets(["--prune"])).toEqual(["base", "browser"]);
+  test("--prune with no image named sweeps every repository", () => {
+    expect(parseTargets(["--prune"])).toEqual(["base"]);
   });
 });
 
@@ -147,10 +143,10 @@ describe("parseKeep", () => {
 
 describe("listArgv", () => {
   test("asks one repository for every tag it holds, with the image id", () => {
-    expect(listArgv("browser")).toEqual([
+    expect(listArgv("base")).toEqual([
       "image",
       "ls",
-      "atm.local/browser",
+      "atm.local/base",
       "--format={{.Tag}}\t{{.ID}}",
     ]);
   });
@@ -202,7 +198,7 @@ describe("staleTags", () => {
   });
 
   test("keeping more than exist removes nothing", () => {
-    expect(staleTags({ keep: 10, kind: "browser", rows })).toEqual([]);
+    expect(staleTags({ keep: 10, kind: "base", rows })).toEqual([]);
   });
 });
 

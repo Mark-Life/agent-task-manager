@@ -143,7 +143,7 @@ export interface SandboxSpec {
   readonly hardening: HardeningSpec;
   /** Whose run this is, and what it joins to. */
   readonly identity: RunIdentity;
-  /** Image tag, pinned. The `base` or `browser` image, both arm64. */
+  /** Image reference, pinned. The arm64 sandbox image, at a tag. */
   readonly image: string;
   /** Built by `mountsFor`, never assembled by hand. */
   readonly mounts: readonly Mount[];

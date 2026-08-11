@@ -1,5 +1,5 @@
 /**
- * What the two sandbox images are called. Pure naming — nothing here talks to a
+ * What the sandbox image is called. Pure naming — nothing here talks to a
  * daemon or reads a disk.
  *
  * There are exactly two parties that spell an image name and they never meet:
@@ -20,13 +20,25 @@
 import { Schema } from "effect";
 
 /**
- * The two images. `base` is what nearly everything runs on; `browser` adds
- * Chromium and is several hundred megabytes heavier, which on a four-core host
- * is start latency every run pays.
+ * The images this repository builds. One, and it carries a Chromium.
+ *
+ * There were two. `browser` was `base` plus Chromium, opted into per task
+ * through `task.sandbox_image`, on the argument that several hundred megabytes
+ * is start latency every run would otherwise pay. Neither half held up: no run
+ * was ever started from it, and nothing about starting a container reads the
+ * image's size — `--pull=missing` against a registry that resolves nowhere means
+ * the daemon mounts local layers or fails, and it never downloads. Meanwhile
+ * runs that needed a page built themselves a browser at run time. See
+ * docker/README.md and `docker/base.Dockerfile`'s header.
+ *
+ * A list of one rather than a bare constant, because the kind is the repository
+ * half of every name here and the sweep in `scripts/build-images.ts` walks these
+ * repositories by kind. A second image, if one is ever worth building again, is
+ * a member here and a Dockerfile — not a reshaped module.
  */
-export const IMAGE_KINDS = ["base", "browser"] as const;
+export const IMAGE_KINDS = ["base"] as const;
 
-/** Which of the two images a run wants. */
+/** Which image a run wants. */
 export const ImageKind = Schema.Literals(IMAGE_KINDS);
 export type ImageKind = typeof ImageKind.Type;
 
@@ -41,9 +53,8 @@ export const IMAGE_REGISTRY = "atm.local";
 export const LATEST_TAG = "latest";
 
 /**
- * The image a task takes when it names none. Base, because a run that needed a
- * browser would have said so, and paying browser start-up for every coding task
- * is the wrong default on a host that fits three containers.
+ * The image a task takes when it names none, which is every task that has not
+ * pinned a dated tag.
  */
 export const DEFAULT_IMAGE_KIND: ImageKind = "base";
 
@@ -78,6 +89,11 @@ export const DEFAULT_SANDBOX_IMAGE = imageRef({
  * operator pinning a dated tag, or naming an image this file has never heard
  * of, is making a decision rather than a typo, and rejecting it here would mean
  * a redeploy to try a new image.
+ *
+ * With one image kind the field is no longer how a run asks for a capability;
+ * it is how a task pins a build. That is the whole reason it stays: the escape
+ * hatch that lets somebody try an image built by hand, or hold a task on last
+ * week's toolchain, without a deploy.
  */
 export const sandboxImageFor = (selected: string | null) =>
   selected ?? DEFAULT_SANDBOX_IMAGE;

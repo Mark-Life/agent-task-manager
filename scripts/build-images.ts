@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 /**
- * Builds the two sandbox images and says what it produced.
+ * Builds the sandbox image and says what it produced.
  *
  * A run's image is the one thing about a sandbox that is decided somewhere
  * other than in code: it is built here, by a human or a cron entry, and read
@@ -10,20 +10,15 @@
  * rather than from a string in a shell alias — the failure it exists to prevent
  * is an image built as one thing and looked for as another.
  *
- * Two immutable facts land on every build. Each image gets a dated tag carrying
+ * Two immutable facts land on every build. The image gets a dated tag carrying
  * a digest of the Dockerfile it was built from, and `latest` is repointed at it.
  * The dated tag is what a task pins when it wants a frozen toolchain; `latest`
  * is what the default resolves to, so a scheduled rebuild reaches runs without
  * anyone editing a row.
  *
- * The browser image is built against the base image from the same invocation,
- * by its immutable tag, never `latest`. Building it against a moving tag makes
- * a browser image whose base half is whatever was on disk at the time, which is
- * a pair of images that can drift while both look current.
- *
  * Every build also sweeps, because nothing else on the host does. A build
  * writes two tags and removes none, so a weekly rebuild leaves last week's
- * images and last week's build cache on the disk for as long as the disk lasts.
+ * image and last week's build cache on the disk for as long as the disk lasts.
  * The sweep removes old dated tags by name, newest {@link KEPT_BUILDS} kept,
  * and drops the build cache. Removing by name is the whole safety of it:
  * `docker image prune -a` would reclaim the same bytes and take `latest` with
@@ -32,14 +27,12 @@
  *
  * Usage:
  *
- *   bun run images:build              both images, then sweep what they replaced
- *   bun run images:build --base       just the base image
- *   bun run images:build --browser    just the browser image, on the base `latest`
+ *   bun run images:build              build, then sweep what it replaced
  *   bun run images:build --check      what exists locally, how old it is, and what a
  *                                     sweep would remove; changes nothing
  *   bun run images:build --prune      sweep only; builds nothing
  *   bun run images:build --no-prune   build and leave the old tags alone
- *   bun run images:build --keep=4     how many dated builds per image survive a sweep
+ *   bun run images:build --keep=4     how many dated builds survive a sweep
  *
  * A build takes minutes and prints the daemon's output as it goes, because a
  * silent five-minute command is one nobody can tell from a hung one.
@@ -75,21 +68,13 @@ const DOCKER = "docker";
  */
 const PLATFORM = "linux/arm64";
 
-/** The build context. Neither Dockerfile copies anything, so this is only a directory to point at. */
+/** The build context. The Dockerfile copies nothing, so this is only a directory to point at. */
 const CONTEXT_DIR = new URL("../docker/", import.meta.url).pathname;
 
 /** The recipe for one image kind, relative to the repository root. */
 const DOCKERFILE = {
   base: new URL("../docker/base.Dockerfile", import.meta.url).pathname,
-  browser: new URL("../docker/browser.Dockerfile", import.meta.url).pathname,
 } as const satisfies Record<ImageKind, string>;
-
-/**
- * How the browser image is told which base to build on. Matches the `ARG` at
- * the top of `browser.Dockerfile`; the two spellings are the reason this is a
- * constant.
- */
-const BASE_IMAGE_ARG = "BASE_IMAGE";
 
 /**
  * How old an image may get before `--check` calls it stale, in days. Twice the
@@ -98,10 +83,10 @@ const BASE_IMAGE_ARG = "BASE_IMAGE";
 const STALE_AFTER_DAYS = 14;
 
 /**
- * How many dated builds of one image kind a sweep leaves behind, on top of
- * whatever `latest` points at. Two, which at the weekly cadence is the same two
- * weeks {@link STALE_AFTER_DAYS} calls fresh: the build a run would get today,
- * and the one an operator rolls back to when today's is wrong.
+ * How many dated builds a sweep leaves behind, on top of whatever `latest`
+ * points at. Two, which at the weekly cadence is the same two weeks
+ * {@link STALE_AFTER_DAYS} calls fresh: the build a run would get today, and
+ * the one an operator rolls back to when today's is wrong.
  *
  * It is also what a pinned task can count on. `task.sandbox_image` may name a
  * dated tag, and this script cannot see the board — asking a build to read the
@@ -169,8 +154,10 @@ const ImageInspect = Schema.Struct({
 const decodeInspect = Schema.decodeUnknownEffect(Schema.Array(ImageInspect));
 
 /**
- * Which images the invocation asked for. Naming neither means both, because the
- * scheduled rebuild wants both and a cron line should not have to say so.
+ * Which images the invocation asked for. Naming none means all of them, because
+ * the scheduled rebuild wants all of them and a cron line should not have to
+ * say so. With one kind that is every invocation, and `--base` is a spelling of
+ * the default rather than a choice.
  */
 export const parseTargets = (argv: readonly string[]): readonly ImageKind[] => {
   const named = IMAGE_KINDS.filter((kind) => argv.includes(`--${kind}`));
@@ -295,15 +282,14 @@ export const BUILD_CACHE_PRUNE_ARGV: readonly string[] = [
 ];
 
 /**
- * A digest of what an image is built from. The browser recipe includes the base
- * recipe because it is built on it: a change to the base image is a change to
- * the browser image, and a tag that said otherwise would be the one lie an
- * immutable tag must not tell.
+ * A digest of what an image is built from — every file whose bytes decide what
+ * the image contains. One recipe today; an image built on another image would
+ * list that one's recipe too, since a tag claiming otherwise would be the one
+ * lie an immutable tag must not tell.
  */
-export const recipeFilesFor = (kind: ImageKind): readonly string[] =>
-  kind === "browser"
-    ? [DOCKERFILE.base, DOCKERFILE.browser]
-    : [DOCKERFILE.base];
+export const recipeFilesFor = (kind: ImageKind): readonly string[] => [
+  DOCKERFILE[kind],
+];
 
 /** `YYYY-MM-DD` in UTC, so two hosts building the same recipe agree on the day. */
 export const utcDate = (at: Date) => at.toISOString().slice(0, 10);
@@ -336,7 +322,6 @@ export const ageDays = (input: {
 
 /** What one build asks the daemon to do. Pure, so the argv is assertable without a daemon. */
 export const buildArgv = (input: {
-  readonly baseImage: string | null;
   readonly kind: ImageKind;
   readonly tag: string;
 }): readonly string[] => [
@@ -352,9 +337,6 @@ export const buildArgv = (input: {
   imageRef({ kind: input.kind, tag: input.tag }),
   "--tag",
   imageRef({ kind: input.kind, tag: LATEST_TAG }),
-  ...(input.baseImage === null
-    ? []
-    : ["--build-arg", `${BASE_IMAGE_ARG}=${input.baseImage}`]),
   CONTEXT_DIR,
 ];
 
@@ -512,7 +494,6 @@ const sweep = Effect.fn("BuildImages.sweep")(function* (input: {
 
 /** One image built, tagged twice, and reported by its immutable tag. */
 const buildImage = Effect.fn("BuildImages.buildImage")(function* (input: {
-  readonly baseImage: string | null;
   readonly kind: ImageKind;
   readonly now: Date;
 }) {
@@ -523,11 +504,7 @@ const buildImage = Effect.fn("BuildImages.buildImage")(function* (input: {
   const image = imageRef({ kind: input.kind, tag });
   yield* Effect.logInfo(`building ${image}`);
   const exitCode = yield* Effect.mapError(
-    Effect.scoped(
-      dockerStreamed(
-        buildArgv({ baseImage: input.baseImage, kind: input.kind, tag })
-      )
-    ),
+    Effect.scoped(dockerStreamed(buildArgv({ kind: input.kind, tag }))),
     asUnavailable
   );
   if (exitCode !== 0) {
@@ -580,32 +557,16 @@ const checkImage = Effect.fn("BuildImages.checkImage")(function* (input: {
 });
 
 /**
- * Builds what was asked for, base first.
- *
- * The base image's immutable tag is threaded into the browser build, so a
- * `--browser`-only invocation is the one case that falls back to `latest` —
- * which is correct, because there is no base build in this invocation to be
- * consistent with.
+ * Builds what was asked for. One `now` for the whole invocation, so images built
+ * together carry the same date even across a midnight boundary.
  */
 const buildAll = Effect.fn("BuildImages.buildAll")(function* (
   targets: readonly ImageKind[]
 ) {
   const now = new Date();
   const built: string[] = [];
-  const base = targets.includes("base")
-    ? yield* buildImage({ baseImage: null, kind: "base", now })
-    : null;
-  if (base !== null) {
-    built.push(base);
-  }
-  if (targets.includes("browser")) {
-    built.push(
-      yield* buildImage({
-        baseImage: base ?? imageRef({ kind: "base", tag: LATEST_TAG }),
-        kind: "browser",
-        now,
-      })
-    );
+  for (const kind of targets) {
+    built.push(yield* buildImage({ kind, now }));
   }
   return built;
 });

@@ -29,16 +29,19 @@
  *                                   cross. Everything here is about the sandbox,
  *                                   and none of it is about the image.
  *
- *   bun run sandbox:check --agent   the same script against the real base image
- *                                   (`atm.local/base:latest`, or `--image X`).
- *                                   Adds the one thing alpine cannot say: that
- *                                   the image `bun run images:build` produced
- *                                   exists on this host, starts under the
- *                                   confinement, and has the tools a run reaches
- *                                   for — bun, node, git, gh, ripgrep and both
- *                                   agent CLIs — on its PATH. Minutes if the
- *                                   image has to be built first; this script
- *                                   never builds one.
+ *   bun run sandbox:check --agent   the same script against the real sandbox
+ *                                   image (`atm.local/base:latest`, or
+ *                                   `--image X`). Adds what alpine cannot say:
+ *                                   that the image `bun run images:build`
+ *                                   produced exists on this host, starts under
+ *                                   the confinement, has the tools a run reaches
+ *                                   for on its PATH — bun, node, git, gh,
+ *                                   ripgrep, both agent CLIs, chromium and
+ *                                   agent-browser — and that its chromium can
+ *                                   actually start a renderer in there, which is
+ *                                   the one claim `command -v` cannot make.
+ *                                   Minutes if the image has to be built first;
+ *                                   this script never builds one.
  *
  * The docker implementation is pinned deliberately: `SANDBOX_MODE` does not
  * affect this script, because a check meaning to prove that containers work must
@@ -212,7 +215,22 @@ const AGENT_IMAGE_TOOLS = [
   "rg",
   "claude",
   "codex",
+  "chromium",
+  "agent-browser",
 ] as const;
+
+/**
+ * The one image claim `command -v` cannot make.
+ *
+ * Chromium is on PATH in an image whose renderer dies at startup, whose fonts
+ * are missing, and whose `/dev/shm` is too small — and every one of those is a
+ * hang or a blank screenshot in the middle of a run rather than an error. The
+ * Dockerfile renders `about:blank` at build time for that reason; this renders
+ * it again under the real confinement, which is the half a build cannot see:
+ * `--cap-drop=ALL`, `no-new-privileges`, a 64 MB `/dev/shm` and a `noexec`
+ * `/tmp` are applied by `hardening.ts`, not by the recipe.
+ */
+const BROWSER_PROBE_KEY = "chromiumrenders";
 
 /** One thing the sandbox was supposed to do and did not. */
 class CheckFailed extends Schema.TaggedErrorClass<CheckFailed>()(
@@ -337,12 +355,18 @@ const containerScript = (sentinel: Sentinel) =>
     `exit ${CONTAINER_EXIT_CODE}`,
   ].join("\n");
 
-/** The extra lines the real image is asked for, one per tool it promises. */
+/**
+ * The extra lines the real image is asked for: one per tool it promises, then
+ * the one claim that is about a tool working rather than existing.
+ */
 const toolScript = () =>
-  AGENT_IMAGE_TOOLS.map(
-    (tool) =>
-      `printf 'tool:%s:[%s]\\n' '${tool}' "$(command -v ${tool} >/dev/null 2>&1 && echo yes || echo no)"`
-  ).join("\n");
+  [
+    ...AGENT_IMAGE_TOOLS.map(
+      (tool) =>
+        `printf 'tool:%s:[%s]\\n' '${tool}' "$(command -v ${tool} >/dev/null 2>&1 && echo yes || echo no)"`
+    ),
+    `printf '${BROWSER_PROBE_KEY}:[%s]\\n' "$(chromium --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --dump-dom about:blank >/dev/null 2>&1 && echo yes || echo no)"`,
+  ].join("\n");
 
 /**
  * One `key:[value]` line the container printed, or null where it printed none.
@@ -707,6 +731,12 @@ const sandboxCheck = Effect.gen(function* () {
       detail: `absent from the image: ${missing.join(", ")}`,
       ok: missing.length === 0,
       step: "the agent image carries every tool a run reaches for",
+    });
+    yield* check({
+      detail:
+        "chromium is on PATH and could not render about:blank under the confinement — a missing library, no fonts, or /dev/shm too small",
+      ok: readField(output, BROWSER_PROBE_KEY) === "yes",
+      step: "that image's chromium starts a renderer inside the sandbox, not just on the build host",
     });
   } else {
     yield* Effect.logInfo(

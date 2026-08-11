@@ -42,6 +42,7 @@ import {
 } from "./render";
 import {
   artifactRulesOf,
+  BROWSER_RULES,
   CREDENTIAL_RULES,
   SHARED_RULES,
   WORKER_RULES,
@@ -169,6 +170,14 @@ const freshPrompt = (input: WorkerPromptInput) => {
     section("Acceptance criteria", task.acceptance),
     section("Project", projectSection(project)),
     section("Where you are working", placementSection({ placement, repoUrl })),
+    // Unconditional: every container is started from the one image, and that
+    // image has a browser in it. A local run is the exception this does not
+    // handle — it is a host process, and whether the host has a Chromium is not
+    // something this prompt can know. Said anyway, because the cost of a local
+    // run reaching for a binary it does not have is one failed command, and the
+    // cost of a container never knowing it has one was seven cards that closed
+    // by asking a person to go and look.
+    BROWSER_RULES,
     // Only for a run with a repository, because the credential is what cloned
     // it: a scratch-directory run has nothing to push and telling it about a
     // token is telling it about a tool it will not reach for.

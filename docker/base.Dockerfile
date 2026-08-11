@@ -1,4 +1,4 @@
-# The base sandbox image: everything a run needs, baked in.
+# The sandbox image: everything a run needs, baked in.
 #
 # The premise is that a container starts and the agent begins working. Every
 # tool a run reaches for is already here, at a version somebody chose, because
@@ -6,6 +6,17 @@
 # — a per-run network dependency, a per-run failure mode, and a per-run version
 # that nobody recorded. The image is rebuilt on a schedule instead; see
 # docker/README.md.
+#
+# Chromium is here for that reason and no other. It used to live in a second
+# image a task opted into by name, on the argument that several hundred
+# megabytes of browser is start latency every run would otherwise pay. That
+# argument was wrong twice. Nothing pulls at container start — the images are
+# built on the host that runs them and `--pull=missing` never fires — so the
+# bytes cost a mount, not a download. And in the week the second image existed,
+# not one run was ever started from it, while two runs that needed a page staged
+# a Chromium into `$HOME` by hand at run time: the exact per-run download the
+# split was invented to avoid, paid because the opt-in was a free-text field
+# nobody knew to fill in.
 #
 # Every version below is an exact one and every download is checked against a
 # hash published with that release. An unpinned tool is a different image every
@@ -63,6 +74,11 @@ ARG CLAUDE_CODE_VERSION=2.1.220
 # the binary.
 ARG CODEX_VERSION=0.146.0
 
+# The browser automation CLI the agent drives. Its own binary is downloaded by a
+# postinstall script from a GitHub release, so that layer needs the network and
+# the version is what pins it.
+ARG AGENT_BROWSER_VERSION=0.33.1
+
 # The uid and gid every container runs as.
 #
 # Numeric and stable, and it has to stay in step with `DEFAULT_USER` in
@@ -101,7 +117,7 @@ RUN set -eu; \
 # checking. `python3: command not found` came back in 52 of 184 runs, `jq` in 10
 # and `bc` in 5, and the recovery is the same every time: notice the failure,
 # rewrite the one-liner as `bun -e`, four seconds gone. They cost 26 MiB
-# installed on an image of roughly 1.1 GiB, and 25 of those 26 are `python3`.
+# installed on an image of roughly 1.9 GiB, and 25 of those 26 are `python3`.
 # It is the full interpreter and not `python3-minimal`, which would save 13 MiB
 # by leaving out `libpython3.11-stdlib` — the package that carries `json` and
 # `statistics`. A one-liner that does not import `json` is a rare one-liner.
@@ -173,6 +189,45 @@ RUN set -eu; \
   "@openai/codex@${CODEX_VERSION}"; \
   npm cache clean --force
 
+# Chromium, plus the two things apt will not pull in for it.
+#
+# Its own layer, and the last heavy one, because it is 695 MB installed across
+# 159 packages — more than half the image — and every layer above it is one a
+# rebuild should still hit cache on when only this version moves.
+#
+# `chromium` itself drags in the whole runtime stack as ordinary Debian
+# dependencies — libnss3 for certificate handling, libgbm1 and libdrm2 for the
+# graphics buffers headless still allocates, libatk1.0-0 and at-spi2 for the
+# accessibility tree agent-browser reads elements out of, libxkbcommon0 and the
+# libx11/libxcb family for input and window handling, libasound2 for audio
+# devices Chromium probes even with none present. Listing them by hand is a list
+# that goes stale against the package; the package already declares them.
+#
+# The two that are *not* dependencies, and that a headless browser is visibly
+# broken without:
+#
+# - `fonts-liberation`: Debian's Chromium depends on no font at all. Without
+#   one, every screenshot and every text measurement renders as boxes, so a page
+#   the agent screenshots is unreadable and any layout assertion is meaningless.
+#   Liberation is metric-compatible with Arial, Times and Courier, which is what
+#   most pages actually ask for.
+# - `fonts-noto-color-emoji`: emoji are ordinary content on the pages an agent
+#   is sent to read, and without this they render as tofu — visible in a
+#   screenshot and, worse, silently absent from extracted text.
+RUN set -eu; \
+  apt-get update; \
+  apt-get install -y --no-install-recommends \
+  chromium \
+  fonts-liberation \
+  fonts-noto-color-emoji; \
+  rm -rf /var/lib/apt/lists/*
+
+# agent-browser ships a native binary per platform; the postinstall picks the
+# aarch64 one. Installed globally so it resolves on PATH for the agent user.
+RUN set -eu; \
+  npm install -g --no-audit --no-fund "agent-browser@${AGENT_BROWSER_VERSION}"; \
+  npm cache clean --force
+
 # The account every run is. `--create-home` because both CLIs and `gh` write
 # state under HOME, and a user without one writes to `/` and fails.
 RUN set -eu; \
@@ -214,10 +269,31 @@ ENV HOME=/home/${AGENT_USER} \
   NPM_CONFIG_FUND=false \
   NPM_CONFIG_UPDATE_NOTIFIER=false
 
+# `AGENT_BROWSER_EXECUTABLE_PATH` is what stops the CLI looking for a Chrome it
+# would otherwise offer to download into the per-run agent home — several
+# hundred megabytes fetched and thrown away every run, which is why Debian's
+# `chromium` is installed above instead.
+#
+# The two launch flags are both consequences of how this container is confined,
+# and both are silent hangs rather than clean errors when they are missing.
+#
+# `--no-sandbox`: Chromium's own sandbox needs either the setuid helper or
+# unprivileged user namespaces, and `--cap-drop=ALL` with
+# `no-new-privileges:true` takes away both. The container is the sandbox — that
+# is the whole design — so Chromium's second one is redundant here, and asking
+# for it produces a renderer that dies at startup.
+#
+# `--disable-dev-shm-usage`: Docker gives a container 64 MB of `/dev/shm` by
+# default and Chromium puts its renderer's shared memory there, so a page of
+# any weight crashes the tab. The flag moves it to a regular temporary file,
+# which lands in the run's `/tmp` tmpfs.
+ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
+  AGENT_BROWSER_ARGS=--no-sandbox,--disable-dev-shm-usage
+
 # What each pinned version actually was, readable with `docker image inspect`
 # and without starting a container.
 LABEL org.opencontainers.image.title="atm sandbox base" \
-  org.opencontainers.image.description="Base sandbox image for agent-task-manager runs: bun, node, git, gh, ripgrep, python3, jq, bc, Claude Code and Codex." \
+  org.opencontainers.image.description="Sandbox image for agent-task-manager runs: bun, node, git, gh, ripgrep, python3, jq, bc, Claude Code, Codex, Chromium and agent-browser." \
   com.atm.image.kind="base" \
   com.atm.version.node="${NODE_VERSION}" \
   com.atm.version.bun="${BUN_VERSION}" \
@@ -225,6 +301,7 @@ LABEL org.opencontainers.image.title="atm sandbox base" \
   com.atm.version.ripgrep="${RIPGREP_VERSION}" \
   com.atm.version.claude_code="${CLAUDE_CODE_VERSION}" \
   com.atm.version.codex="${CODEX_VERSION}" \
+  com.atm.version.agent_browser="${AGENT_BROWSER_VERSION}" \
   com.atm.user="${AGENT_UID}:${AGENT_GID}"
 
 USER ${AGENT_USER}
@@ -233,6 +310,12 @@ WORKDIR /workspace
 # Every tool answers, as the unprivileged user that will actually run them. A
 # broken install fails the build here rather than in the first minute of a run
 # that has already claimed a worker slot.
+#
+# Chromium is asked to render rather than to print its version, because the ways
+# it breaks in a container — a missing shared library, a font stack with no
+# fonts in it, `/dev/shm` too small — all leave `chromium --version` answering
+# perfectly. `--dump-dom about:blank` starts a real renderer, which is the
+# cheapest thing that does not.
 RUN set -eu; \
   node --version; \
   npm --version; \
@@ -244,6 +327,9 @@ RUN set -eu; \
   jq --version; \
   bc --version; \
   claude --version; \
-  codex --version
+  codex --version; \
+  chromium --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
+  --dump-dom about:blank > /dev/null; \
+  agent-browser --version
 
 CMD ["bash"]

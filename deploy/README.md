@@ -158,7 +158,7 @@ sudo -u atm bun run entrypoint:build   # ${DATA_ROOT}/bin/turn.js — the contai
 sudo -u atm bun run agent-mcp:build    # ${DATA_ROOT}/bin/agent-mcp.js — the board tools
 ```
 
-`images:build` also sweeps: each image's dated tags beyond the newest two, and
+`images:build` also sweeps: the image's dated tags beyond the newest two, and
 the whole build cache. That is the only thing on this host that removes docker
 data, and without it a weekly rebuild adds a few gigabytes a week to a disk that
 also holds every run's checkout. `bun run images:build --prune` is the sweep on
@@ -685,8 +685,8 @@ Run on a host:
   exists to prevent, seen rather than predicted.
 - **`user:add`** created an account, linked its password and wrote its
   membership, and printed the two ids a `TELEGRAM_ALLOWLIST` entry needs.
-- **`images:build`, `entrypoint:build`, `agent-mcp:build`** — two arm64 images
-  and both bundles, from a clean host.
+- **`images:build`, `entrypoint:build`, `agent-mcp:build`** — the arm64 sandbox
+  image and both bundles, from a clean host.
 - **`dashboard:build`** with `VITE_GATEWAY_URL` set: the gateway's address is in
   the emitted JavaScript.
 

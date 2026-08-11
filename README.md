@@ -32,7 +32,7 @@ bun run harness:check --live                          # proves a real turn can r
 Then build the container images and the bundles a container runs, and start the three processes:
 
 ```bash
-bun run images:build         # two arm64 images, base and browser; sweeps old ones
+bun run images:build         # the arm64 sandbox image; sweeps old ones
 bun run entrypoint:build     # the turn entrypoint
 bun run agent-mcp:build      # the board tools, as an MCP server
 
