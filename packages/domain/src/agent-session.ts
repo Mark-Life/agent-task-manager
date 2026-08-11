@@ -65,11 +65,15 @@ export interface AgentSession extends Schema.Schema.Type<typeof AgentSession> {}
  * in the middle of a tool call, and resuming into it replays the thing that
  * broke.
  *
- * `stopped` is excluded on different grounds and deliberately, not by oversight.
- * A stop command is usually somebody watching a run go wrong, and the
- * conversation they stopped is the one they did not want continued. Someone who
- * does want it continued has a way to say so that this default cannot override:
- * pinning the session on the task.
+ * `stopped` is excluded on the same grounds and reaches a narrower set of
+ * sessions than that reads like. This list is only ever consulted for a session
+ * already marked `failed`, and a stop does not mark one: the terminal path fails
+ * a session only for an ending that is not an interrupt, so a run somebody
+ * stopped — and one the loop was carrying when it went down — finishes its
+ * session instead, and a finished session is resumable whatever its last run
+ * did. Stop then Rerun therefore continues the conversation, which is what the
+ * Stop button is for. `stopped` is named here for the day that changes, not to
+ * describe what happens today.
  */
 export const RESUMABLE_OUTCOMES = ["done", "timeout"] as const;
 
