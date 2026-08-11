@@ -169,9 +169,17 @@ export interface ComposedSkillsDirInput {
   readonly runId: RunId;
 }
 
+/**
+ * The directory every composition is a child of. Read by `./sweep`: a
+ * composition is scoped to its run exactly as a checkout is, so it is stranded
+ * by the same ending and reclaimed by the same pass.
+ */
+export const composedSkillsRootOf = (dataRoot: string) =>
+  join(dataRoot, COMPOSED_SKILLS_SEGMENT);
+
 /** Where the composition is made: a sibling of the run's own directory, never a child. */
 export const composedSkillsDirOf = (input: ComposedSkillsDirInput) =>
-  join(input.dataRoot, COMPOSED_SKILLS_SEGMENT, input.runId);
+  join(composedSkillsRootOf(input.dataRoot), input.runId);
 
 /**
  * The directories searched, in the order they are read: broadest first, and

@@ -164,9 +164,18 @@ export interface RunDirInput {
   readonly runId: RunId;
 }
 
+/**
+ * The directory every run's directory is a child of.
+ *
+ * Named separately because a sweep reads the parent and a run writes a child,
+ * and the two have to agree on the spelling — this is the same reason the whole
+ * file exists, applied one level up.
+ */
+export const runsRootOf = (dataRoot: string) => join(dataRoot, RUNS_SEGMENT);
+
 /** The run's directory on the host, under the data root. */
 export const runDirOf = (input: RunDirInput) =>
-  join(input.dataRoot, RUNS_SEGMENT, input.runId);
+  join(runsRootOf(input.dataRoot), input.runId);
 
 /** The layout as the host sees it. */
 export const hostRunLayout = (input: RunDirInput) => runLayout(runDirOf(input));

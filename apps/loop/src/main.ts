@@ -38,8 +38,15 @@ const program = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator;
 
   const recovered = yield* orchestrator.recover;
+  const { swept } = recovered;
   yield* Effect.logInfo(
     `recovered — ${recovered.leasesReclaimed} stale leases reclaimed, ${recovered.runsClosed} runs closed as lost, ${recovered.containersReaped} orphan containers removed`
+  );
+  // Its own line rather than four more clauses on the one above: that one is
+  // about what a killed loop left in the database, and this is about what it
+  // left on the disk.
+  yield* Effect.logInfo(
+    `swept — ${swept.runDirectories} run directories, ${swept.checkouts} checkouts, ${swept.compositions} skills compositions, ${swept.mirrors} repository mirrors`
   );
 
   // Never returns on its own: the trigger listens and the pool takes work until

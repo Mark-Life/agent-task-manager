@@ -202,6 +202,9 @@ How each part actually behaves: [agent homes](.docs/agent-homes.md),
 [project env files](.docs/project-env.md), [orchestrator](.docs/orchestrator.md),
 [gateway](.docs/gateway.md), [bot](.docs/bot.md), [event ledger](.docs/telemetry.md).
 
+What is under `DATA_ROOT`, what removes each of it, and what to delete when the disk gets
+tight: [`.docs/disk.md`](.docs/disk.md).
+
 Every prompt and rule an agent is given, with a link to each and who reads it when:
 [`.docs/agent-prompts.md`](.docs/agent-prompts.md).
 

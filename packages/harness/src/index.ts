@@ -124,6 +124,7 @@ export {
   type RunLayout,
   runDirOf,
   runLayout,
+  runsRootOf,
   TRANSCRIPT_GLOB,
   transcriptDirOf,
 } from "./paths";
