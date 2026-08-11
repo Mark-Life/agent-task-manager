@@ -310,7 +310,7 @@ the whole phase, which is what Phase 6 first built.
    has not seen, ordered by that message's arrival. Both queues are database reads, so
    nothing is lost on restart.
 4. **Pool** with a lane per role and a concurrency cap each, the sum sized for a 4-core box.
-   Two lanes rather than one cap with a reservation: a chat starved behind two hour-long
+   Two lanes rather than one cap with a reservation: a chat starved behind two day-long
    worker runs is the failure the lane exists to prevent.
 5. **Leases**: in-memory in-flight set, durable lease file heartbeated on an interval, and
    startup reclaim of stale leases after a crash. Keyed by the run's subject — `task:<id>`

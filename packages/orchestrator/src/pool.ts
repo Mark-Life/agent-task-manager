@@ -10,7 +10,7 @@
  * **Two lanes, one pool.** Board work and chat each get their own count, and
  * the box's cap is the sum. Two semaphores rather than one with a reservation,
  * because the failure the lane exists to prevent is a person waiting on an
- * answer behind two hour-long worker runs — and a reservation only guarantees
+ * answer behind two day-long worker runs — and a reservation only guarantees
  * that when the reserved count is a separate count anyway. It stays one
  * service for the opposite reason: two services would be two caps, and two caps
  * on one box is no cap at all.

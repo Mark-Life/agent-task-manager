@@ -177,7 +177,7 @@ describe("the second lane", () => {
         const second = yield* hold();
         yield* holding.await;
 
-        // This is the whole reason the lane exists: two hour-long worker runs
+        // This is the whole reason the lane exists: two day-long worker runs
         // are holding every work slot, and the person waiting on an answer is
         // admitted anyway.
         const chat = yield* workers.admit("chat", (slot) =>
