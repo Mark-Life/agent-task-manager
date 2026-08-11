@@ -9,6 +9,7 @@ import { type ChangeEvent, type ReactNode, useCallback, useState } from "react";
 import { usePatchTask } from "@/api/tasks";
 import { DocumentField } from "@/features/task/inline";
 import { failureText } from "@/lib/failure";
+import { useUpdateHold } from "@/pwa/hold";
 
 /** How the metadata blob is written when a person is about to edit it. */
 const INDENT = 2;
@@ -113,6 +114,11 @@ export const TaskBrief = ({ task }: { readonly task: Task }) => {
 const MetadataField = ({ task }: { readonly task: Task }) => {
   const [draft, setDraft] = useState<string | null>(null);
   const [invalid, setInvalid] = useState<string | null>(null);
+
+  // This field keeps its own draft rather than going through the inline
+  // primitives, so it has to take its own hold against a background update.
+  useUpdateHold(draft !== null, "something is being edited");
+
   const patch = usePatchTask();
   const { mutate } = patch;
 

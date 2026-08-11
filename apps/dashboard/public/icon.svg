@@ -1,0 +1,9 @@
+<svg aria-label="Agent Task Manager" height="512" role="img" viewBox="0 0 512 512" width="512" xmlns="http://www.w3.org/2000/svg" >
+  <rect fill="#0a0a0a" height="512" rx="114.53" width="512" x="0" y="0" />
+  <rect fill="#47d1cd" height="306.38" opacity="0.26" rx="24.37" width="83.56" x="102.81" y="102.81" />
+  <rect fill="#47d1cd" height="306.38" opacity="0.26" rx="24.37" width="83.56" x="214.22" y="102.81" />
+  <rect fill="#47d1cd" height="306.38" opacity="0.26" rx="24.37" width="83.56" x="325.63" y="102.81" />
+  <rect fill="#47d1cd" height="83.56" rx="17.41" width="55.71" x="116.74" y="130.66" />
+  <rect fill="#47d1cd" height="83.56" rx="17.41" width="55.71" x="228.15" y="214.22" />
+  <rect fill="#47d1cd" height="83.56" rx="17.41" width="55.71" x="339.56" y="297.78" />
+</svg>

@@ -39,6 +39,7 @@ import {
   useSaveProjectEnvFile,
 } from "@/api/project-env";
 import { Failed, failureSentence, Pending } from "@/components/query-state";
+import { useUpdateHold } from "@/pwa/hold";
 
 /** What each refusal means to the person typing the path. */
 const PATH_REFUSALS: Record<string, string> = {
@@ -70,6 +71,29 @@ interface EditorProps {
   readonly open: boolean;
   readonly projectId: ProjectId;
 }
+
+/**
+ * Whether this dialog is holding something a reload would destroy.
+ *
+ * Compared against what was seeded rather than against emptiness: the boxes
+ * arrive holding the file, so "has something in it" is true from the moment it
+ * opens, and only a difference means somebody typed. What is typed here is an
+ * environment file, which nothing else has a copy of until it is saved — which
+ * is what makes it worth holding a background update off for.
+ */
+const hasEdits = (input: {
+  readonly content: string;
+  readonly open: boolean;
+  readonly path: string;
+  readonly seeded: { readonly content: string; readonly path: string };
+}) => {
+  if (!input.open) {
+    return false;
+  }
+  return (
+    input.path !== input.seeded.path || input.content !== input.seeded.content
+  );
+};
 
 /**
  * One file's whole text, in a plain textarea.
@@ -125,6 +149,19 @@ const EnvFileEditor = ({
     setPath(file?.path ?? "");
     setContent(existing.data?.content ?? "");
   }
+
+  useUpdateHold(
+    hasEdits({
+      content,
+      open,
+      path,
+      seeded: {
+        content: existing.data?.content ?? "",
+        path: file?.path ?? "",
+      },
+    }),
+    "an environment file is being edited"
+  );
 
   const save = useSaveProjectEnvFile();
   const { mutate } = save;

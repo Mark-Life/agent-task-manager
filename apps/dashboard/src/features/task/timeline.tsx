@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/empty-state";
 import { Pending } from "@/components/query-state";
 import { TimelineEvent } from "@/features/task/timeline-event";
 import { failureText } from "@/lib/failure";
+import { useUpdateHold } from "@/pwa/hold";
 
 interface RunTimelineProps {
   /** Whether this is the attempt a container is working on right now. */
@@ -27,6 +28,13 @@ interface RunTimelineProps {
  */
 export const RunTimeline = ({ live, runId, taskId }: RunTimelineProps) => {
   const { events, isComplete, query } = useRunEvents(taskId, runId, live);
+
+  // Somebody is watching a run arrive. A reload here drops the timeline back to
+  // its first page and refetches from the top, which is the moment being
+  // watched taken away, so the background update waits until the run ends or
+  // the screen is left.
+  useUpdateHold(live && !isComplete, "a run is being watched");
+
   const { fetchNextPage } = query;
   const more = useCallback(() => {
     fetchNextPage();

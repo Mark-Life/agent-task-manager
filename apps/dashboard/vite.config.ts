@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv, type ProxyOptions } from "vite";
+import { serviceWorker } from "./tools/service-worker.ts";
 
 /**
  * Every path the gateway answers on, as seen from the browser.
@@ -98,7 +99,10 @@ export default defineConfig(({ mode }) => {
     optimizeDeps: {
       exclude: ["@workspace/ui"],
     },
-    plugins: [react(), tailwindcss()],
+    // The worker plugin only applies to a build, which is also the only place
+    // the app registers one: a dev server rewrites modules on every keystroke
+    // and a worker caching that is a worker serving yesterday's edit.
+    plugins: [react(), tailwindcss(), serviceWorker()],
     resolve: {
       alias: {
         "@": fileURLToPath(new URL("./src", import.meta.url)),

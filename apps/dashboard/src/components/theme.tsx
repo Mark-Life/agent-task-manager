@@ -2,7 +2,7 @@ import { Moon02Icon, Sun03Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Button } from "@workspace/ui/components/button";
 import { ThemeProvider as NextThemesProvider, useTheme } from "next-themes";
-import { type ReactNode, useCallback } from "react";
+import { type ReactNode, useCallback, useEffect } from "react";
 import { ShortcutHint } from "@/components/shortcut";
 import { useHotkey } from "@/lib/hotkey";
 
@@ -52,9 +52,50 @@ export const ThemeProvider = ({ children }: { children: ReactNode }) => (
     storageKey={THEME_STORAGE_KEY}
   >
     <ThemeHotkey />
+    <ThemeColor />
     {children}
   </NextThemesProvider>
 );
+
+/**
+ * `--background` per theme, as the two hex values a browser chrome wants.
+ *
+ * The stylesheet states them in oklch and nothing converts a custom property
+ * for a `<meta>`, so they are written out here — and again, unavoidably, in the
+ * pre-paint script in `index.html`, which has to set the bar before any of this
+ * module exists. Three places, one colour; change them together.
+ */
+export const THEME_COLORS = { dark: "#0a0a0a", light: "#f5f5f5" } as const;
+
+/**
+ * Keeps the status bar of an installed app the same colour as the app.
+ *
+ * The `<meta>` could carry two values behind `prefers-color-scheme` media
+ * queries and never need this, but those follow the machine and this app lets
+ * somebody override it — a phone in dark mode showing the light theme would
+ * have a black bar over a white page. Renders nothing; it exists to have a
+ * place to read the resolved theme from.
+ */
+const ThemeColor = () => {
+  const { resolvedTheme } = useTheme();
+
+  useEffect(() => {
+    // Undefined until the provider has mounted and read storage. The pre-paint
+    // script has already put the right value there, so the only thing to do
+    // with the unresolved state is leave it alone.
+    if (resolvedTheme === undefined) {
+      return;
+    }
+    document
+      .getElementById("theme-color")
+      ?.setAttribute(
+        "content",
+        resolvedTheme === "light" ? THEME_COLORS.light : THEME_COLORS.dark
+      );
+  }, [resolvedTheme]);
+
+  return null;
+};
 
 /**
  * What one press stores, given what is on screen and what the machine asks for.

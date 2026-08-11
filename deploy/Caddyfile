@@ -130,9 +130,29 @@
 	# paths never changes — a new build writes a new name. Anything else,
 	# `index.html` above all, must be revalidated or a deploy is invisible
 	# until the browser feels like asking again.
+	#
+	# Two matchers that cannot both match, rather than one rule and an override:
+	# whether a second `header` with a wider matcher would win is a question
+	# about Caddy's internals, and the answer to it should not be what decides
+	# whether this app can be updated.
+	#
+	# The unfingerprinted half is `index.html`, which names the asset hashes and
+	# so pins a browser holding a stale copy to a build that no longer exists;
+	# `manifest.webmanifest`, which is what an install reads; and `sw.js` — a
+	# service worker cached for a day is a service worker that cannot ship its
+	# own replacement. `no-cache` does not mean "do not store": the copy is kept
+	# and revalidated before each use, so the ordinary answer is a 304 with no
+	# body. Matching happens before `try_files` rewrites, so a navigation to
+	# /tasks/<id> is matched on the path the browser asked for and lands here
+	# too, which is the point — that response is `index.html`.
 	@fingerprinted path /assets/*
+	@revalidated not path /assets/*
 	header @fingerprinted Cache-Control "public, max-age=31536000, immutable"
+	header @revalidated Cache-Control "no-cache"
 
+	# `sw.js` sits at the root of `dist` and is served from the root of this
+	# site, which is the scope it has to control. A worker served from anywhere
+	# below only ever sees the requests below it.
 	try_files {path} /index.html
 	file_server
 }

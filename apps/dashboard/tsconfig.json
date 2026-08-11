@@ -1,6 +1,11 @@
 {
   "extends": "@workspace/typescript-config/react-library.json",
   "compilerOptions": {
+    // Vite's own config loader resolves `./tools/service-worker.ts` literally
+    // and warns about an extensionless import; TypeScript needs telling that
+    // such a specifier is allowed. It is a permission, not a requirement —
+    // nothing else in this workspace writes one.
+    "allowImportingTsExtensions": true,
     "noEmit": true,
     "types": ["bun", "vite/client"],
     "paths": {
@@ -11,6 +16,10 @@
       "@workspace/domain": ["../../packages/domain/src/index.ts"]
     }
   },
-  "include": ["src", "vite.config.ts"],
-  "exclude": ["node_modules"]
+  // `worker` is here for the two modules the page and the service worker share;
+  // `worker/sw.ts` is excluded because it runs in a scope where `document` and
+  // `window` do not exist, and it is checked by `worker/tsconfig.json` under
+  // the right lib instead.
+  "include": ["src", "tools", "worker", "vite.config.ts"],
+  "exclude": ["node_modules", "worker/sw.ts"]
 }
