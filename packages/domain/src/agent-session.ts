@@ -50,7 +50,7 @@ export interface AgentSession extends Schema.Schema.Type<typeof AgentSession> {}
 
 /**
  * The run outcomes after which continuing the conversation is the right next
- * move. Chosen against the whole of `RUN_OUTCOMES`, and the three it leaves out
+ * move. Chosen against the whole of `RUN_OUTCOMES`, and the four it leaves out
  * are the point.
  *
  * `done` is the ordinary one: the run finished and the session is `finished`.
@@ -59,13 +59,14 @@ export interface AgentSession extends Schema.Schema.Type<typeof AgentSession> {}
  * to the last turn it answered, and the work in it is exactly what the next
  * attempt would otherwise re-derive from nothing.
  *
- * `errored` and `lost` are excluded because they say the run's own state went
- * wrong: a crash mid-turn and a process that stopped reporting leave a
- * conversation that may be truncated in the middle of a tool call, and resuming
- * into it replays the thing that broke.
+ * `errored`, `lost` and `interrupted` are excluded because they say the run's
+ * own state went wrong: a crash mid-turn, a process that stopped reporting, and
+ * the loop going down under a run all leave a conversation that may be truncated
+ * in the middle of a tool call, and resuming into it replays the thing that
+ * broke.
  *
- * `interrupted` is excluded on different grounds and deliberately, not by
- * oversight. A stop command is usually somebody watching a run go wrong, and the
+ * `stopped` is excluded on different grounds and deliberately, not by oversight.
+ * A stop command is usually somebody watching a run go wrong, and the
  * conversation they stopped is the one they did not want continued. Someone who
  * does want it continued has a way to say so that this default cannot override:
  * pinning the session on the task.

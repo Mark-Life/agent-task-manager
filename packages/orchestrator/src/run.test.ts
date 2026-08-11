@@ -937,8 +937,12 @@ test("a run somebody stopped is filed as stopped, and its session stays resumabl
   // run's row as `errored / Unknown` with their name nowhere on it.
   const seen = await provide(
     Effect.gen(function* () {
-      const { owner } = yield* ensureWorkspace;
-      const task = yield* seedTask({ owner, title: "stopped run" });
+      const { owner, workspace } = yield* ensureWorkspace;
+      const task = yield* seedTask({
+        owner,
+        title: "stopped run",
+        workspaceId: workspace.id,
+      });
       const context = yield* openRun(claimOf(task));
 
       const fiber = yield* Effect.forkChild(
