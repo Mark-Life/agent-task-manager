@@ -4,7 +4,6 @@ import {
   KanbanIcon,
   Key01Icon,
   Logout01Icon,
-  TerminalIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -47,6 +46,15 @@ import { useHotkeys } from "@/lib/hotkey";
 
 /** Where signing out lands, and the one page the shell never wraps. */
 const SIGN_IN_PATH = "/login";
+
+/**
+ * The header mark's intrinsic size, which `size-4` also lays it out at.
+ *
+ * On the element as well as in the class so the row reserves the space before
+ * the file arrives: without it the wordmark starts flush left and jumps a
+ * quarter-inch once the icon loads.
+ */
+const MARK_PX = 16;
 
 /**
  * The whole of the navigation. The board is the work, projects are where it
@@ -287,10 +295,25 @@ export const Shell = ({ children, conversations }: ShellProps) => {
           */}
           <div className="flex items-center gap-1 group-data-[collapsible=icon]:justify-center">
             <div className="flex min-w-0 flex-1 items-center gap-1.5 group-data-[collapsible=icon]:hidden">
-              <HugeiconsIcon
-                className="size-4 shrink-0 text-primary"
-                icon={TerminalIcon}
-                strokeWidth={2}
+              {/*
+                The installed app's own icon, by reference rather than by
+                copy: `/icon.svg` is what the manifest lists first and what
+                <link rel="icon"> already points at, so the header, the tab
+                and a home screen cannot come to disagree. The name beside it
+                is the label; the tile is decorative, hence the empty alt.
+
+                The radius is the plate's own — TILE_RADIUS in `tools/mark.ts`
+                — so the clip follows the corner already drawn rather than
+                cutting a second one across it. A `rounded-*` token would not
+                do: `--radius` is 1rem here, and at 16px that is a circle.
+              */}
+              {/* biome-ignore lint/performance/noImgElement: this is a Vite app, with no framework image component behind the rule. */}
+              <img
+                alt=""
+                className="size-4 shrink-0 rounded-[22.37%]"
+                height={MARK_PX}
+                src="/icon.svg"
+                width={MARK_PX}
               />
               <span className="truncate font-heading font-medium text-sm">
                 Agent Task Manager
