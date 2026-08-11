@@ -53,9 +53,9 @@ import {
   ProjectRepo,
   storeLayer,
   TaskRepo,
-  WorkspaceRepo,
   withActor,
 } from "@workspace/db";
+import { ensureFixtureWorkspace } from "@workspace/db/testing";
 import type {
   FileScope,
   Project,
@@ -88,12 +88,6 @@ import {
 
 /** Reported as `application_name`, so `pg_stat_activity` names this process. */
 const APPLICATION_NAME = "gateway-files-test";
-
-/** The database has never been seeded, so there is no workspace to hang a task on. */
-class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
-  "FilesTest.NoWorkspace",
-  { detail: Schema.String }
-) {}
 
 const seeder = Actor.cases.system.make({ reason: APPLICATION_NAME });
 
@@ -210,25 +204,22 @@ beforeAll(async () => {
 
   const built = await runtime.runPromise(
     Effect.gen(function* () {
-      const workspaces = yield* WorkspaceRepo;
-      const [first] = yield* workspaces.list();
-      if (first === undefined) {
-        return yield* Effect.fail(
-          new NoWorkspace({ detail: "run `bun run db:seed` first" })
-        );
-      }
+      const fixture = yield* ensureFixtureWorkspace({
+        suite: APPLICATION_NAME,
+      });
+      const scope = fixture.workspace.id;
       const projects = yield* ProjectRepo;
       const tasks = yield* TaskRepo;
       const made = yield* projects.create({
         name: "files: the endpoints",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       const card = yield* tasks.create({
         projectId: made.id,
         title: "files: browse and edit",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
-      return { card, made, workspaceId: first.id };
+      return { card, made, workspaceId: scope };
     }).pipe(withActor(seeder))
   );
 

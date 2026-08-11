@@ -14,23 +14,17 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { PgClient } from "@effect/sql-pg";
 import type { WorkspaceId } from "@workspace/domain";
 import { newTaskId, TelegramChatId, UserId } from "@workspace/domain";
-import { DateTime, Effect, ManagedRuntime, Schema } from "effect";
+import { DateTime, Effect, ManagedRuntime } from "effect";
 import { withActor } from "../actor";
 import { storeLayer } from "../store";
+import { ensureFixtureWorkspace } from "../testing/fixtures";
 import { ChatMessageRepo } from "./chat-message";
 import { ChatNotificationRepo } from "./chat-notification";
 import { ChatThreadRepo } from "./chat-thread";
 import { AgentSessionRepo } from "./session";
-import { WorkspaceRepo } from "./workspace";
 
 /** Reported as `application_name`, so `pg_stat_activity` names this process. */
 const APPLICATION_NAME = "db-chat-test";
-
-/** The database has never been seeded, so there is no workspace to hang a thread on. */
-class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
-  "ChatRepoTest.NoWorkspace",
-  { detail: Schema.String }
-) {}
 
 /** Telegram numbers a group chat negatively; the column is signed for that reason. */
 const CHAT_ID_RANGE = 1_000_000_000;
@@ -57,14 +51,10 @@ let workspaceId: WorkspaceId;
 beforeAll(async () => {
   workspaceId = await runtime.runPromise(
     Effect.gen(function* () {
-      const workspaces = yield* WorkspaceRepo;
-      const [first] = yield* workspaces.list();
-      if (first === undefined) {
-        return yield* Effect.fail(
-          new NoWorkspace({ detail: "run `bun run db:seed` first" })
-        );
-      }
-      return first.id;
+      const fixture = yield* ensureFixtureWorkspace({
+        suite: APPLICATION_NAME,
+      });
+      return fixture.workspace.id;
     })
   );
 });

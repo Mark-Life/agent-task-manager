@@ -44,9 +44,9 @@ import {
   ProjectRepo,
   storeLayer,
   TaskRepo,
-  WorkspaceRepo,
   withActor,
 } from "@workspace/db";
+import { ensureFixtureWorkspace } from "@workspace/db/testing";
 import {
   Actor,
   newAgentSessionId,
@@ -94,26 +94,16 @@ const worker = (taskId: TaskId) =>
     taskId,
   });
 
-/** The database has never been seeded, so there is no workspace to file into. */
-class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
-  "BoardTest.NoWorkspace",
-  { detail: Schema.String }
-) {}
-
 const runtime = ManagedRuntime.make(
   storeLayer({ applicationName: APPLICATION_NAME })
 );
 
 const workspaceId = await runtime.runPromise(
   Effect.gen(function* () {
-    const workspaces = yield* WorkspaceRepo;
-    const [first] = yield* workspaces.list();
-    if (first === undefined) {
-      return yield* Effect.fail(
-        new NoWorkspace({ detail: "run `bun run db:seed` first" })
-      );
-    }
-    return first.id;
+    const { workspace } = yield* ensureFixtureWorkspace({
+      suite: APPLICATION_NAME,
+    });
+    return workspace.id;
   })
 );
 

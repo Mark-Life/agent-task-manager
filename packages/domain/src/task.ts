@@ -11,6 +11,38 @@ import { recordFields, Timestamp } from "./primitives";
 export const TaskMetadata = Schema.Record(Schema.String, Schema.Json);
 export type TaskMetadata = typeof TaskMetadata.Type;
 
+/**
+ * The one metadata key the system itself reads: this card is a test fixture and
+ * not work anybody asked for.
+ *
+ * It exists because the test suite writes real rows — the store's claims are
+ * about a real database and checking them against a fake would be checking the
+ * fake — and a suite pointed at the wrong database once left four of those rows
+ * on the board, one of which then collected a manager comment. A flag is the
+ * answer rather than a delete: the row is the only surviving record of some
+ * early runs, and erasing it to tidy the board would take their trail with it.
+ *
+ * Read by {@link isFixtureTask}, and honoured where a column is *listed* —
+ * which is both the board and the dispatch queue, since they are one read. A
+ * card addressed by id still answers, so a link into a flagged card opens and
+ * its thread is still there.
+ */
+export const FIXTURE_METADATA_KEY = "fixture";
+
+/** What a test stamps on every card it files. See {@link FIXTURE_METADATA_KEY}. */
+export const FIXTURE_METADATA = {
+  [FIXTURE_METADATA_KEY]: true,
+} satisfies TaskMetadata;
+
+/**
+ * Whether this card is a fixture. Exactly `true` counts: metadata is free-form
+ * JSON an agent may write, and a key holding a string or an object is somebody
+ * recording something else under a name that collided.
+ */
+export const isFixtureTask = (task: {
+  readonly metadata: TaskMetadata;
+}): boolean => task.metadata[FIXTURE_METADATA_KEY] === true;
+
 /** Continue the task's latest session with its full history. The default, because resuming beats starting over. */
 const LatestSession = Schema.Struct({ mode: Schema.tag("latest") });
 

@@ -116,6 +116,15 @@ The libraries are consumed as source through tsconfig paths and have no build st
 `typecheck` and `test` — not `build` — are what cover them. `bun run openapi --check` fails when
 the committed spec has drifted from the contract.
 
+The repository tests run against a real Postgres, and never against yours. `bun run test` runs
+`bun run db:test` first, which creates `<your database>_test` beside the ordinary one and migrates
+it; the test preload redirects `DATABASE_URL` there whatever the environment says, and
+`TEST_DATABASE_URL` is the only way to aim the suite somewhere else. Inside it, each suite creates
+a workspace of its own — `fixtures-<suite>` — rather than filing into the first one it finds, and
+what it files carries `metadata.fixture`, which keeps a card the teardown missed out of every
+column listing and therefore out of the dispatch queue as well. Running `bun test` in one package
+directly gets the same redirect: it is the preload, not the script.
+
 `typecheck` is two gates in one pass. The compiler is TypeScript 7, the native Go port, and the
 binary behind `tsc` is [`@effect/tsgo`](https://github.com/Effect-TS/tsgo) — a superset of
 Microsoft's `tsgo` carrying the Effect language service, so ordinary type errors and Effect

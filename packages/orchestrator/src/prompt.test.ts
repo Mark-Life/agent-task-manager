@@ -17,9 +17,9 @@ import {
   storeLayer,
   TaskMessageRepo,
   TaskRepo,
-  WorkspaceRepo,
   withActor,
 } from "@workspace/db";
+import { ensureFixtureWorkspace } from "@workspace/db/testing";
 import {
   type Actor,
   type AgentSession,
@@ -32,7 +32,7 @@ import {
 import { hostRunLayout } from "@workspace/harness";
 import type { RunPlacement } from "@workspace/prompts";
 import type { RunWorkspace } from "@workspace/sandbox";
-import { DateTime, Effect, Schema } from "effect";
+import { DateTime, Effect } from "effect";
 import type { DispatchContext } from "./dispatch-context";
 import { buildRunPrompt, placementOf, watermarkOf } from "./prompt";
 import { workerAttachment } from "./subject";
@@ -169,22 +169,14 @@ const remover: Actor = {
   userId: UserId.make(APPLICATION_NAME),
 };
 
-/** This database has never been seeded, so there is no workspace to hang rows off. */
-class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
-  "PromptTest.NoWorkspace",
-  {}
-) {}
-
 const walk = Effect.gen(function* () {
-  const workspaces = yield* WorkspaceRepo;
   const tasks = yield* TaskRepo;
   const messages = yield* TaskMessageRepo;
   const sessions = yield* AgentSessionRepo;
 
-  const [workspace] = yield* workspaces.list();
-  if (workspace === undefined) {
-    return yield* Effect.fail(new NoWorkspace());
-  }
+  const { workspace } = yield* ensureFixtureWorkspace({
+    suite: APPLICATION_NAME,
+  });
   const scope = workspace.id;
 
   const filed = yield* tasks.create({
@@ -299,12 +291,12 @@ afterAll(async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
       const tasks = yield* TaskRepo;
-      const [workspace] = yield* (yield* WorkspaceRepo).list();
-      if (workspace !== undefined) {
-        yield* tasks
-          .delete({ id, workspaceId: workspace.id })
-          .pipe(withActor(remover));
-      }
+      const { workspace } = yield* ensureFixtureWorkspace({
+        suite: APPLICATION_NAME,
+      });
+      yield* tasks
+        .delete({ id, workspaceId: workspace.id })
+        .pipe(withActor(remover));
     }).pipe(withActor(actor), Effect.provide(store))
   );
 });

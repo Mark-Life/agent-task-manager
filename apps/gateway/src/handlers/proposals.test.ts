@@ -37,9 +37,9 @@ import {
   RunRepo,
   storeLayer,
   TaskRepo,
-  WorkspaceRepo,
   withActor,
 } from "@workspace/db";
+import { ensureFixtureWorkspace } from "@workspace/db/testing";
 import type {
   Project,
   Proposal,
@@ -53,7 +53,7 @@ import {
   globalArtifactsDirOf,
   projectArtifactsDirOf,
 } from "@workspace/sandbox";
-import { Effect, Layer, ManagedRuntime, Schema } from "effect";
+import { Effect, Layer, ManagedRuntime } from "effect";
 import {
   confirmProposal,
   listTaskProposals,
@@ -62,12 +62,6 @@ import {
 
 /** Reported as `application_name`, so `pg_stat_activity` names this process. */
 const APPLICATION_NAME = "gateway-proposals-test";
-
-/** The database has never been seeded, so there is no workspace to hang a task on. */
-class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
-  "ProposalsTest.NoWorkspace",
-  { detail: Schema.String }
-) {}
 
 const seeder = Actor.cases.system.make({ reason: APPLICATION_NAME });
 
@@ -138,23 +132,20 @@ beforeAll(async () => {
 
   const built = await runtime.runPromise(
     Effect.gen(function* () {
-      const workspaces = yield* WorkspaceRepo;
-      const [first] = yield* workspaces.list();
-      if (first === undefined) {
-        return yield* Effect.fail(
-          new NoWorkspace({ detail: "run `bun run db:seed` first" })
-        );
-      }
+      const { workspace } = yield* ensureFixtureWorkspace({
+        suite: APPLICATION_NAME,
+      });
+      const scope = workspace.id;
       const projects = yield* ProjectRepo;
       const tasks = yield* TaskRepo;
       const made = yield* projects.create({
         name: "proposals: the endpoints",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       const card = yield* tasks.create({
         projectId: made.id,
         title: "proposals: confirm and reject",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       const sessions = yield* AgentSessionRepo;
       const runs = yield* RunRepo;
@@ -162,20 +153,20 @@ beforeAll(async () => {
       const session = yield* sessions.open({
         provider: "claude",
         subject,
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       const attempt = yield* runs.create({
         agentSessionId: session.id,
         provider: "claude",
         subject,
         trigger: "status_change",
-        workspaceId: first.id,
+        workspaceId: scope,
       });
       return {
         attempt,
         card,
         made,
-        workspaceId: first.id,
+        workspaceId: scope,
       };
     }).pipe(withActor(seeder))
   );

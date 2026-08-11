@@ -20,10 +20,12 @@
     "@workspace/telemetry": "workspace:*",
     "@workspace/token": "workspace:*",
     "effect": "catalog:",
-    "grammy": "catalog:"
+    "grammy": "catalog:",
+    "pg": "^8.22.0"
   },
   "devDependencies": {
     "@types/bun": "catalog:",
+    "@types/pg": "^8.20.3",
     "@workspace/typescript-config": "workspace:*"
   }
 }

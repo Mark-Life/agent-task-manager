@@ -279,9 +279,18 @@ export type MaterializeStrategy = typeof MaterializeStrategy.Type;
  * off local disk rather than pulling the whole history over the network.
  */
 export interface RepoSource {
-  /** What the run's branch is cut from, `origin/main` and the like. */
+  /**
+   * What the run's branch is cut from, `origin/main` and the like — and what a
+   * branch that already exists is measured against before it is continued.
+   */
   readonly baseRef: string;
-  /** The branch the run pushes, which becomes the PR's head. */
+  /**
+   * The branch the run pushes, which becomes the PR's head. A later run on the
+   * same task continues it: where the remote already has this branch with
+   * commits {@link RepoSource.baseRef} does not, the checkout starts at that tip
+   * rather than at the base, so a rerun adds to the work instead of replacing
+   * it.
+   */
   readonly branch: string;
   /** Used only when the mirror does not exist yet. Null forbids creating it. */
   readonly cloneUrl: string | null;

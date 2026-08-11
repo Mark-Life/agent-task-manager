@@ -35,9 +35,9 @@ import {
   RunRepo,
   storeLayer,
   TaskRepo,
-  WorkspaceRepo,
   withActor,
 } from "@workspace/db";
+import { ensureFixtureWorkspace } from "@workspace/db/testing";
 import {
   Actor,
   type AgentSessionId,
@@ -66,12 +66,6 @@ const EPHEMERAL_PORT = 0;
 /** The address a server bound to a TCP port reports, or nothing to test against. */
 class NotListening extends Schema.TaggedErrorClass<NotListening>()(
   "RunSurfaceTest.NotListening",
-  {}
-) {}
-
-/** The database has no workspace, so nothing below it can be written. */
-class NoWorkspace extends Schema.TaggedErrorClass<NoWorkspace>()(
-  "RunSurfaceTest.NoWorkspace",
   {}
 ) {}
 
@@ -164,12 +158,10 @@ const createdTaskIds: TaskId[] = [];
 beforeAll(async () => {
   workspaceId = await runStore(
     Effect.gen(function* () {
-      const workspaces = yield* WorkspaceRepo;
-      const [workspace] = yield* workspaces.list();
-      if (workspace === undefined) {
-        return yield* Effect.fail(new NoWorkspace());
-      }
-      return workspace.id;
+      const fixture = yield* ensureFixtureWorkspace({
+        suite: APPLICATION_NAME,
+      });
+      return fixture.workspace.id;
     })
   );
   serverScope = await Effect.runPromise(Scope.make());
