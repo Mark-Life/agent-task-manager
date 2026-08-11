@@ -17,7 +17,7 @@ the quota gate or the turn is wrong by construction.
 
 The two lanes are the one exception, and they are a capacity decision rather than a behaviour
 one: `ORCHESTRATOR_MAX_CONCURRENCY` worker slots and `ORCHESTRATOR_MAX_CHAT_CONCURRENCY` chat
-slots, so a person waiting on an answer is never queued behind two hour-long worker runs. The
+slots, so a person waiting on an answer is never queued behind two day-long worker runs. The
 box's ceiling is the sum.
 
 Each unit of work goes through the same sequence, and the order is the design:

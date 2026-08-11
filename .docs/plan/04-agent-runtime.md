@@ -47,7 +47,7 @@ the same code for both roles rather than two copies that drift.
 | --- | --- |
 | Dispatch and claim order — plan, quota, pool, lease, open | A chat message waits behind a drained subscription like anything else. |
 | Lease file, keyed by subject | A crashed manager turn is reconciled as `lost`, not left live forever. |
-| Worker pool, two lanes (`work`, `chat`) with separate caps | A chat cannot starve behind two hour-long worker runs, and it still spends a slot. |
+| Worker pool, two lanes (`work`, `chat`) with separate caps | A chat cannot starve behind two day-long worker runs, and it still spends a slot. |
 | The container, its mounts, its hardening | Same image mechanics; the image itself is a role choice. |
 | `run` row, `run_event` stream, `run_command` | Stop, rerun and the SSE timeline work on a chat turn with no new machinery. |
 | `agent_session` + the unread watermark | Coalescing is not a feature: it is what a watermark does. |
