@@ -129,6 +129,17 @@ export const currentTraceIds = Effect.gen(function* () {
  * The base outcome an exit already tells us: `done` on success, `interrupted`
  * when the fiber was killed, `errored` otherwise. A unit that can distinguish
  * more than this — a timeout, a park — decides for itself and ignores this.
+ *
+ * **This is the whole of what an exit knows, and it is less than a row needs.**
+ * An interrupt carries no payload: `Cause.squash` renders an interrupts-only
+ * cause as a bare `Error("All fibers interrupted without error")`, so neither
+ * the reason a unit was ended nor who asked for it is recoverable from here.
+ * A unit whose interrupts are somebody's decision — a stop command, a newer
+ * prompt superseding one — has to record that where it causes the interrupt
+ * and read it back as it unwinds; `@workspace/orchestrator`'s `StopNote` is
+ * that, and `endingOfTerminus` is what the ledger row is built from instead of
+ * this. Reaching for this function on such a unit files every intervention as
+ * an anonymous `interrupted`, which is a terminus nobody can act on.
  */
 export const outcomeOfExit = (exit: Exit.Exit<unknown, unknown>) => {
   if (exit._tag === "Success") {

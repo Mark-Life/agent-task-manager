@@ -490,6 +490,8 @@ const sandboxCheck = Effect.gen(function* () {
 
       const lines: string[] = [];
       const ran = yield* sandbox.run({
+        onContainer: ({ name }) =>
+          Effect.logInfo(`name  ${name}`).pipe(Effect.asVoid),
         onOutput: (chunk) =>
           Effect.sync(() => {
             lines.push(chunk.text);

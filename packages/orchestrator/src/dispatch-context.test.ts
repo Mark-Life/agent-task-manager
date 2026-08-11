@@ -20,6 +20,7 @@ import {
   eventIdentityOf,
   isFailure,
   isFreshSession,
+  isInterrupt,
   lostTerminus,
   outcomeOfTerminus,
   type RunFailed,
@@ -135,10 +136,19 @@ const failedWith = (errorClass: RunFailed["errorClass"]): RunFailed => ({
   errorMessage: "it went wrong",
   exitCode: 1,
   finalText: "",
+  interruptReason: null,
   kind: "failed",
   providerSessionId: "provider-sess-1",
   totalTokens: null,
   turns: null,
+});
+
+/** A run ended from outside, as the loop's own note named it. */
+const stoppedBy = (
+  interruptReason: RunFailed["interruptReason"]
+): RunFailed => ({
+  ...failedWith("Interrupted"),
+  interruptReason,
 });
 
 describe("DispatchContext", () => {
@@ -220,6 +230,27 @@ describe("RunTerminus", () => {
   test("counts everything but a clean finish as a failure", () => {
     expect(isFailure(finished)).toBe(false);
     expect(isFailure(failedWith("ProcessFailed"))).toBe(true);
+  });
+
+  test("tells a stop from the interrupts nobody chose", () => {
+    // Three interrupts share one class, so the class cannot answer this and the
+    // reason on the terminus is what does. Only the deliberate one is
+    // `stopped`; folding the other two in would make a host reboot look like
+    // somebody's decision.
+    expect(outcomeOfTerminus(stoppedBy("stopped"))).toBe("stopped");
+    expect(outcomeOfTerminus(stoppedBy("shutdown"))).toBe("interrupted");
+    expect(outcomeOfTerminus(stoppedBy("superseded"))).toBe("interrupted");
+    expect(outcomeOfTerminus(failedWith("Interrupted"))).toBe("interrupted");
+  });
+
+  test("reads every interrupt as one, whichever of them it was", () => {
+    // What the thread's heading and the session's ending both turn on: a run
+    // ended from outside did not break, so its session stays resumable.
+    expect(isInterrupt(stoppedBy("stopped"))).toBe(true);
+    expect(isInterrupt(stoppedBy("shutdown"))).toBe(true);
+    expect(isInterrupt(failedWith("Interrupted"))).toBe(true);
+    expect(isInterrupt(failedWith("OomKilled"))).toBe(false);
+    expect(isInterrupt(finished)).toBe(false);
   });
 
   test("reports no numbers at all for a run nobody heard from", () => {

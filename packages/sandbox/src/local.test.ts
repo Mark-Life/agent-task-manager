@@ -158,6 +158,10 @@ const runSpec = (spec: SandboxSpec) => {
     const sandbox = yield* Sandbox;
     const result = yield* Effect.result(
       sandbox.run({
+        // The local sandbox starts no container, so this is never called — see
+        // `runLocal`. Passed because the seam requires an answer, not because
+        // there is one.
+        onContainer: () => Effect.void,
         onOutput: (chunk) =>
           Effect.sync(() => {
             chunks.push(chunk);

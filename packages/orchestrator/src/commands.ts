@@ -36,6 +36,11 @@ import type {
 import { isRunLive, RUN_COMMAND_KINDS } from "@workspace/domain";
 import { boundedCounter } from "@workspace/telemetry";
 import { Cause, Context, DateTime, Effect, Layer } from "effect";
+import {
+  INTERRUPTED_CLASS,
+  type StopNote,
+  stopMessageOf,
+} from "./dispatch-context";
 import { describeFailure } from "./errors";
 import { subjectKeyOf, subjectOfRow } from "./subject";
 
@@ -84,6 +89,13 @@ export interface DispatchRequest {
 
 /** What killing a container needs. */
 export interface StopRequest {
+  /**
+   * Why this run is being interrupted, and who asked — recorded by the loop
+   * before the fiber is touched, so the run's own close can say so on its row.
+   * An interrupt carries no payload of its own, and without this the row can
+   * only report that something ended the run.
+   */
+  readonly note: StopNote;
   readonly runId: RunId;
   /** Which piece of work the fiber to interrupt is keyed by. */
   readonly subject: RunSubject;
@@ -195,22 +207,29 @@ export const makeRunCommands = Effect.gen(function* () {
     });
 
   /**
-   * Closes the run out as interrupted, and treats "already closed" as done.
+   * Closes the run out as stopped, and treats "already closed" as done.
    *
-   * The race is real and benign: interrupting the fiber makes the run
-   * lifecycle's own exit handler close the row too, and whichever of the two
-   * arrives second finds an outcome already written. A stop that reported a
-   * failure because the run was already correctly marked interrupted would be a
-   * refusal with nothing behind it.
+   * The ordinary path is the one where this writes nothing: interrupting the
+   * fiber does not return until that run's own finalizers have closed the row,
+   * with the economics its container reported and the reason this command
+   * carried, so by the time this runs there is already an outcome and it is the
+   * better one. What is left for this is the row nobody was left to close — a
+   * live run whose fiber this process does not hold, which a restart or a
+   * second loop leaves behind — and it is written with the same attribution
+   * rather than as a bare `interrupted`, because the command in hand is exactly
+   * what says who asked.
    */
-  const closeInterrupted = (input: {
+  const closeStopped = (input: {
+    readonly note: StopNote;
     readonly runId: RunId;
     readonly workspaceId: WorkspaceId;
   }) =>
     runs
       .close({
+        errorClass: INTERRUPTED_CLASS,
+        errorMessage: stopMessageOf(input.note),
         id: input.runId,
-        outcome: "interrupted",
+        outcome: "stopped",
         workspaceId: input.workspaceId,
       })
       .pipe(
@@ -269,6 +288,10 @@ export const makeRunCommands = Effect.gen(function* () {
     command: RunCommand,
     subject: RunSubject
   ) {
+    const note: StopNote = {
+      reason: "stopped",
+      requestedBy: command.actorKind,
+    };
     const target = yield* stopTarget(command, subject);
     if (target === null) {
       return `there is no live run on this ${subject.kind} to stop`;
@@ -278,6 +301,10 @@ export const makeRunCommands = Effect.gen(function* () {
     }
 
     const killed = yield* control.stop({
+      // The same attribution the `stopped` marker below carries, handed to the
+      // loop so it reaches the run row too: the marker says who asked in the
+      // timeline, and this is what puts it in the column somebody groups by.
+      note,
       runId: target.id,
       // The run's own columns, falling back to what the command named: a stop
       // by run id can target a run on a different subject than the caller
@@ -292,7 +319,8 @@ export const makeRunCommands = Effect.gen(function* () {
     }
 
     yield* appendStopped({ command, runId: target.id, subject });
-    yield* closeInterrupted({
+    yield* closeStopped({
+      note,
       runId: target.id,
       workspaceId: command.workspaceId,
     });

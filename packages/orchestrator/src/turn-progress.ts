@@ -19,8 +19,13 @@ import {
   boardFailureOf,
   observeBoardAccess,
 } from "./board-access";
-import type { RunTerminus } from "./dispatch-context";
-import { describeFailure } from "./errors";
+import {
+  INTERRUPTED_CLASS,
+  type RunTerminus,
+  type StopNote,
+  stopMessageOf,
+} from "./dispatch-context";
+import { describeFailure, interruptReasonOf } from "./errors";
 import { isMessageTool } from "./terminal";
 
 /** What the harness calls an error it could not name. Used where a result reports none. */
@@ -100,6 +105,10 @@ export const terminusOfResult = (
         errorMessage: clipError(
           event.errorMessage ?? `the turn ended ${event.outcome}`
         ),
+        // The turn inside the container reports that it was interrupted, never
+        // by whom: the command that asked is a row on the host, and only the
+        // loop holds it. Null is the honest answer here.
+        interruptReason: null,
         kind: "failed",
       };
 };
@@ -117,12 +126,47 @@ export const terminusOfFailure = (
     errorMessage,
     exitCode: null,
     finalText: progress.finalText,
+    // A `Harness.Interrupted` already says why it was interrupted, so a failure
+    // that arrives typed keeps its reason rather than being re-derived from the
+    // sentence it was rendered into.
+    interruptReason: interruptReasonOf(failure),
     kind: "failed",
     providerSessionId: progress.providerSessionId,
     totalTokens: null,
     turns: null,
   };
 };
+
+/**
+ * The terminus an interrupt is, named by whoever asked for it.
+ *
+ * Its own constructor rather than `terminusOfFailure` over a squashed cause,
+ * because an interrupts-only cause carries nothing to classify: Effect renders
+ * it as `Error("All fibers interrupted without error")`, which matches no
+ * anchor, comes back `Unknown`, and files a person's Stop as a system failure.
+ * The note is the loop's own record of the interrupt it is about to cause, and
+ * it is the only thing that can tell a stop from a shutdown here.
+ *
+ * The economics stay null exactly as they do for a failure: what this run had
+ * spent by the moment it was killed is in the `atm.turn` rows its container
+ * wrote, and the close reads those back rather than guessing here.
+ */
+export const terminusOfStop = (input: {
+  readonly note: StopNote | null;
+  readonly progress: TurnProgress;
+}): RunTerminus => ({
+  costUsd: null,
+  durationMs: null,
+  errorClass: INTERRUPTED_CLASS,
+  errorMessage: stopMessageOf(input.note),
+  exitCode: null,
+  finalText: input.progress.finalText,
+  interruptReason: input.note?.reason ?? null,
+  kind: "failed",
+  providerSessionId: input.progress.providerSessionId,
+  totalTokens: null,
+  turns: null,
+});
 
 /**
  * The ending a run actually had, once what it could not write is accounted for.
@@ -151,7 +195,15 @@ export const terminusWithBoardAccess = (input: {
   const failure = boardFailureOf(progress.boardAccess);
   return failure === null
     ? terminus
-    : { ...terminus, ...failure, kind: "failed" };
+    : {
+        ...terminus,
+        ...failure,
+        // Nobody ended this run: it finished, having spent part of itself
+        // talking to a board that would not answer. That is a fault of its own
+        // and not an interrupt.
+        interruptReason: null,
+        kind: "failed",
+      };
 };
 
 /**

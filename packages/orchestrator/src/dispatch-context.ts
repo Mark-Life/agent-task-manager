@@ -27,6 +27,7 @@
 
 import type {
   Actor,
+  ActorKind,
   AgentSession,
   CostUsd,
   NextSession,
@@ -36,7 +37,7 @@ import type {
   RunTrigger,
   SessionProvider,
 } from "@workspace/domain";
-import type { RunLayout } from "@workspace/harness";
+import type { InterruptReason, RunLayout } from "@workspace/harness";
 import type { RunIdentity } from "@workspace/sandbox";
 import { type RunErrorClass, runOutcomeOfClass } from "./errors";
 import {
@@ -247,8 +248,58 @@ export interface RunFinished extends RunTerminusBase {
 export interface RunFailed extends RunTerminusBase {
   readonly errorClass: RunErrorClass;
   readonly errorMessage: string;
+  /**
+   * Why this run was ended from outside it, or null where it failed on its own.
+   *
+   * Carried on the terminus rather than inferred from `errorClass` because the
+   * class cannot answer it: `Interrupted` is one name for a person pressing
+   * Stop, a newer prompt taking the session over, and the loop going down under
+   * a run, and those are three different things to go and look at. Null is also
+   * an answer — an interrupt nothing recorded a reason for is filed as one
+   * rather than attributed to whichever of the three seemed likely.
+   */
+  readonly interruptReason: InterruptReason | null;
   readonly kind: "failed";
 }
+
+/**
+ * Who asked for a run to stop, and why. Written by the loop the instant before
+ * it interrupts the fiber, read by that run's own close as it unwinds — which
+ * is the only moment both facts are in one place, because an interrupt carries
+ * no payload of its own and `Cause.squash` renders an interrupts-only cause as
+ * a bare `Error("All fibers interrupted without error")`. Filing that through
+ * the ordinary classifier is what made a person's stop arrive on the row as
+ * `errored / Unknown`.
+ */
+export interface StopNote {
+  readonly reason: InterruptReason;
+  /** The actor the command row named, or null where nothing named one. */
+  readonly requestedBy: ActorKind | null;
+}
+
+/** How each actor is named in the sentence a stopped run's row carries. */
+const REQUESTER_PHRASE = {
+  human: "a person",
+  manager: "the manager agent",
+  orchestrator: "the orchestrator",
+  system: "the system",
+  worker_run: "a worker run",
+} as const satisfies Record<ActorKind, string>;
+
+/** What a stopped run's `errorMessage` says: which of the three, and who asked. */
+export const stopMessageOf = (note: StopNote | null) => {
+  if (note === null) {
+    return "the run was interrupted, and nothing recorded who asked";
+  }
+  switch (note.reason) {
+    case "stopped":
+      return `stopped by ${note.requestedBy === null ? "a stop command" : REQUESTER_PHRASE[note.requestedBy]}`;
+    case "superseded":
+      return "superseded by a newer prompt on the same session";
+    default:
+      return "the loop shut down under this run";
+  }
+};
 
 /**
  * The process went away without a terminus. Its own ending rather than a
@@ -301,10 +352,36 @@ export const isFailure = (terminus: RunTerminus) =>
   terminus.kind !== "finished";
 
 /**
+ * What the harness calls a turn ended from outside it. The class every
+ * interrupt carries onto a row, whichever of the three it was — declared here,
+ * beside the union that reads it, so the constructor and the readers cannot
+ * spell it differently.
+ */
+export const INTERRUPTED_CLASS = "Interrupted";
+
+/**
+ * Whether this run was ended from outside rather than by anything going wrong
+ * inside it: a stop command, a newer prompt taking the session over, the loop
+ * shutting down, or an interrupt nothing recorded a reason for.
+ *
+ * Read wherever "did this fail" is the wrong question. The thread gets a notice
+ * rather than a crash report, and the session is left resumable — a person who
+ * presses Stop and then Rerun is continuing a conversation, not starting over
+ * from a wreck, and a session marked `failed` is one nothing may pick up again.
+ */
+export const isInterrupt = (terminus: RunTerminus) =>
+  terminus.kind === "failed" && terminus.errorClass === INTERRUPTED_CLASS;
+
+/**
  * The domain outcome a run row records. Total over the union: a clean finish is
  * `done`, a silent process is `lost`, and a failure is whatever its
- * classification says — which is how a stop command lands as `interrupted` and
- * a run that outlived its cap as `timeout` rather than both being `errored`.
+ * classification says — which is how a run that outlived its cap lands as
+ * `timeout` rather than as `errored`.
+ *
+ * A deliberate stop is the one ending the class cannot answer alone, because
+ * all three interrupts share the class `Interrupted`. Somebody asking for this
+ * run to end is `stopped`; the loop going down under it, or an interrupt with
+ * no reason recorded, stays `interrupted`.
  */
 export const outcomeOfTerminus = (terminus: RunTerminus): RunOutcome => {
   switch (terminus.kind) {
@@ -313,7 +390,9 @@ export const outcomeOfTerminus = (terminus: RunTerminus): RunOutcome => {
     case "lost":
       return "lost";
     default:
-      return runOutcomeOfClass(terminus.errorClass);
+      return terminus.interruptReason === "stopped"
+        ? "stopped"
+        : runOutcomeOfClass(terminus.errorClass);
   }
 };
 

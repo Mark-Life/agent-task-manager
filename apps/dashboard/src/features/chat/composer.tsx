@@ -40,7 +40,7 @@ interface ComposerProps {
  * A message posted while a turn is running is not held anywhere: it is unread
  * until the next turn, which reads it with everything else that arrived. That
  * is a wait of unknown length, so the queued notice comes with the way out —
- * stopping the live turn closes it as interrupted and the turn that follows
+ * stopping the live turn closes it as stopped and the turn that follows
  * starts by reading what was just said.
  */
 export const Composer = ({ isTurnRunning, threadId }: ComposerProps) => {

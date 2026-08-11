@@ -44,6 +44,7 @@ const MARK: Record<string, string> = {
   interrupted: "~",
   lost: "?",
   parked: "=",
+  stopped: "s",
   timeout: "#",
 };
 

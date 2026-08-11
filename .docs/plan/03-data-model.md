@@ -64,7 +64,7 @@ Two implementation rules that are invisible at the call site and wrong by defaul
 | `SessionProvider` | `claude` `codex` | |
 | `SessionStatus` | `running` `finished` `failed` | A session that died producing nothing stays visible. |
 | `RunStatus` | `queued` `running` `finished` `failed` `interrupted` | Live-vs-not; the terminus detail is `RunOutcome`. Applies unchanged to a manager run — there is no parallel chat-turn status. |
-| `RunOutcome` | `done` `errored` `interrupted` `timeout` `lost` | The `atm.run` telemetry union minus `parked` and `skipped` — see below. Also unchanged by role. |
+| `RunOutcome` | `done` `errored` `interrupted` `stopped` `timeout` `lost` | The `atm.run` telemetry union minus `parked` and `skipped` — see below. Also unchanged by role. `stopped` is somebody asking — a person or the manager filing a stop command, with the requester in `error_message`; `interrupted` is the loop going down under a run, or an interrupt nothing recorded a reason for. Both map to `RunStatus` `interrupted`, which answers only whether the run is still live. |
 | `RunRole` | `worker` `manager` | What the run is and therefore what it attaches to. Column defaults to `worker`, so no run row is roleless. |
 | `RunTrigger` | `status_change` `rerun` `research` `manual` | Why the run exists. `research` / `manual` come from a `start_session` command. Orthogonal to `RunRole`: a manager run is triggered by an inbound message and carries `manual`. |
 | `RunEventKind` | `started` `assistant_message` `reasoning` `tool_call` `tool_result` `usage` `log` `error` `finished` `failed` `stopped` | Normalized harness events + lifecycle. |
@@ -355,7 +355,7 @@ at that home — `04-agent-runtime.md` §5–6.
 | `provider` | text | no | — | |
 | `model` | text | yes | — | Unknown until the harness reports it. |
 | `sandbox_image` | text | yes | — | Which image actually ran, against `task.sandbox_image` which selects it. |
-| `container_id` | text | yes | — | Teardown and post-mortem `docker logs`. |
+| `container_id` | text | yes | — | The container's **name**, `atm-<runId>-<nonce>`, written when it is created rather than when it exits. The daemon takes it everywhere it takes an id, so `docker logs` and `docker rm` work off it — and a run that never reached an inspect (a container that would not start, one killed early, one still going) is exactly the run whose logs somebody wants. The container's own id is on the `atm.sandbox` row for the runs that got far enough to have one. |
 | `branch` | text | yes | — | Branch the run pushed; the PR's head. |
 | `started_at` | timestamptz | yes | — | Null while queued: queue wait is `started_at - created_at`. |
 | `finished_at` | timestamptz | yes | — | |

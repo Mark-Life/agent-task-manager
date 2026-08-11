@@ -103,6 +103,7 @@ import {
   Layer,
   Option,
   Redacted,
+  Ref,
   Schedule,
   Stream,
   Tracer,
@@ -121,9 +122,10 @@ import {
   lostTerminus,
   projectIdOf,
   type RunTerminus,
+  type StopNote,
 } from "./dispatch-context";
 import { describeFailure } from "./errors";
-import { ingestRunEvents, ingestTurnLedger } from "./ingest";
+import { ingestRunEvents } from "./ingest";
 import { LeaseStore, reconcileLostRuns } from "./lease";
 import { openRun, type RunClaim } from "./open-run";
 import { freeSlots, type PoolLane, type PoolStats, WorkerPool } from "./pool";
@@ -150,7 +152,6 @@ import {
 import { closeRun, type TerminalReport } from "./terminal";
 import { ingestTranscript } from "./transcript-ingest";
 import { type DispatchSignal, dispatchSignals } from "./trigger";
-import { runEconomicsOf } from "./turn-rollup";
 
 /** What one boot pass over the data root reclaimed, by kind of directory. */
 export interface DirectorySweep {
@@ -378,6 +379,41 @@ const make = Effect.gen(function* () {
    */
   const running = yield* FiberMap.make<string>();
 
+  /**
+   * Why each run this process holds is being stopped, keyed exactly as the
+   * fibers are.
+   *
+   * An interrupt carries nothing with it — that is the whole of the problem
+   * this solves. `Cause.squash` renders an interrupts-only cause as
+   * `Error("All fibers interrupted without error")`, which the classifier reads
+   * as `Unknown`, so a person pressing Stop arrived on their own run's row as
+   * `errored / Unknown` and their name appeared nowhere on it. The reason is
+   * written here immediately before the fiber is touched, and interrupting does
+   * not return until that run's finalizers have read it back — see
+   * {@link RunControlInterface.stop} — so the ordering is a guarantee rather
+   * than a race.
+   *
+   * An entry is taken, not read: whichever of the two removes it, no later run
+   * on the same subject can find a note left by an earlier one.
+   */
+  const stopNotes = yield* Ref.make<ReadonlyMap<string, StopNote>>(new Map());
+
+  /** Records why the run on this subject is about to be interrupted. */
+  const noteStop = (subjectKey: string, note: StopNote) =>
+    Ref.update(stopNotes, (held) => new Map(held).set(subjectKey, note));
+
+  /** The note for this subject, removed as it is read. Null where nothing wrote one. */
+  const takeStopNote = (subjectKey: string) =>
+    Ref.modify(stopNotes, (held) => {
+      const note = held.get(subjectKey) ?? null;
+      if (note === null) {
+        return [null, held] as const;
+      }
+      const rest = new Map(held);
+      rest.delete(subjectKey);
+      return [note, rest] as const;
+    });
+
   /** Which lane a run holds a slot in. The one thing the role decides here. */
   const laneOf = (attached: RunAttachment): PoolLane =>
     attached.role === "manager" ? "chat" : "work";
@@ -461,10 +497,6 @@ const make = Effect.gen(function* () {
             providerSessionId: terminus.providerSessionId,
           }).pipe(bestEffort("transcript ingest failed", null));
 
-          const rollup = yield* ingestTurnLedger({ context }).pipe(
-            bestEffort("turn ledger ingest failed", null)
-          );
-
           // Before the rescan, so the snapshot is of what the run left rather
           // than of a folder something else has since touched. The scan walks
           // past the repository it creates.
@@ -504,13 +536,11 @@ const make = Effect.gen(function* () {
             promptChars: turn.promptChars,
             prUrl: report.prUrl,
             retryInMs: ladder?.delayMs ?? null,
-            terminus:
-              rollup === null
-                ? terminus
-                : ({
-                    ...terminus,
-                    ...runEconomicsOf({ rollup, terminus }),
-                  } as RunTerminus),
+            // As the close filed it, economics included: the ledger the
+            // container wrote is read before the run row is written now, so
+            // the row and this event report one set of numbers rather than the
+            // row reporting nulls and the event the real figures.
+            terminus,
           });
 
           yield* noteQuota(context, terminus);
@@ -529,6 +559,12 @@ const make = Effect.gen(function* () {
         onClose: collect,
         sandboxKind: config.sandboxKind,
         skillsDir: config.skillsDir,
+        // Read once, as this run unwinds, and only when it unwinds on an
+        // interrupt: what a stop command told the loop before it killed the
+        // fiber.
+        stopNote: takeStopNote(
+          subjectKeyOf(subjectOfAttachment(planned.claim.attached))
+        ),
         timeoutMs: timeoutFor(context.attached),
         tokenTtlMs: config.agentTokenTtlMs ?? DEFAULT_AGENT_TOKEN_TTL_MS,
       }).pipe(
@@ -754,6 +790,11 @@ const make = Effect.gen(function* () {
           : null),
       startWork(input)
     ).pipe(
+      // The run's own close takes the note, so this is the leftover case: a
+      // stop that named a subject whose run had already ended, which would
+      // otherwise be read by the *next* run on that subject and file it as
+      // stopped by somebody who never asked.
+      Effect.ensuring(Effect.asVoid(takeStopNote(subjectKey))),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.void
@@ -807,6 +848,11 @@ const make = Effect.gen(function* () {
         const key = subjectKeyOf(request.subject);
         const held = yield* FiberMap.has(running, key);
         if (held) {
+          // The note first, and that order is the contract: interrupting does
+          // not return until the run's finalizers have run, and those
+          // finalizers are what read it — so a note written afterwards would
+          // reach a run that had already filed its ending without it.
+          yield* noteStop(key, request.note);
           // Interrupting is the teardown: the run's own finalizers close the
           // row, release the lease and emit its terminus row.
           yield* FiberMap.remove(running, key);

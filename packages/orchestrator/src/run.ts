@@ -54,6 +54,7 @@ import {
 import type { RunPlacement } from "@workspace/prompts";
 import {
   CONTAINER_CACHE_DIR,
+  type ContainerHandle,
   identityEnv,
   type Mount,
   managerMountsFor,
@@ -85,10 +86,12 @@ import {
   resumeSessionIdOf,
   roleOf,
   runIdentityOf,
+  type StopNote,
   subjectOf,
   taskIdOf,
   workspaceIdOf,
 } from "./dispatch-context";
+import { ingestTurnLedger } from "./ingest";
 import { type MappingContext, toRunEventPayload } from "./mapping";
 import { openRun, type RunClaim } from "./open-run";
 import {
@@ -114,8 +117,10 @@ import {
   observeTurn,
   type TurnProgress,
   terminusOfFailure,
+  terminusOfStop,
   terminusWithBoardAccess,
 } from "./turn-progress";
+import { EMPTY_TURN_ROLLUP, runEconomicsOf } from "./turn-rollup";
 
 /** Encoder for one line of the run's event file, built once rather than per event. */
 const encodeRecord = Schema.encodeEffect(AgentEventRecord);
@@ -643,11 +648,40 @@ export const executeRun = (input: ExecuteRunInput) =>
       });
     });
 
+    /**
+     * Writes the container's name onto the run row, the moment it is minted.
+     *
+     * Before the container exists rather than after it exits, which is the
+     * whole point: a container that would not start, one the kernel killed, and
+     * one still going all have a name and none of them has an id. `docker logs`
+     * takes the name, so this is the column that answers "what happened inside
+     * that run" for the runs where the question is actually asked. Best-effort
+     * like every other bookkeeping write on this path — a handle the database
+     * refused costs the post-mortem, never the run.
+     */
+    const recordContainer = ({ name }: ContainerHandle) =>
+      asActor(
+        runs.attachContainer({
+          containerId: name,
+          id: context.runId,
+          workspaceId,
+        })
+      ).pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning("container name not recorded on the run", {
+            cause,
+            name,
+          })
+        ),
+        Effect.ignore
+      );
+
     if (contained) {
       return yield* containerTurn({
         context,
         env: { ...input.env, ...made.cacheEnv },
         mounts: made.mounts,
+        onContainer: recordContainer,
         onRecord: fromContainer,
         progress,
         prompt: prompt.text,
@@ -710,6 +744,12 @@ export interface RunClosed {
   /** What the turn accumulated, read after the close rather than before it. */
   readonly progress: TurnProgress;
   readonly report: TerminalReport;
+  /**
+   * How the run ended, as the close actually filed it: the ending rewritten
+   * where the run lost the board, and the economics filled from the `atm.turn`
+   * rows the container left on the mount. The same value the run row carries,
+   * so a hook and the column cannot report a run differently.
+   */
   readonly terminus: RunTerminus;
 }
 
@@ -745,6 +785,19 @@ export interface RunOpenedInput<R = never>
    * then failed to close.
    */
   readonly onClose?: (closed: RunClosed) => Effect.Effect<void, never, R>;
+  /**
+   * What the loop recorded about the interrupt it is about to cause, read once
+   * as this run unwinds and never otherwise.
+   *
+   * Passed in rather than looked up here because the loop owns the fibers and
+   * this file owns the close: a stop command interrupts a fiber, and an
+   * interrupt carries no payload — `Cause.squash` renders an interrupts-only
+   * cause as a bare `Error("All fibers interrupted without error")`, which is
+   * exactly how a person's Stop used to reach the row as `errored / Unknown`.
+   * A caller that names none leaves every interrupt unattributed, which is what
+   * the row then says.
+   */
+  readonly stopNote?: Effect.Effect<StopNote | null>;
 }
 
 /**
@@ -817,10 +870,35 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
         // so nothing below the close will ever raise it. Applied before the
         // close so the run row, the crash message and the wide event all read
         // the same ending.
-        const ending = terminusWithBoardAccess({
+        const withBoard = terminusWithBoardAccess({
           progress: state,
           terminus: given,
         });
+
+        // What the container spent, read back before the row is written rather
+        // than after it.
+        //
+        // The economics live in the `atm.turn` rows the harness wrote from
+        // inside the container onto a mount, and every ending that is not a
+        // clean finish nulls them on the terminus — a crash, a timeout and a
+        // stop all report no number, because the host heard none. Reading the
+        // ledger here is what puts the cost and the turns of a run that was
+        // killed halfway onto its own row instead of leaving it looking free:
+        // the container really wrote those figures, and they were being read a
+        // step too late to reach the column. `runEconomicsOf` fills gaps only,
+        // so a terminus that carried its own numbers keeps them.
+        const rollup = yield* ingestTurnLedger({ context }).pipe(
+          Effect.tapError((cause) =>
+            Effect.logWarning("the run's turn ledger could not be read", {
+              cause,
+            })
+          ),
+          Effect.orElseSucceed(() => EMPTY_TURN_ROLLUP)
+        );
+        const ending = {
+          ...withBoard,
+          ...runEconomicsOf({ rollup, terminus: withBoard }),
+        } as RunTerminus;
         yield* Ref.set(filed, ending);
         // Two authors for one fact: the loop watching the stream, and a
         // provider that wires the message tool in-process and creates the
@@ -868,11 +946,25 @@ export const runOpened = <R = never>(input: RunOpenedInput<R>) =>
             ? closeFrom(exit.value)
             : Effect.gen(function* () {
                 const state = yield* Ref.get(progress);
-                // An interrupt squashes to an interruption, which the harness's
-                // own classifier already names — so a stopped run is filed as
-                // `interrupted` rather than as an unnamed error.
+                // An interrupts-only cause is somebody having ended this run,
+                // and it is the one cause the classifier cannot read: squashing
+                // it produces `Error("All fibers interrupted without error")`,
+                // which matches no anchor and comes back `Unknown`. So it is
+                // never squashed — the loop's own note of the interrupt it
+                // caused says which of the three it was and who asked, and a
+                // run nothing noted is filed as an interrupt with that stated
+                // rather than as a fault nobody can attribute.
+                //
+                // Only a cause that is nothing but interrupts: work that failed
+                // and was then torn down really failed, and reporting that as a
+                // stop would hide the error behind the teardown.
                 yield* closeFrom(
-                  terminusOfFailure(Cause.squash(exit.cause), state)
+                  Cause.hasInterruptsOnly(exit.cause)
+                    ? terminusOfStop({
+                        note: yield* input.stopNote ?? Effect.succeed(null),
+                        progress: state,
+                      })
+                    : terminusOfFailure(Cause.squash(exit.cause), state)
                 );
               })
         )

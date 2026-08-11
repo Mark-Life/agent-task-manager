@@ -8634,6 +8634,7 @@
                   "done",
                   "errored",
                   "interrupted",
+                  "stopped",
                   "timeout",
                   "lost"
                 ]
@@ -9188,6 +9189,7 @@
                       "done",
                       "errored",
                       "interrupted",
+                      "stopped",
                       "timeout",
                       "lost"
                     ]

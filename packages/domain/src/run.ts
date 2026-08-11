@@ -75,7 +75,16 @@ export const Run = Schema.Struct({
   attempt: Schema.Natural,
   /** The branch this run pushed, which is the PR's head. */
   branch: Schema.NullOr(Schema.String),
-  /** Kept for teardown and a post-mortem `docker logs`. */
+  /**
+   * What this run's container is called on the host, written when it is
+   * created rather than when it exits — `atm-<runId>-<nonce>`, which the daemon
+   * accepts everywhere it accepts an id, so `docker logs` and `docker rm` take
+   * it. The container's own id is only readable from an inspect after it has
+   * exited, and a run that was killed, wedged or still going is exactly the one
+   * whose logs somebody wants; the id is on the `atm.sandbox` row for the runs
+   * that got far enough to have one. Null on a host turn, which has no
+   * container, and before the container is created.
+   */
   containerId: Schema.NullOr(Schema.String),
   costUsd: Schema.NullOr(CostUsd),
   durationMs: Schema.NullOr(Schema.Natural),

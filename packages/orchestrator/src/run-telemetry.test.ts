@@ -219,10 +219,30 @@ const failed: RunFailed = {
   errorMessage: "the provider stream ended",
   exitCode: 1,
   finalText: "",
+  interruptReason: null,
   kind: "failed",
   providerSessionId: "provider-sess-2",
   totalTokens: null,
   turns: null,
+};
+
+/**
+ * The ending the close files when a stop command interrupted the run: the class
+ * every interrupt carries, the sentence naming who asked, and the partial
+ * economics read back off the container's own `atm.turn` rows.
+ */
+const stopped: RunFailed = {
+  costUsd: CostUsd.make("0.190000"),
+  durationMs: 40_000,
+  errorClass: "Interrupted",
+  errorMessage: "stopped by a person",
+  exitCode: null,
+  finalText: "half a thought",
+  interruptReason: "stopped",
+  kind: "failed",
+  providerSessionId: "provider-sess-2",
+  totalTokens: 2100,
+  turns: 3,
 };
 
 const lost = lostTerminus({
@@ -442,10 +462,11 @@ describe("withRunEvent", () => {
     expect(end.errorMessage).toContain("2 events and no terminus");
   });
 
-  test("an interrupted run leaves both rows and null economics", async () => {
-    // Killed from outside mid-run, which is what a stop command and a shutdown
-    // both do. This is the path that leaves no terminus at all when an emit
-    // sits after the work instead of on its exit.
+  test("an interrupt nothing named leaves both rows and a bare outcome", async () => {
+    // Killed from outside mid-run with no note behind it — a shutdown, or an
+    // interrupt from somewhere the loop does not record. This is also the path
+    // that leaves no terminus at all when an emit sits after the work instead
+    // of on its exit.
     await run(
       Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
@@ -465,16 +486,48 @@ describe("withRunEvent", () => {
 
     const { end } = bothRows();
     expect(end.outcome).toBe("interrupted");
-    // a stop is not a thing that went wrong with a run
+    // nothing recorded a cause, and the close filed no interrupt ending of its
+    // own, so the row says only that the run was ended from outside
     expect(end.errorClass).toBeNull();
-    // even a captured terminus is dropped: its numbers describe a run that did
-    // not finish, and a partial cost stored as final is one someone averages
-    expect(end.costUsd).toBeNull();
-    expect(end.durationMs).toBeNull();
-    expect(end.totalTokens).toBeNull();
-    expect(end.turns).toBeNull();
-    // what the run did reach is still on the row
+    // what the run did reach is still on the row, economics included: it is
+    // what the container actually reported, and the outcome beside it already
+    // says the run did not finish
     expect(end.eventsSeen).toBe(84);
+    expect(end.costUsd).toBe(0.42);
+  });
+
+  test("a stop the loop named reaches the row with its reason and its cost", async () => {
+    // The path a person pressing Stop takes. The close is a finalizer, so it
+    // files its terminus before the interrupt reaches the wide event — and that
+    // terminus is the only thing that knows which interrupt this was and who
+    // asked. Reading it is the difference between a row somebody can act on and
+    // a bare `interrupted` with nothing behind it.
+    await run(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const fiber = yield* Effect.forkChild(
+          oneRun(
+            [CLOSED_OUT, { terminus: stopped }],
+            Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined);
+              return yield* Effect.never;
+            })
+          )
+        );
+        yield* Deferred.await(started);
+        yield* Fiber.interrupt(fiber);
+      })
+    );
+
+    const { end } = bothRows();
+    // its own outcome, not `errored` and not the same bucket as a shutdown
+    expect(end.outcome).toBe("stopped");
+    expect(end.errorClass).toBe("Interrupted");
+    expect(end.errorMessage).toBe("stopped by a person");
+    // what it had spent by the time it was stopped, read off the container's
+    // own turn rows at the close — a null here would say it cost nothing
+    expect(end.costUsd).toBe(0.19);
+    expect(end.turns).toBe(3);
   });
 
   test("a parked attempt is one row, not a second emit", async () => {
