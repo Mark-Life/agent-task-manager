@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -27,6 +28,7 @@ import {
   refreshMirror,
   repoLabelOf,
   repoSourceFor,
+  startPointFor,
 } from "./repo";
 import type { RepoSource } from "./spec";
 
@@ -203,6 +205,8 @@ describe("materialization", () => {
     expect(checkout.branch).toBe(branchForTask(taskId));
     expect(checkout.headSha).toBe(head);
     expect(checkout.mirrorCreated).toBe(true);
+    // Nothing to continue: the first run on a task cuts the branch from the base.
+    expect(checkout.resumed).toBe(false);
     expect(checkout.strategy).toBe("mount");
     expect(fixtureGit(workspaceDir, "rev-parse", "--abbrev-ref", "HEAD")).toBe(
       checkout.branch
@@ -498,6 +502,179 @@ describe("materialization", () => {
     );
     expect(failure).toBeInstanceOf(CloneFailed);
     expect(failure.stderr).toContain("no mirror to refresh");
+  });
+
+  /**
+   * The bug this was written for: a task's second run threw away the first
+   * run's pushed commits and started on an empty tree, so it either rebuilt the
+   * work or spent its turn recovering by hand. Three runs did the latter and
+   * said so in their own comments before anyone read the checkout line.
+   */
+  describe("resuming a branch a previous run pushed", () => {
+    /**
+     * A previous run, end to end: it takes a checkout, commits, and pushes the
+     * task's branch to the origin — which is the only thing that makes
+     * `origin/<branch>` exist for the next materialization to find.
+     */
+    const runThatPushed = async (name: string, file: string) => {
+      const workspaceDir = join(root, name);
+      await run(
+        materializeRepo({ committer: null, repo: sourceFor(), workspaceDir })
+      );
+      writeFileSync(join(workspaceDir, file), `${name}\n`);
+      fixtureGit(workspaceDir, "add", file);
+      fixtureGit(workspaceDir, "commit", "-m", `work from ${name}`);
+      fixtureGit(workspaceDir, "push", "origin", branchForTask(taskId));
+      return fixtureGit(workspaceDir, "rev-parse", "HEAD");
+    };
+
+    test("a rerun starts where the last run left the branch", async () => {
+      const pushed = await runThatPushed("workspace-a", "earlier.txt");
+
+      const workspaceDir = join(root, "workspace-b");
+      const checkout = await run(
+        materializeRepo({ committer: null, repo: sourceFor(), workspaceDir })
+      );
+
+      expect(checkout.resumed).toBe(true);
+      expect(checkout.headSha).toBe(pushed);
+      // In the working tree, not merely in the history behind it: the point is
+      // that the run does not have to write this file again.
+      expect(existsSync(join(workspaceDir, "earlier.txt"))).toBe(true);
+    });
+
+    /**
+     * The acceptance criterion in one line. Before the fix the second push was
+     * a non-fast-forward against a branch holding the first run's commits, so
+     * the run either failed to push or forced over work nobody could get back.
+     */
+    test("the second run's push adds to the first run's work", async () => {
+      await runThatPushed("workspace-a", "earlier.txt");
+      const workspaceDir = join(root, "workspace-b");
+      await run(
+        materializeRepo({ committer: null, repo: sourceFor(), workspaceDir })
+      );
+
+      writeFileSync(join(workspaceDir, "later.txt"), "workspace-b\n");
+      fixtureGit(workspaceDir, "add", "later.txt");
+      fixtureGit(workspaceDir, "commit", "-m", "work from workspace-b");
+      // No `--force`, which is the assertion: a rejected push throws here.
+      fixtureGit(workspaceDir, "push", "origin", branchForTask(taskId));
+
+      const branch = branchForTask(taskId);
+      expect(fixtureGit(origin, "show", `${branch}:earlier.txt`)).toBe(
+        "workspace-a"
+      );
+      expect(fixtureGit(origin, "show", `${branch}:later.txt`)).toBe(
+        "workspace-b"
+      );
+    });
+
+    /**
+     * Freshness is not what is given up to get the branch back. The base's tip
+     * is in the checkout as `origin/<base>` — and it is not merged into the
+     * branch on the way in, because an unattended merge can only hand the run a
+     * conflicted tree.
+     */
+    test("a resumed run still holds the base's tip, unmerged", async () => {
+      await runThatPushed("workspace-a", "earlier.txt");
+      const upstream = commit("upstream moves on", "two\n");
+
+      const workspaceDir = join(root, "workspace-b");
+      const checkout = await run(
+        materializeRepo({ committer: null, repo: sourceFor(), workspaceDir })
+      );
+
+      expect(checkout.resumed).toBe(true);
+      expect(
+        execFileSync("git", ["rev-parse", "origin/main"], {
+          cwd: workspaceDir,
+          encoding: "utf8",
+        }).trim()
+      ).toBe(upstream);
+      // The tree is the branch's own: the base's newer README has not been
+      // merged over it behind the run's back.
+      expect(readFileSync(join(workspaceDir, "README.md"), "utf8")).toBe(
+        "one\n"
+      );
+    });
+
+    /**
+     * A merged pull request whose branch nobody deleted. The branch is still on
+     * the remote and offers nothing but an older tree, so this is the case
+     * where "the branch exists" is the wrong question to have asked.
+     */
+    test("a branch the base already contains is cut fresh instead", async () => {
+      await runThatPushed("workspace-a", "earlier.txt");
+      fixtureGit(origin, "merge", "--ff-only", branchForTask(taskId));
+      const released = commit("released after the merge", "released\n");
+
+      const checkout = await run(
+        materializeRepo({
+          committer: null,
+          repo: sourceFor(),
+          workspaceDir: join(root, "workspace-b"),
+        })
+      );
+
+      expect(checkout.resumed).toBe(false);
+      expect(checkout.headSha).toBe(released);
+    });
+
+    /**
+     * The prune reaching this decision. A branch deleted on the remote is gone
+     * from the mirror too, so there is nothing to resume from and the run starts
+     * at the base — where, for a branch deleted by a merge, its work now is.
+     */
+    test("a branch deleted on the remote leaves nothing to resume", async () => {
+      await runThatPushed("workspace-a", "earlier.txt");
+      fixtureGit(origin, "branch", "-D", branchForTask(taskId));
+
+      const workspaceDir = join(root, "workspace-b");
+      const checkout = await run(
+        materializeRepo({ committer: null, repo: sourceFor(), workspaceDir })
+      );
+
+      expect(checkout.resumed).toBe(false);
+      expect(checkout.headSha).toBe(fixtureGit(origin, "rev-parse", "main"));
+      expect(existsSync(join(workspaceDir, "earlier.txt"))).toBe(false);
+    });
+
+    /** The decision itself, and the full ref name the checkout is given. */
+    test("the start point names the remote-tracking ref it resumes", async () => {
+      await runThatPushed("workspace-a", "earlier.txt");
+      const workspaceDir = join(root, "workspace-b");
+      await run(
+        materializeRepo({ committer: null, repo: sourceFor(), workspaceDir })
+      );
+
+      const source = sourceFor();
+      expect(
+        await run(
+          startPointFor({
+            baseRef: source.baseRef,
+            branch: source.branch,
+            repo: "fixture/origin",
+            workspaceDir,
+          })
+        )
+      ).toEqual({
+        ref: `refs/remotes/origin/${source.branch}`,
+        resumed: true,
+      });
+      // A task nobody has run yet, in the same checkout: the branch is absent,
+      // so the base is the answer.
+      expect(
+        await run(
+          startPointFor({
+            baseRef: source.baseRef,
+            branch: branchForTask(newTaskId()),
+            repo: "fixture/origin",
+            workspaceDir,
+          })
+        )
+      ).toEqual({ ref: source.baseRef, resumed: false });
+    });
   });
 
   test("a bad base ref fails as a clone failure, not a bad checkout", async () => {
