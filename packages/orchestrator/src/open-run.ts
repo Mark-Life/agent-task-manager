@@ -77,9 +77,19 @@ const THREAD_SELECTION: NextSession = { mode: "latest" };
 /**
  * Which conversation this run continues, and what the task asked for.
  *
- * A pinned session is read by id; `latest` asks the repository, which already
- * excludes the failed ones. `new` asks nothing — it is the one selection that
- * is an instruction rather than a lookup. A pin whose session has been deleted
+ * The answer is a session this run may actually resume, or null — `isResumable`
+ * has already been applied by the time this returns, so no later stage asks the
+ * question again with less to go on.
+ *
+ * The two lookups apply it from opposite ends and that is why only one of them
+ * calls it here. `latest` is a search — which session, out of however many the
+ * subject has — so the rule has to be inside the query that walks them, and the
+ * repository owns it. A pin is a check on a session already named, so the
+ * candidate comes back whole and the rule is applied at this line, where a
+ * reader looking for the resume decision will look. `new` asks nothing: it is
+ * the one selection that is an instruction rather than a lookup.
+ *
+ * A pin whose session has been deleted, or whose session the rule refuses,
  * degrades to a fresh one rather than failing the dispatch: the selection is a
  * preference, and work that cannot start is a worse answer than work that
  * starts clean.
@@ -101,17 +111,22 @@ const selectSession = Effect.fnUntraced(function* (input: {
 
   if (selection.mode === "specific") {
     const pinned = yield* asActor(
-      sessions.byId({ id: selection.sessionId, workspaceId })
-    ).pipe(Effect.catchTag("Db.NotFound", () => Effect.succeed(null)));
-    return { found: pinned, selection } as const;
-  }
-  if (selection.mode === "latest") {
+      sessions.resumeCandidate({ id: selection.sessionId, workspaceId })
+    );
     return {
-      found: yield* asActor(sessions.latestResumable({ subject, workspaceId })),
+      resumable: pinned !== null && isResumable(pinned) ? pinned.session : null,
       selection,
     } as const;
   }
-  return { found: null, selection } as const;
+  if (selection.mode === "latest") {
+    return {
+      resumable: yield* asActor(
+        sessions.latestResumable({ subject, workspaceId })
+      ),
+      selection,
+    } as const;
+  }
+  return { resumable: null, selection } as const;
 });
 
 /** The image this run's container is started from. One of the four role knobs. */
@@ -157,8 +172,7 @@ const claimRun = Effect.fn("Run.open")(function* (claim: RunClaim) {
     subjectKind: subject.kind,
   });
 
-  const { found, selection } = yield* selectSession({ asActor, attached });
-  const resumable = found !== null && isResumable(found) ? found : null;
+  const { resumable, selection } = yield* selectSession({ asActor, attached });
   // A conversation names its own provider; a task takes the loop's default
   // unless a session it is resuming already chose one.
   const provider =
@@ -166,20 +180,30 @@ const claimRun = Effect.fn("Run.open")(function* (claim: RunClaim) {
     (attached.role === "manager"
       ? attached.thread.provider
       : claim.defaultProvider);
+  // A session's status, ending and error message describe its most recent run,
+  // and this run is about to be a newer one. Put back to running here rather
+  // than left as it was, because the repository refuses to end a session that
+  // has already ended: without this the close of every resumed run is refused
+  // and the row keeps reporting the ending before last. Skipped where it is
+  // already running — a no-op UPDATE still costs an audit row.
+  const resumed =
+    resumable === null || resumable.status === "running"
+      ? resumable
+      : yield* asActor(sessions.reopen({ id: resumable.id, workspaceId }));
   const session =
-    resumable ??
+    resumed ??
     (yield* asActor(sessions.open({ provider, subject, workspaceId })));
 
   // A resumed session with no provider id has a row and no conversation behind
   // it — a session opened by a run that died before the harness answered. It is
   // resumed in every other sense and started fresh in the only one that counts.
   const resolved: ResolvedSession =
-    resumable !== null && resumable.providerSessionId !== null
+    resumed !== null && resumed.providerSessionId !== null
       ? {
           mode: "resumed",
-          providerSessionId: resumable.providerSessionId,
+          providerSessionId: resumed.providerSessionId,
           selected: selection.mode,
-          session: resumable,
+          session: resumed,
         }
       : { mode: "fresh", selected: selection.mode, session };
 

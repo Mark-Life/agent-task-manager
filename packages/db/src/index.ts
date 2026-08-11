@@ -97,7 +97,11 @@ export {
 } from "./repositories/run";
 export { RunCommandRepo } from "./repositories/run-command";
 export { RunEventRepo, RunEventTooLarge } from "./repositories/run-event";
-export { AgentSessionEnded, AgentSessionRepo } from "./repositories/session";
+export {
+  AgentSessionEnded,
+  AgentSessionRepo,
+  type SessionResumeCandidate,
+} from "./repositories/session";
 export { AgentSessionUsageRepo } from "./repositories/session-usage";
 export {
   IllegalDeletion,

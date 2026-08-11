@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import type { RunOutcome } from "./enums";
 import { SessionProvider, SessionStatus } from "./enums";
 import { AgentSessionId, TaskId, ThreadId, UnreadWatermarkId } from "./ids";
 import { recordFields, Timestamp } from "./primitives";
@@ -16,7 +17,7 @@ import { recordFields, Timestamp } from "./primitives";
  */
 export const AgentSession = Schema.Struct({
   ...recordFields,
-  /** When the last run on this session terminated. Whether it can be resumed is `status`, not this. */
+  /** When the last run on this session terminated. Whether it can be resumed is {@link isResumable}, not this. */
   endedAt: Schema.NullOr(Timestamp),
   /** Why a failed session failed, so the list answers it without opening the run. */
   errorMessage: Schema.NullOr(Schema.String),
@@ -48,9 +49,78 @@ export const AgentSession = Schema.Struct({
 export interface AgentSession extends Schema.Schema.Type<typeof AgentSession> {}
 
 /**
- * Whether this session can be picked up again. A cleanly finished session is
- * the normal resume target — "continue the task's latest session" means exactly
- * that — so a set `endedAt` disqualifies nothing. Only a failure does.
+ * The run outcomes after which continuing the conversation is the right next
+ * move. Chosen against the whole of `RUN_OUTCOMES`, and the three it leaves out
+ * are the point.
+ *
+ * `done` is the ordinary one: the run finished and the session is `finished`.
+ * `timeout` is the one this list exists for. The wall clock kills the container,
+ * not the agent — the provider still holds the whole conversation, complete up
+ * to the last turn it answered, and the work in it is exactly what the next
+ * attempt would otherwise re-derive from nothing.
+ *
+ * `errored` and `lost` are excluded because they say the run's own state went
+ * wrong: a crash mid-turn and a process that stopped reporting leave a
+ * conversation that may be truncated in the middle of a tool call, and resuming
+ * into it replays the thing that broke.
+ *
+ * `interrupted` is excluded on different grounds and deliberately, not by
+ * oversight. A stop command is usually somebody watching a run go wrong, and the
+ * conversation they stopped is the one they did not want continued. Someone who
+ * does want it continued has a way to say so that this default cannot override:
+ * pinning the session on the task.
  */
-export const isResumable = (session: Pick<AgentSession, "status">) =>
-  session.status !== "failed";
+export const RESUMABLE_OUTCOMES = ["done", "timeout"] as const;
+
+/** {@link RESUMABLE_OUTCOMES} as a membership test, widened so a `RunOutcome` can be asked. */
+const leavesConversationIntact = (outcome: RunOutcome) =>
+  (RESUMABLE_OUTCOMES as readonly RunOutcome[]).includes(outcome);
+
+/**
+ * A session and how the runs on it ended — everything the resume decision reads.
+ *
+ * The outcomes are a separate field rather than something the session carries
+ * because the session does not carry them: `AgentSession` has an `errorMessage`
+ * and no failure cause, and the cause is a property of the run that ended it.
+ */
+export interface ResumeCandidate {
+  /**
+   * The outcomes of this session's runs, newest first. A live run has no
+   * outcome yet and is not among them, so an empty list means the session has
+   * never had a run reach a terminus.
+   */
+  readonly outcomes: readonly RunOutcome[];
+  readonly session: Pick<AgentSession, "status">;
+}
+
+/**
+ * Whether this session can be picked up again.
+ *
+ * A cleanly finished session is the normal resume target — "continue the task's
+ * latest session" means exactly that — so a set `endedAt` disqualifies nothing,
+ * and a session still running is being picked up by definition.
+ *
+ * A failed one is the question this function exists for. `failed` is written for
+ * every ending that is not a clean finish, which flattens the agent breaking and
+ * the clock running out into one status; the difference between them is the last
+ * run's outcome, and {@link RESUMABLE_OUTCOMES} is which of those are worth
+ * continuing.
+ *
+ * The repeat guard is the other half, and it is what keeps this from being a
+ * more expensive bug than the one it fixes. Resuming a session that hit the wall
+ * clock hands the next attempt the context that hit it — so it is offered once.
+ * If the outcome that ended the newest run has already ended an earlier run on
+ * the same session, resuming did not get past that wall and the next attempt
+ * starts clean rather than walking into it a third time.
+ */
+export const isResumable = ({ outcomes, session }: ResumeCandidate) => {
+  if (session.status !== "failed") {
+    return true;
+  }
+  const [last, ...earlier] = outcomes;
+  return (
+    last !== undefined &&
+    leavesConversationIntact(last) &&
+    !earlier.includes(last)
+  );
+};
