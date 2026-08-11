@@ -1,6 +1,5 @@
-import { createRoute } from "@tanstack/react-router";
+import { createRoute, lazyRouteComponent } from "@tanstack/react-router";
 import { RouteError } from "@/components/error-boundary";
-import { Projects } from "@/features/projects/projects";
 import { layoutRoute } from "@/routes/layout";
 
 /**
@@ -9,7 +8,10 @@ import { layoutRoute } from "@/routes/layout";
  * place. So the route is the screen and nothing else.
  */
 export const projectsRoute = createRoute({
-  component: Projects,
+  component: lazyRouteComponent(
+    () => import("@/features/projects/projects"),
+    "Projects"
+  ),
   errorComponent: RouteError,
   getParentRoute: () => layoutRoute,
   path: "/projects",

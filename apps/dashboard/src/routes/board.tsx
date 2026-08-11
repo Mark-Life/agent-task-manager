@@ -1,9 +1,6 @@
-import { createRoute } from "@tanstack/react-router";
+import { createRoute, lazyRouteComponent } from "@tanstack/react-router";
 import type { ProjectId, TaskId } from "@workspace/domain";
-import { useCallback } from "react";
 import { RouteError } from "@/components/error-boundary";
-import { Board } from "@/features/board/board";
-import { TaskOverlay } from "@/features/task/overlay";
 import { layoutRoute } from "@/routes/layout";
 import { parseProjectId, parseSearchText, parseTaskId } from "@/routes/search";
 
@@ -31,82 +28,19 @@ const validateSearch = (search: Record<string, unknown>): BoardSearch => ({
 });
 
 /**
- * The board, wired to the two things it refuses to know about itself: what
- * opening a card does, and where the filter is kept.
+ * The board owns the root address: it is the screen the operator lives on.
  *
- * Opening a task is an overlay rather than a navigation: most opens from the
- * board are a glance, and a page change would throw the board's scroll and
- * in-flight reads away for it. The task page at `/tasks/<taskId>` still
- * stands, because the Telegram bot links straight into it.
+ * What is at the address is fetched when somebody goes there, while the address
+ * itself — its path and the shape of its search — stays here in the eagerly
+ * loaded tree. The router needs the second to route at all, and would need the
+ * whole board, its cards and the drag machinery underneath them to have it if
+ * the two lived in one module.
  */
-const BoardScreen = () => {
-  const { projectId, q, task } = boardRoute.useSearch();
-  const navigate = boardRoute.useNavigate();
-
-  const openTask = useCallback(
-    (taskId: TaskId) => {
-      navigate({
-        search: (previous) => ({ ...previous, task: taskId }),
-        to: ".",
-      });
-    },
-    [navigate]
-  );
-
-  // Closing is the same navigation with the parameter dropped, so the back
-  // button reopens the panel rather than leaving one the URL says is open.
-  const closeTask = useCallback(
-    (open: boolean) => {
-      if (!open) {
-        navigate({
-          search: (previous) => ({ ...previous, task: undefined }),
-          to: ".",
-        });
-      }
-    },
-    [navigate]
-  );
-
-  const changeProject = useCallback(
-    (next: ProjectId | null) => {
-      navigate({
-        search: (previous) => ({ ...previous, projectId: next ?? undefined }),
-        to: ".",
-      });
-    },
-    [navigate]
-  );
-
-  // Typing replaces rather than pushes, so a search is one history entry
-  // rather than one per keystroke.
-  const changeQuery = useCallback(
-    (next: string) => {
-      navigate({
-        replace: true,
-        search: (previous) => ({ ...previous, q: next || undefined }),
-        to: ".",
-      });
-    },
-    [navigate]
-  );
-
-  return (
-    <>
-      <Board
-        onOpenTask={openTask}
-        onProjectChange={changeProject}
-        onQueryChange={changeQuery}
-        projectId={projectId ?? null}
-        query={q ?? ""}
-      />
-      <TaskOverlay onOpenChange={closeTask} taskId={task ?? null} />
-    </>
-  );
-};
-
-/** The board owns the root address: it is the screen the operator lives on. */
 export const boardRoute = createRoute({
-  component: BoardScreen,
+  component: lazyRouteComponent(
+    () => import("@/routes/board.screen"),
+    "BoardScreen"
+  ),
   errorComponent: RouteError,
   getParentRoute: () => layoutRoute,
   path: "/",

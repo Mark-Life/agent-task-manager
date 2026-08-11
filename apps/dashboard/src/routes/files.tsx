@@ -1,12 +1,8 @@
-import { createRoute } from "@tanstack/react-router";
+import { createRoute, lazyRouteComponent } from "@tanstack/react-router";
 import type { ScopePath } from "@workspace/domain";
-import { useCallback, useMemo } from "react";
 import { RouteError } from "@/components/error-boundary";
-import { FileBrowser } from "@/features/files/browser";
-import { DEFAULT_SCOPE } from "@/features/files/scopes";
 import { layoutRoute } from "@/routes/layout";
 import {
-  fileScopeOf,
   parseFileScopeAddress,
   parseScopePath,
   parseScopeView,
@@ -37,75 +33,21 @@ const validateSearch = (search: Record<string, unknown>): FilesSearch => ({
 });
 
 /**
- * The file browser, opened on whatever the URL names.
- *
- * A scope this workspace could not have issued opens the house rules instead of
- * an error page — same as every other parameter here, a mangled link degrades
- * into the plain screen. Changing scope drops the path with it: a path is
- * relative to one directory, and carrying it across would ask for whatever
- * happened to share a name.
- */
-const FilesScreen = () => {
-  const { path, scope, view } = filesRoute.useSearch();
-  const navigate = filesRoute.useNavigate();
-
-  const openScope = useMemo(() => fileScopeOf(scope) ?? DEFAULT_SCOPE, [scope]);
-
-  const selectScope = useCallback(
-    (address: string) => {
-      navigate({
-        search: (previous) => ({
-          ...previous,
-          path: undefined,
-          scope: address,
-        }),
-        to: ".",
-      });
-    },
-    [navigate]
-  );
-
-  const selectPath = useCallback(
-    (next: ScopePath | null) => {
-      navigate({
-        search: (previous) => ({ ...previous, path: next ?? undefined }),
-        to: ".",
-      });
-    },
-    [navigate]
-  );
-
-  const selectView = useCallback(
-    (next: ScopeView) => {
-      navigate({
-        search: (previous) => ({ ...previous, view: next }),
-        to: ".",
-      });
-    },
-    [navigate]
-  );
-
-  return (
-    <FileBrowser
-      onSelectPath={selectPath}
-      onSelectScope={selectScope}
-      onSelectView={selectView}
-      path={path ?? null}
-      scope={openScope}
-      view={view ?? "files"}
-    />
-  );
-};
-
-/**
  * The tree a run reads its rules from, on its own address.
  *
  * Its own page rather than a panel on the project screen: the workspace and the
  * manager scopes belong to no project, and the browsing is between scopes as
  * much as inside one.
+ *
+ * The browser itself — a tree, an editor, a skills panel — is fetched when
+ * somebody opens it. Most sessions never do, and none of it is needed to know
+ * that this path is a page.
  */
 export const filesRoute = createRoute({
-  component: FilesScreen,
+  component: lazyRouteComponent(
+    () => import("@/routes/files.screen"),
+    "FilesScreen"
+  ),
   errorComponent: RouteError,
   getParentRoute: () => layoutRoute,
   path: "/files",

@@ -1,8 +1,23 @@
 import type { RunId, TaskId } from "@workspace/domain";
 import { Sheet, SheetContent } from "@workspace/ui/components/sheet";
-import { useCallback, useState } from "react";
-import { TaskDetailView } from "@/features/task/detail";
+import { lazy, Suspense, useCallback, useState } from "react";
+import { Pending } from "@/components/query-state";
 import type { TaskTab } from "@/routes/search";
+
+/**
+ * The task body, fetched the first time a card is opened.
+ *
+ * The board mounts this panel closed on every visit, and the body behind it is
+ * the largest screen in the app — six panels, an artifact preview and a file
+ * viewer. Loading it on the open keeps the board's own arrival to the board.
+ * The task page at `/tasks/<taskId>` imports the same module outright, since
+ * there it is the page rather than something that might be asked for.
+ */
+const TaskDetailView = lazy(() =>
+  import("@/features/task/detail").then((module) => ({
+    default: module.TaskDetailView,
+  }))
+);
 
 interface TaskOverlayProps {
   /** Called with `false` when the panel closes; the route drops the search param. */
@@ -77,15 +92,21 @@ const TaskPeek = ({ onClosed, taskId }: TaskPeekProps) => {
     // scrolls, so the conversation can keep its footing at the bottom of the
     // sheet instead of below however many messages there are.
     <div className="flex min-h-0 min-w-0 flex-1 flex-col p-4 sm:p-5">
-      <TaskDetailView
-        onClose={onClosed}
-        onDeleted={onClosed}
-        onSelectRun={selectRun}
-        onSelectTab={setTab}
-        runId={runId}
-        tab={tab}
-        taskId={taskId}
-      />
+      {/*
+        The same skeleton the task's own fields arrive behind, so waiting for
+        the panel's code and waiting for its contents look alike.
+      */}
+      <Suspense fallback={<Pending label="Opening task" lines={4} />}>
+        <TaskDetailView
+          onClose={onClosed}
+          onDeleted={onClosed}
+          onSelectRun={selectRun}
+          onSelectTab={setTab}
+          runId={runId}
+          tab={tab}
+          taskId={taskId}
+        />
+      </Suspense>
     </div>
   );
 };
