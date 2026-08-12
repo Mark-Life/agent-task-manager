@@ -231,6 +231,19 @@ interface ApiCall {
 const carries = (call: ApiCall, data: string) =>
   JSON.stringify(call.payload.reply_markup ?? {}).includes(data);
 
+/**
+ * The words in a recorded call, wherever that call keeps them.
+ *
+ * The bot's chrome sends `text`; a manager's answer goes out as a rich message,
+ * whose words are in `rich_message.markdown` and which has no `text` at all.
+ * Reading only the first is how a claim about an answer passes by looking at a
+ * message that was never sent.
+ */
+const wordsIn = (call: ApiCall) => {
+  const rich = call.payload.rich_message as { markdown?: string } | undefined;
+  return String(call.payload.text ?? rich?.markdown ?? "");
+};
+
 /** What `getMe` would have said, so `bot.init()` succeeds with no network. */
 const botInfo = {
   can_connect_to_business: false,
@@ -267,6 +280,16 @@ const apiResultFor = (method: string, payload: Record<string, unknown>) => {
       date: Math.floor(Date.now() / MS_PER_SECOND),
       message_id: Math.floor(Math.random() * FAKE_MESSAGE_ID_RANGE),
       text: String(payload.text ?? ""),
+    };
+  }
+  if (method === "sendRichMessage") {
+    // No `text` on the way back, as Telegram sends none: the words of a rich
+    // message live in a block tree, and this stands in for one it did not parse.
+    return {
+      chat: { id: Number(payload.chat_id ?? 0), type: "private" },
+      date: Math.floor(Date.now() / MS_PER_SECOND),
+      message_id: Math.floor(Math.random() * FAKE_MESSAGE_ID_RANGE),
+      rich_message: { blocks: [] },
     };
   }
   return true;
@@ -805,6 +828,49 @@ const restartClaims = (options: {
     });
   });
 
+/**
+ * What one delivered answer left in the chat.
+ *
+ * Four reads of the same recording, so they are stated here rather than in the
+ * middle of {@link wiredClaims}. The answer goes out through `sendRichMessage`
+ * — that is the claim about Markdown a person sees rendered rather than as
+ * source — so the words are read with {@link wordsIn} and not off `text`, which
+ * a rich message does not have.
+ */
+const answerClaims = (options: {
+  readonly delivered: readonly ApiCall[];
+  readonly spoken: string;
+}) =>
+  Effect.gen(function* () {
+    const { delivered, spoken } = options;
+    const answers = delivered.filter(
+      (call) => call.method === "sendRichMessage"
+    );
+    const first = answers.at(0);
+    yield* check({
+      detail: `the bot said ${JSON.stringify(first === undefined ? null : wordsIn(first))}`,
+      ok: answers.some((call) => wordsIn(call).includes(spoken)),
+      step: "the finished turn's own row is what the conversation is answered with",
+    });
+    yield* check({
+      detail: `${answers.length} answers sent as rich messages, ${delivered.filter((call) => call.method === "sendMessage").length} as plain text`,
+      ok: answers.length > 0,
+      step: "a manager's answer goes out as Markdown Telegram parses, not as its source",
+    });
+    yield* check({
+      detail: `${delivered.filter((call) => wordsIn(call).includes("without an answer")).length} answerless lines sent`,
+      ok: delivered.every(
+        (call) => !wordsIn(call).includes("without an answer")
+      ),
+      step: "a turn still closing out is waited for, not called answerless",
+    });
+    yield* check({
+      detail: `${delivered.filter((call) => call.method === "deleteMessage").length} queued lines taken down`,
+      ok: delivered.some((call) => call.method === "deleteMessage"),
+      step: "the queued line comes down with the answer that overtook it",
+    });
+  });
+
 /** The claims that need the whole bot standing up. */
 const wiredClaims = (options: {
   readonly boardCalls: BoardCall[];
@@ -1334,28 +1400,7 @@ const wiredClaims = (options: {
       ],
       { concurrency: "unbounded" }
     );
-    const delivered = calls.slice(beforeAnswer);
-    yield* check({
-      detail: `the bot said ${JSON.stringify(delivered.find((call) => call.method === "sendMessage")?.payload.text)}`,
-      ok: delivered.some(
-        (call) =>
-          call.method === "sendMessage" &&
-          String(call.payload.text ?? "").includes(spoken)
-      ),
-      step: "the finished turn's own row is what the conversation is answered with",
-    });
-    yield* check({
-      detail: `${delivered.filter((call) => String(call.payload.text ?? "").includes("without an answer")).length} answerless lines sent`,
-      ok: delivered.every(
-        (call) => !String(call.payload.text ?? "").includes("without an answer")
-      ),
-      step: "a turn still closing out is waited for, not called answerless",
-    });
-    yield* check({
-      detail: `${delivered.filter((call) => call.method === "deleteMessage").length} queued lines taken down`,
-      ok: delivered.some((call) => call.method === "deleteMessage"),
-      step: "the queued line comes down with the answer that overtook it",
-    });
+    yield* answerClaims({ delivered: calls.slice(beforeAnswer), spoken });
 
     // The switch.
     yield* Effect.promise(() =>
