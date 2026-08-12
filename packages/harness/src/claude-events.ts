@@ -105,6 +105,14 @@ const EPOCH_SECONDS_CEILING = 1e11;
 const stringOf = (value: unknown) => (typeof value === "string" ? value : "");
 
 /**
+ * Whether a tool's input is the open bag every caller here reads it as. The SDK
+ * declares `ToolUseBlock.input` as `unknown`, so what a tool actually sent is
+ * only known once something has looked.
+ */
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
  * A shell command reduced to its verb. The argv never travels: a `git push` or
  * a `gh api` line carries a token often enough that the only safe rule is to
  * keep the program and what it was asked to do — {@link COMMAND_LABEL_WORDS}
@@ -236,7 +244,7 @@ const assistantEvents = (message: AssistantMessage): readonly AgentEvent[] => {
         kind: "reasoning",
       });
     } else if (block.type === "tool_use") {
-      const input = (block.input ?? {}) as Readonly<Record<string, unknown>>;
+      const input = isRecord(block.input) ? block.input : {};
       events.push({
         callId: block.id,
         inputChars: JSON.stringify(input).length,
