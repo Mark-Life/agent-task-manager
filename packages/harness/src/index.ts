@@ -13,9 +13,9 @@
  * Exported: the provider registry and the vocabulary a caller needs to use it —
  * the normalized event union and its mapping onto the domain's run events, the
  * typed failures and their classification, the run layout, where each provider's
- * system-owned agent home lives, the transcript reader, the per-session usage
- * summary derived from it, the stop-hook rule, and the turn event's environment
- * contract.
+ * system-owned agent home lives, the type an MCP-server map travels as, the
+ * transcript reader, the per-session usage summary derived from it, the
+ * stop-hook rule, and the turn event's environment contract.
  *
  * Not exported, deliberately, and each for its own reason.
  *
@@ -38,6 +38,14 @@
  * caller could relax from outside. What does leave is the name of the variable
  * an operator's overlay is read from, because the host has to know which
  * variable to forward into a container, and the error a bad overlay fails with.
+ *
+ * The MCP-server file grammar. `parseMcpServersFile` and the schemas behind it
+ * read one file on one mount, and the only process that reads it is the
+ * entrypoint inside the container. What leaves is {@link ClaudeMcpServers}
+ * alone, because `RunOptions` carries a map of servers across this boundary and
+ * the orchestrator builds one — the shapes a *file* may hold are this package's
+ * business, and a caller that could name them would be a second opinion about
+ * what a container can launch.
  *
  * The turn event's emit path. `withTurnEvent`, its counters and its row builder
  * are how the registry instruments a run, not something to instrument with — the
@@ -107,6 +115,7 @@ export {
   makeExecutorMcp,
   readExecutorMcp,
 } from "./executor-mcp";
+export type { ClaudeMcpServers } from "./mcp-servers";
 export {
   AGENT_HOME_DIR_ENV_VAR,
   AGENT_HOME_ENV_VAR,

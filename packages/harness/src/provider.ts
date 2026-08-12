@@ -26,6 +26,7 @@ import type { Telemetry } from "@workspace/telemetry";
 import { Context, type Stream } from "effect";
 import type { HarnessError } from "./errors";
 import type { AgentEvent } from "./events";
+import type { ClaudeMcpServers } from "./mcp-servers";
 
 /**
  * What a provider can be relied on to do. Every flag names something a caller
@@ -89,7 +90,7 @@ export interface RunOptions {
    * fields and nothing else, so an `args` array would be silently dropped and
    * the server would launch with nothing to run.
    */
-  readonly mcpServers: Readonly<Record<string, unknown>> | null;
+  readonly mcpServers: ClaudeMcpServers | null;
   /** Model id, or null for the provider's own default. */
   readonly model: string | null;
   readonly prompt: string;
