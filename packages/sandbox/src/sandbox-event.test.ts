@@ -16,6 +16,7 @@ import {
   Metric,
   Ref,
   References,
+  Schema,
 } from "effect";
 import { ImageMissing } from "./errors";
 import { defaultHardening } from "./hardening";
@@ -27,6 +28,7 @@ import {
   runsAsRoot,
   SANDBOX_EVENT_MARKER,
   type SandboxContext,
+  SandboxEvent,
   type SandboxProgress,
   subcommandOf,
   subprocessSpanName,
@@ -37,10 +39,33 @@ import type { SandboxResult, SandboxSpec } from "./spec";
 const SERVICE = "sandbox-test";
 const COUNTER = "atm_sandbox_runs_total";
 
-type Row = Record<string, unknown>;
+/** A W3C trace id, as the row carries it: 32 lowercase hex characters. */
+const TRACE_ID = /^[0-9a-f]{32}$/;
+
+/** A W3C span id, which is half the width of a trace id. */
+const SPAN_ID = /^[0-9a-f]{16}$/;
+
+/**
+ * What the log annotation sinks receive. Open by nature: a logger is handed
+ * whatever annotations the fiber carries, so this is `CurrentLogAnnotations`'
+ * own type rather than a shape anything here declares.
+ */
+type Annotations = Record<string, unknown>;
+
+/**
+ * One `atm.sandbox` row, decoded through the schema its readers use.
+ *
+ * `defineEvent` builds `encode` and `rowSchema` from one fields object, so a
+ * renamed field moves both at once and is a compile error. The half that can
+ * genuinely drift is what the emitter spells by hand — `ts`, the `event` tag
+ * and the environment stamp — and that is what the decode holds.
+ */
+type Row = typeof SandboxEvent.rowSchema.Type;
+
+const decodeRow = Schema.decodeUnknownSync(SandboxEvent.rowSchema);
 
 /** Captures the wide event by its marker, and every log line for comparison. */
-const captureLogger = (events: Row[], lines: Row[]) =>
+const captureLogger = (events: Annotations[], lines: Annotations[]) =>
   Logger.make((options) => {
     const annotations = options.fiber.getRef(References.CurrentLogAnnotations);
     lines.push({ ...annotations });
@@ -50,8 +75,8 @@ const captureLogger = (events: Row[], lines: Row[]) =>
   });
 
 interface Capture {
-  readonly events: Row[];
-  readonly lines: Row[];
+  readonly events: Annotations[];
+  readonly lines: Annotations[];
 }
 
 const testLayer = (
@@ -92,11 +117,40 @@ afterEach(() => {
 
 const ledgerPath = () => join(directory, `${SERVICE}.jsonl`);
 
-const readRows = (): Row[] =>
-  readFileSync(ledgerPath(), "utf-8")
+/**
+ * The ledger as bytes, which is what an assertion about a secret has to be made
+ * against: `SanitizedText` runs `clipError` on decode as well as on encode, so
+ * a decoded row shows the reader's own redaction rather than the emitter's.
+ */
+const ledgerText = () => readFileSync(ledgerPath(), "utf-8");
+
+/** One ledger line, or null where the line is not JSON at all. */
+const jsonOf = (line: string): unknown => {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Whether a parsed line is a sandbox row, read off the parsed `event` field. A
+ * substring test over the line would also match the marker inside a field
+ * value — an image tag, a daemon message quoting a command — and hand a foreign
+ * row to the decoder, failing the test for the wrong reason.
+ */
+const isSandboxRow = (value: unknown) =>
+  typeof value === "object" &&
+  value !== null &&
+  "event" in value &&
+  value.event === SANDBOX_EVENT_MARKER;
+
+const readRows = (): readonly Row[] =>
+  ledgerText()
     .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as Row);
+    .map(jsonOf)
+    .filter(isSandboxRow)
+    .map((row) => decodeRow(row));
 
 /** The single row a container just wrote. Fails loudly when the count is not one. */
 const onlyRow = () => {
@@ -304,7 +358,7 @@ describe("withSandboxEvent", () => {
     expect(row.teardown).toBe("removed");
     // the result outranks the accumulator: the pull flag on it is the real one
     expect(row.imagePulled).toBe(false);
-    expect(typeof row.durationMs).toBe("number");
+    expect(row.durationMs).toBeGreaterThanOrEqual(0);
     expect(row.errorClass).toBeNull();
   });
 
@@ -367,7 +421,7 @@ describe("withSandboxEvent", () => {
     // what was asked for is still on the row: that is what makes it readable
     expect(row.image).toBe("atm/base:2026-08-01");
     expect(row.mountCount).toBe(7);
-    expect(typeof row.durationMs).toBe("number");
+    expect(row.durationMs).toBeGreaterThanOrEqual(0);
   });
 
   test("what the container reached is kept on a failing row", async () => {
@@ -449,6 +503,9 @@ describe("withSandboxEvent", () => {
     expect(row.errorMessage).toBe(
       "pull access denied: Authorization: [redacted]"
     );
+    // The row read the sanitizer's answer; only the file can say the token was
+    // never written in the first place.
+    expect(ledgerText()).not.toContain("abc.def-123");
   });
 
   test("the row survives a Warn floor that silences ordinary log lines", async () => {
@@ -470,8 +527,8 @@ describe("withSandboxEvent", () => {
     await run(container([STARTED], Effect.succeed(resultOf())));
 
     const row = onlyRow();
-    expect(typeof row.traceId).toBe("string");
-    expect(typeof row.spanId).toBe("string");
+    expect(row.traceId).toMatch(TRACE_ID);
+    expect(row.spanId).toMatch(SPAN_ID);
   });
 });
 
