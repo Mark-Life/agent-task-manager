@@ -21,7 +21,7 @@ export interface BoardSearch {
   readonly task?: TaskId;
 }
 
-const validateSearch = (search: Record<string, unknown>): BoardSearch => ({
+const parseBoardSearch = (search: Record<string, unknown>): BoardSearch => ({
   projectId: parseProjectId(search.projectId),
   q: parseSearchText(search.q),
   task: parseTaskId(search.task),
@@ -44,5 +44,5 @@ export const boardRoute = createRoute({
   errorComponent: RouteError,
   getParentRoute: () => layoutRoute,
   path: "/",
-  validateSearch,
+  validateSearch: parseBoardSearch,
 });
