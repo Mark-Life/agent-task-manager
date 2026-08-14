@@ -170,7 +170,7 @@ beforeAll(async () => {
       const context = yield* Layer.build(gatewayLayer(workspaceId));
       const { address } = Context.get(context, HttpServer.HttpServer);
       if (address._tag !== "TcpAddress") {
-        return yield* Effect.fail(new NotListening());
+        return yield* new NotListening();
       }
       return `http://localhost:${address.port}`;
     }).pipe(Effect.provideService(Scope.Scope, serverScope))

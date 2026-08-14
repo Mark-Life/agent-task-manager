@@ -302,7 +302,7 @@ export const registerCallbacks = Effect.fnUntraced(function* (
       Effect.catchTag("Db.InvalidInput", () =>
         Effect.succeed(THREAD_HELD_ELSEWHERE_ANSWER)
       ),
-      Effect.catch(() => Effect.succeed(THREAD_GONE_ANSWER))
+      Effect.orElseSucceed(() => THREAD_GONE_ANSWER)
     );
 
     yield* answer(ctx, said);

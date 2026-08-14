@@ -90,9 +90,7 @@ const requireRun = (route: RunRoute) =>
       runs.byId({ id: route.runId, workspaceId: route.workspaceId })
     );
     if (run.taskId !== route.taskId) {
-      return yield* Effect.fail(
-        new NotFound({ entity: "run", id: route.runId })
-      );
+      return yield* new NotFound({ entity: "run", id: route.runId });
     }
     return run;
   });

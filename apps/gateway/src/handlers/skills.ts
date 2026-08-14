@@ -127,12 +127,10 @@ const readLock = Effect.fnUntraced(function* (root: string) {
     // Refused rather than replaced. Overwriting it would erase the record of
     // every skill the scope has, and the file is editable through the file
     // routes by whoever is being told this.
-    return yield* Effect.fail(
-      new InvalidInput({
-        detail: `${SKILLS_LOCK_FILE} in this scope is not a skills lock`,
-        entity: "skill",
-      })
-    );
+    return yield* new InvalidInput({
+      detail: `${SKILLS_LOCK_FILE} in this scope is not a skills lock`,
+      entity: "skill",
+    });
   }
   return lock;
 });
@@ -219,12 +217,10 @@ const writeSkillFile = Effect.fnUntraced(function* (input: {
   // as by the resolver below: `..` or a `.git` segment in a remote listing is a
   // repository asking to be written outside the directory it was fetched into.
   if (relativePathRefusalOf(input.file.path) !== null) {
-    return yield* Effect.fail(
-      new InvalidInput({
-        detail: `the source holds a file this cannot write: ${input.file.path}`,
-        entity: "skill",
-      })
-    );
+    return yield* new InvalidInput({
+      detail: `the source holds a file this cannot write: ${input.file.path}`,
+      entity: "skill",
+    });
   }
   const target = yield* resolveInScope({
     path: join(input.directory, input.file.path),
@@ -292,12 +288,10 @@ const linkSkill = Effect.fnUntraced(function* (input: {
   }
   const fs = yield* FileSystem;
   if (target.link === null && target.real !== null) {
-    return yield* Effect.fail(
-      new InvalidInput({
-        detail: `${paths.link} already exists and is not a link`,
-        entity: "skill",
-      })
-    );
+    return yield* new InvalidInput({
+      detail: `${paths.link} already exists and is not a link`,
+      entity: "skill",
+    });
   }
   if (target.link !== null) {
     yield* fs.remove(target.absolute, { force: true }).pipe(Effect.orDie);
@@ -476,12 +470,10 @@ export const installSkill = Effect.fn("Gateway.skills.install")(function* (
       .exists(join(root, paths.directory))
       .pipe(Effect.orDie);
     if (standing) {
-      return yield* Effect.fail(
-        new InvalidInput({
-          detail: `${paths.directory} already exists and no lock row claims it`,
-          entity: "skill",
-        })
-      );
+      return yield* new InvalidInput({
+        detail: `${paths.directory} already exists and no lock row claims it`,
+        entity: "skill",
+      });
     }
   }
 
@@ -568,13 +560,11 @@ export const applySkillUpdate = Effect.fn("Gateway.skills.applyUpdate")(
       repoUrl: repoUrlOf(entry.source),
     }).pipe(Effect.catch(asWireFailure));
     if (fetched.hash !== input.expectedHash) {
-      return yield* Effect.fail(
-        new InvalidInput({
-          detail:
-            "the source has changed since that update was reviewed — check it again",
-          entity: "skill",
-        })
-      );
+      return yield* new InvalidInput({
+        detail:
+          "the source has changed since that update was reviewed — check it again",
+        entity: "skill",
+      });
     }
 
     const skill = yield* materializeSkill({
@@ -611,9 +601,7 @@ export const uninstallSkill = Effect.fn("Gateway.skills.uninstall")(function* (
   const paths = skillPathsOf(input.name);
   const directory = yield* resolveInScope({ path: paths.directory, root });
   if (lock.skills[input.name] === undefined && directory.real === null) {
-    return yield* Effect.fail(
-      new NotFound({ entity: "skill", id: input.name })
-    );
+    return yield* new NotFound({ entity: "skill", id: input.name });
   }
 
   const fs = yield* FileSystem;

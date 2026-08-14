@@ -240,14 +240,12 @@ const resolveExisting = Effect.fnUntraced(function* (input: {
   // otherwise make every file in it look like an escape from itself.
   const root = yield* fs
     .realPath(input.dir)
-    .pipe(Effect.catch(() => Effect.succeed(resolve(input.dir))));
+    .pipe(Effect.orElseSucceed(() => resolve(input.dir)));
   if (!real.startsWith(`${root}${sep}`)) {
     yield* Effect.logWarning("artifact path leaves the task's folder", {
       path: input.contained.relative,
     });
-    return yield* Effect.fail(
-      new NotFound({ entity: input.entity, id: input.id })
-    );
+    return yield* new NotFound({ entity: input.entity, id: input.id });
   }
   return real;
 });
@@ -276,9 +274,7 @@ const requireOwnArtifact = Effect.fnUntraced(function* (
     .byId({ id: input.artifactId, workspaceId: input.principal.workspaceId })
     .pipe(asNotFound);
   if (row.scope !== "task" || row.taskId !== input.taskId) {
-    return yield* Effect.fail(
-      new NotFound({ entity: "artifact", id: input.artifactId })
-    );
+    return yield* new NotFound({ entity: "artifact", id: input.artifactId });
   }
   return row;
 });
@@ -408,9 +404,7 @@ export const uploadTaskArtifact = Effect.fn("Gateway.artifacts.upload")(
     const info = yield* fs.stat(input.file.path).pipe(Effect.orDie);
     const bytes = Number(info.size);
     if (bytes > MAX_ARTIFACT_BYTES) {
-      return yield* Effect.fail(
-        new PayloadTooLarge({ bytes, limit: MAX_ARTIFACT_BYTES })
-      );
+      return yield* new PayloadTooLarge({ bytes, limit: MAX_ARTIFACT_BYTES });
     }
 
     // A path that already names a folder is the caller's mistake, not the
@@ -418,12 +412,10 @@ export const uploadTaskArtifact = Effect.fn("Gateway.artifacts.upload")(
     // a server fault, which is the wrong thing to tell somebody to retry.
     const occupant = yield* fs.stat(contained.absolute).pipe(Effect.option);
     if (Option.isSome(occupant) && occupant.value.type === "Directory") {
-      return yield* Effect.fail(
-        new InvalidInput({
-          detail: "path already names a directory",
-          entity: "artifact",
-        })
-      );
+      return yield* new InvalidInput({
+        detail: "path already names a directory",
+        entity: "artifact",
+      });
     }
 
     yield* copyArtifact({
@@ -527,9 +519,7 @@ export const promoteTaskArtifact = Effect.fn("Gateway.artifacts.promote")(
     if (row.promotedAt !== null) {
       // The store checks this again under a row lock and that check is the
       // authority. This one is what stops a doomed call copying the bytes.
-      return yield* Effect.fail(
-        new ArtifactAlreadyPromoted({ artifactId: row.id })
-      );
+      return yield* new ArtifactAlreadyPromoted({ artifactId: row.id });
     }
 
     const task = yield* requireTask(input);

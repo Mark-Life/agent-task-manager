@@ -79,11 +79,9 @@ export const downloadTelegramFile = Effect.fn("telegram.downloadFile")(
 
     const filePath = file.file_path;
     if (filePath === undefined) {
-      return yield* Effect.fail(
-        new FileDownloadFailed({
-          detail: "telegram returned no file path for the file id",
-        })
-      );
+      return yield* new FileDownloadFailed({
+        detail: "telegram returned no file path for the file id",
+      });
     }
 
     const bytes = yield* Effect.tryPromise({

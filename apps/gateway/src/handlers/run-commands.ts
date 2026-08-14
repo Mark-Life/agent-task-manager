@@ -128,9 +128,7 @@ const requireRun = (input: {
       asNotFound
     );
     if (run.taskId !== input.taskId) {
-      return yield* Effect.fail(
-        new NotFound({ entity: "run", id: input.runId })
-      );
+      return yield* new NotFound({ entity: "run", id: input.runId });
     }
     return run;
   });

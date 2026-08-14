@@ -68,7 +68,7 @@ const TEST_TIMEOUT_MS = 30_000;
 /** The listener count is not what it will be yet. Retried, never reported. */
 class NotSettled extends Schema.TaggedErrorClass<NotSettled>()(
   "SseTest.NotSettled",
-  { expected: Schema.Number, found: Schema.Number }
+  { expected: Schema.Int, found: Schema.Int }
 ) {}
 
 const runtime = ManagedRuntime.make(
@@ -201,7 +201,7 @@ const awaitListeners = (expected: number) =>
   Effect.gen(function* () {
     const found = yield* listeningBackends;
     if (found !== expected) {
-      return yield* Effect.fail(new NotSettled({ expected, found }));
+      return yield* new NotSettled({ expected, found });
     }
     return found;
   }).pipe(

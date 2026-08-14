@@ -146,9 +146,7 @@ const requireOwnProposal = Effect.fnUntraced(function* (
     .byId({ id: input.proposalId, workspaceId: input.principal.workspaceId })
     .pipe(asNotFound);
   if (row.taskId !== input.taskId) {
-    return yield* Effect.fail(
-      new NotFound({ entity: "proposal", id: input.proposalId })
-    );
+    return yield* new NotFound({ entity: "proposal", id: input.proposalId });
   }
   return row;
 });
@@ -262,9 +260,10 @@ export const confirmProposal = Effect.fn("Gateway.proposals.confirm")(
     const decidedBy = yield* deciderOf(input.principal);
     const row = yield* requireOwnProposal(input);
     if (row.state !== "pending") {
-      return yield* Effect.fail(
-        new ProposalAlreadyDecided({ proposalId: row.id, state: row.state })
-      );
+      return yield* new ProposalAlreadyDecided({
+        proposalId: row.id,
+        state: row.state,
+      });
     }
 
     const dir = yield* scopeDirOf({ dataRoot: input.dataRoot, proposal: row });

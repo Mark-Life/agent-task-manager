@@ -235,23 +235,20 @@ export const readScopeFile = Effect.fn("Gateway.files.read")(function* (
   if (target.real === null) {
     // A link whose target is gone. There are no bytes to answer with, and
     // following it is what the containment above already refused.
-    return yield* Effect.fail(
-      new NotFound({ entity: "file", id: target.relative })
-    );
+    return yield* new NotFound({ entity: "file", id: target.relative });
   }
 
   const fs = yield* FileSystem;
   const info = yield* fs.stat(target.real).pipe(Effect.orDie);
   if (info.type === "Directory") {
-    return yield* Effect.fail(
-      new InvalidInput({ detail: "path names a directory", entity: "file" })
-    );
+    return yield* new InvalidInput({
+      detail: "path names a directory",
+      entity: "file",
+    });
   }
   const bytes = Number(info.size);
   if (bytes > MAX_FILE_BYTES) {
-    return yield* Effect.fail(
-      new PayloadTooLarge({ bytes, limit: MAX_FILE_BYTES })
-    );
+    return yield* new PayloadTooLarge({ bytes, limit: MAX_FILE_BYTES });
   }
 
   const raw = yield* fs.readFile(target.real).pipe(Effect.orDie);
@@ -340,9 +337,10 @@ export const writeScopeFile = Effect.fn("Gateway.files.write")(function* (
   const committer = yield* editorOf(input.principal);
   const bytes = yield* bytesOf(input);
   if (bytes.length > MAX_FILE_BYTES) {
-    return yield* Effect.fail(
-      new PayloadTooLarge({ bytes: bytes.length, limit: MAX_FILE_BYTES })
-    );
+    return yield* new PayloadTooLarge({
+      bytes: bytes.length,
+      limit: MAX_FILE_BYTES,
+    });
   }
 
   const root = yield* scopeRootOf({ create: true, request: input });
@@ -352,12 +350,10 @@ export const writeScopeFile = Effect.fn("Gateway.files.write")(function* (
   if (target.real !== null) {
     const info = yield* fs.stat(target.real).pipe(Effect.orDie);
     if (info.type === "Directory") {
-      return yield* Effect.fail(
-        new InvalidInput({
-          detail: "path already names a directory",
-          entity: "file",
-        })
-      );
+      return yield* new InvalidInput({
+        detail: "path already names a directory",
+        entity: "file",
+      });
     }
   }
 
@@ -397,12 +393,10 @@ export const createScopeDirectory = Effect.fn("Gateway.files.createDirectory")(
     if (target.real !== null) {
       const info = yield* fs.stat(target.real).pipe(Effect.orDie);
       if (info.type !== "Directory") {
-        return yield* Effect.fail(
-          new InvalidInput({
-            detail: "path already names a file",
-            entity: "file",
-          })
-        );
+        return yield* new InvalidInput({
+          detail: "path already names a file",
+          entity: "file",
+        });
       }
     }
     yield* makeParent({ absolute: target.absolute, root });
@@ -450,30 +444,24 @@ export const linkScopePath = Effect.fn("Gateway.files.createLink")(function* (
 
   const link = yield* resolveInScope({ path: input.path, root });
   if (link.link !== null || link.real !== null) {
-    return yield* Effect.fail(
-      new InvalidInput({
-        detail: "something is already there — remove it first",
-        entity: "file",
-      })
-    );
+    return yield* new InvalidInput({
+      detail: "something is already there — remove it first",
+      entity: "file",
+    });
   }
 
   const target = yield* resolveInScope({ path: input.target, root }).pipe(
     Effect.tap((resolved) => refuseEscape({ root, target: resolved }))
   );
   if (target.link !== null) {
-    return yield* Effect.fail(
-      new InvalidInput({
-        detail:
-          "the target is itself a link — point at what that one points at instead",
-        entity: "file",
-      })
-    );
+    return yield* new InvalidInput({
+      detail:
+        "the target is itself a link — point at what that one points at instead",
+      entity: "file",
+    });
   }
   if (target.real === null) {
-    return yield* Effect.fail(
-      new NotFound({ entity: "file", id: target.relative })
-    );
+    return yield* new NotFound({ entity: "file", id: target.relative });
   }
 
   const parent = yield* makeParent({ absolute: link.absolute, root });
@@ -518,9 +506,10 @@ export const moveScopeFile = Effect.fn("Gateway.files.move")(function* (
   const to = yield* resolveInScope({ path: input.to, root });
   yield* refuseLink(to);
   if (to.real !== null) {
-    return yield* Effect.fail(
-      new InvalidInput({ detail: "destination already exists", entity: "file" })
-    );
+    return yield* new InvalidInput({
+      detail: "destination already exists",
+      entity: "file",
+    });
   }
 
   yield* makeParent({ absolute: to.absolute, root });

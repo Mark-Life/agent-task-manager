@@ -265,7 +265,7 @@ export const defineTool = <
 }): AgentTool => ({
   alwaysLoad: options.alwaysLoad ?? false,
   call: (client, args) =>
-    Schema.decodeUnknownEffect(options.input)(args ?? {}).pipe(
+    Schema.decodeEffect(options.input)(args ?? {}).pipe(
       Effect.flatMap((input) => options.run({ client, input })),
       Effect.map(renderResult),
       Effect.mapError(
