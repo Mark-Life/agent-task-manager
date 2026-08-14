@@ -116,7 +116,7 @@ export const ChatEvent = defineEvent(CHAT_EVENT_MARKER, {
   /** The conversation this update belongs to. Null before one exists. */
   threadId: Schema.NullOr(SanitizedText),
   /** How long transcription took. Non-null only for a voice note. */
-  transcribeMs: Schema.NullOr(Schema.Number),
+  transcribeMs: Schema.NullOr(Schema.Finite),
   /** The transcript, measured. Non-null only for a voice note. */
   transcriptChars: Schema.NullOr(Schema.Natural),
   updateKind: Schema.Literals(CHAT_UPDATE_KINDS),

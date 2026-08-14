@@ -59,12 +59,10 @@ const parseEntry = (raw: string) =>
   Effect.gen(function* () {
     const fields = raw.split(FIELD_SEPARATOR).map((field) => field.trim());
     if (fields.length !== ENTRY_FIELDS) {
-      return yield* Effect.fail(
-        new AllowlistInvalid({
-          detail: `expected ${ENTRY_FIELDS} colon-separated fields, got ${fields.length}`,
-          entry: raw,
-        })
-      );
+      return yield* new AllowlistInvalid({
+        detail: `expected ${ENTRY_FIELDS} colon-separated fields, got ${fields.length}`,
+        entry: raw,
+      });
     }
     const [telegramUserId, workspaceId, userId] = fields as [
       string,
@@ -73,20 +71,16 @@ const parseEntry = (raw: string) =>
     ];
     const parsedId = Number(telegramUserId);
     if (!Number.isSafeInteger(parsedId) || parsedId <= 0) {
-      return yield* Effect.fail(
-        new AllowlistInvalid({
-          detail: "the Telegram user id is not a positive integer",
-          entry: raw,
-        })
-      );
+      return yield* new AllowlistInvalid({
+        detail: "the Telegram user id is not a positive integer",
+        entry: raw,
+      });
     }
     if (workspaceId.length === 0 || userId.length === 0) {
-      return yield* Effect.fail(
-        new AllowlistInvalid({
-          detail: "the workspace id and the user id are both required",
-          entry: raw,
-        })
-      );
+      return yield* new AllowlistInvalid({
+        detail: "the workspace id and the user id are both required",
+        entry: raw,
+      });
     }
     return {
       entry: {
@@ -111,20 +105,19 @@ export const parseAllowlist = Effect.fn("Bot.parseAllowlist")(function* (
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
   if (entries.length === 0) {
-    return yield* Effect.fail(
-      new AllowlistInvalid({ detail: "the allow-list is empty", entry: raw })
-    );
+    return yield* new AllowlistInvalid({
+      detail: "the allow-list is empty",
+      entry: raw,
+    });
   }
   const byTelegramUserId = new Map<number, AllowlistEntry>();
   for (const raw_ of entries) {
     const parsed = yield* parseEntry(raw_);
     if (byTelegramUserId.has(parsed.telegramUserId)) {
-      return yield* Effect.fail(
-        new AllowlistInvalid({
-          detail: "this Telegram user id appears twice",
-          entry: raw_,
-        })
-      );
+      return yield* new AllowlistInvalid({
+        detail: "this Telegram user id appears twice",
+        entry: raw_,
+      });
     }
     byTelegramUserId.set(parsed.telegramUserId, parsed.entry);
   }

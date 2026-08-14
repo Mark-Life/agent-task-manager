@@ -101,7 +101,7 @@ export type SecretFailure = typeof SecretFailure.Type;
  */
 export class SecretUnreadable extends Schema.TaggedErrorClass<SecretUnreadable>()(
   "Token.SecretUnreadable",
-  { keyVersion: Schema.Number, reason: SecretFailure }
+  { keyVersion: Schema.Int, reason: SecretFailure }
 ) {}
 
 /** One sealed value, exactly as a row holds it. */

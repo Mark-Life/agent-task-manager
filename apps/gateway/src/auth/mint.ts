@@ -56,11 +56,9 @@ const workspaceOf = (named: string | undefined) =>
     const all = yield* workspaces.list();
     const [only] = all;
     if (all.length !== 1 || only === undefined) {
-      return yield* Effect.fail(
-        new BadUsage({
-          detail: `${all.length} workspaces exist — name one with --workspace`,
-        })
-      );
+      return yield* new BadUsage({
+        detail: `${all.length} workspaces exist — name one with --workspace`,
+      });
     }
     return only.id;
   });
@@ -72,18 +70,16 @@ const program = Effect.gen(function* () {
   const named = flag(argv, "scope") ?? DEFAULT_SCOPE;
   const scope = API_SCOPES.find((known): known is ApiScope => known === named);
   if (scope === undefined) {
-    return yield* Effect.fail(
-      new BadUsage({
-        detail: `--scope must be one of ${API_SCOPES.join(", ")}`,
-      })
-    );
+    return yield* new BadUsage({
+      detail: `--scope must be one of ${API_SCOPES.join(", ")}`,
+    });
   }
 
   const user = flag(argv, "user");
   if (user === undefined) {
-    return yield* Effect.fail(
-      new BadUsage({ detail: "--user names whom the token acts as" })
-    );
+    return yield* new BadUsage({
+      detail: "--user names whom the token acts as",
+    });
   }
 
   // A person's token may reach the destructive end; an agent speaking for one
@@ -95,9 +91,9 @@ const program = Effect.gen(function* () {
 
   const days = Number(flag(argv, "ttl-days") ?? DEFAULT_TTL_DAYS);
   if (!Number.isFinite(days) || days <= 0) {
-    return yield* Effect.fail(
-      new BadUsage({ detail: "--ttl-days must be a positive number of days" })
-    );
+    return yield* new BadUsage({
+      detail: "--ttl-days must be a positive number of days",
+    });
   }
 
   const workspaceId = yield* workspaceOf(flag(argv, "workspace"));

@@ -98,9 +98,10 @@ const requireSession = (route: SessionRoute) =>
       sessions.byId({ id: route.sessionId, workspaceId: route.workspaceId })
     );
     if (session.taskId !== route.taskId) {
-      return yield* Effect.fail(
-        new NotFound({ entity: "agent_session", id: route.sessionId })
-      );
+      return yield* new NotFound({
+        entity: "agent_session",
+        id: route.sessionId,
+      });
     }
     return session;
   });

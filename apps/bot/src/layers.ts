@@ -211,7 +211,8 @@ export interface AppSubstitutes {
  * the bot, forks the listener on the pool's own `PgClient`, and starts the scan.
  */
 export const appLayer = (wiring: BotWiring, substitutes?: AppSubstitutes) =>
-  StuckScan.layer.pipe(Layer.provide(stuckAnnouncerLayer)).pipe(
+  StuckScan.layer.pipe(
+    Layer.provide(stuckAnnouncerLayer),
     Layer.provideMerge(
       Notifier.layer({
         retryGraceMs: wiring.env.notifyRetryGraceMs,

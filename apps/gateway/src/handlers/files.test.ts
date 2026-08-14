@@ -116,7 +116,7 @@ let principal: PrincipalShape;
 const workspace: FileScope = { scope: "workspace" };
 
 /** A path the schema has already accepted, as a route hands one to a handler. */
-const at = (path: string) => Schema.decodeUnknownSync(ScopePathSchema)(path);
+const at = (path: string) => Schema.decodeSync(ScopePathSchema)(path);
 
 /**
  * A path the schema would never accept, forced past it.
@@ -249,7 +249,7 @@ afterAll(async () => {
  */
 test("the contract refuses a path that climbs, starts at the root, or carries a NUL", () => {
   const accepts = (path: string) =>
-    Option.isSome(Schema.decodeUnknownOption(ScopePathSchema)(path));
+    Option.isSome(Schema.decodeOption(ScopePathSchema)(path));
 
   expect(accepts("../escaped.md")).toBe(false);
   expect(accepts("/etc/passwd")).toBe(false);

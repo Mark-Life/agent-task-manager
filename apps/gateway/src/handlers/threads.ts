@@ -165,9 +165,7 @@ const requireTurn = (route: ThreadRoute & { readonly runId: RunId }) =>
       runs.byId({ id: route.runId, workspaceId: route.workspaceId })
     );
     if (run.threadId !== route.threadId) {
-      return yield* Effect.fail(
-        new NotFound({ entity: "run", id: route.runId })
-      );
+      return yield* new NotFound({ entity: "run", id: route.runId });
     }
     return run;
   });
@@ -244,13 +242,11 @@ export const threadsHandlers = HttpApiBuilder.group(
               const userId = speakerOf(actor);
 
               if (userId === null) {
-                return yield* Effect.fail(
-                  new Forbidden({
-                    reason:
-                      "a conversation speaks for a person, and this credential names none",
-                    required: "a credential naming a person",
-                  })
-                );
+                return yield* new Forbidden({
+                  reason:
+                    "a conversation speaks for a person, and this credential names none",
+                  required: "a credential naming a person",
+                });
               }
 
               const threads = yield* ChatThreadRepo;
@@ -283,24 +279,20 @@ export const threadsHandlers = HttpApiBuilder.group(
               const { workspaceId } = yield* Principal;
 
               if (Object.keys(payload).length === 0) {
-                return yield* Effect.fail(
-                  new InvalidInput({
-                    detail: "name a title, a currency or an archive",
-                    entity: "chat_thread",
-                  })
-                );
+                return yield* new InvalidInput({
+                  detail: "name a title, a currency or an archive",
+                  entity: "chat_thread",
+                });
               }
               if (
                 payload.isCurrent !== undefined &&
                 payload.status !== undefined
               ) {
-                return yield* Effect.fail(
-                  new InvalidInput({
-                    detail:
-                      "an archived conversation cannot also be the current one",
-                    entity: "chat_thread",
-                  })
-                );
+                return yield* new InvalidInput({
+                  detail:
+                    "an archived conversation cannot also be the current one",
+                  entity: "chat_thread",
+                });
               }
 
               return yield* applyPatch(
@@ -351,13 +343,11 @@ export const threadsHandlers = HttpApiBuilder.group(
               // one would sit unanswered forever. Saying so is better than
               // accepting words nothing will ever read.
               if (thread.status !== "active") {
-                return yield* Effect.fail(
-                  new InvalidInput({
-                    detail:
-                      "this conversation is archived; make it current to speak in it",
-                    entity: "chat_message",
-                  })
-                );
+                return yield* new InvalidInput({
+                  detail:
+                    "this conversation is archived; make it current to speak in it",
+                  entity: "chat_message",
+                });
               }
 
               // Asked before the row is written, because afterwards the run this
