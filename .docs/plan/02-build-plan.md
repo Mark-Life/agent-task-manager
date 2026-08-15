@@ -109,8 +109,9 @@ event; one asserting a degraded outcome serializes `null` economics; one per met
 its exact attribute key set; one that sets the minimum level to `Warn` and still captures the
 event.
 
-**Sampling** stays off — single-operator volume, keep everything. The predicate lands only if
-volume rises 10x, and the assumed volume is written beside the sink.
+**Sampling** stays off per marker until that marker's volume rises 10x, and the assumed volume
+is written beside the sink. `atm.request` reached it first and is the only one sampled — see
+Phase 9 item 8. The rest is single-operator volume: keep everything.
 
 ---
 
@@ -549,7 +550,12 @@ reads back in full.
    in env only. Nothing in the code changes; the layer is already there from Phase 0.
 8. **Sampling predicate**, only if volume has risen ~10x: takes the finished event, keeps
    every non-`done` outcome and everything above p99, stamps `sampleRate` on what it keeps,
-   sits below the metric updates.
+   sits below the metric updates. **Shipped** as `apps/gateway/src/request-sampling.ts`, on
+   `atm.request` alone — the trigger was measured there and nowhere else: 2,569 rows/day at
+   772 B/row turned the 64 MiB cap over in 34 days, and 69.7% of it was two dashboard polls.
+   The p99 is per route and moves with the traffic rather than being a figure in the source,
+   event streams are kept whole beside the failures, and the remainder is kept one in
+   `GATEWAY_SAMPLE_ONE_IN` (20; `1` turns it off). Every other marker is unsampled.
 
 ---
 

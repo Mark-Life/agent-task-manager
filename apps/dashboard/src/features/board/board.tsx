@@ -64,11 +64,19 @@ const TOUCH_HOLD_MS = 250;
  */
 const TOUCH_TOLERANCE = 6;
 
-/** How often the board re-reads itself while nobody is dragging on it. */
+/**
+ * How often the board re-reads itself while nobody is dragging on it, and how
+ * often each card in progress is asked whether a run is still on it.
+ *
+ * One interval for both, because the second read is derived from the first: a
+ * card cannot show a live run before the board has said the card is in
+ * progress, so asking about the run twice as often as about the column only
+ * buys rows in the gateway's ledger. This is that ledger's largest single
+ * source — one request per in-progress card per tick — and it is bounded by how
+ * many worker slots the operator is willing to spend, not by the size of the
+ * board.
+ */
 const BOARD_POLL_MS = 10_000;
-
-/** How often a task in progress is asked whether a run is still on it. */
-const LIVE_POLL_MS = 5000;
 
 /** One reference for "no columns yet", so nothing downstream re-derives on every render. */
 const NO_COLUMNS: readonly BoardColumn[] = [];
@@ -143,15 +151,16 @@ const liveIdsOf = (
  * The board's own read carries cards and not runs, so the answer costs one
  * small read per card in progress — the only column where it is ever anything
  * but "none", and a column bounded by how many slots the operator is willing to
- * spend. The reads land on the task's own cache key, so opening one of these
- * cards finds its detail already there.
+ * spend. They run on the board's own interval rather than a faster one of their
+ * own — see {@link BOARD_POLL_MS}. The reads land on the task's own cache key,
+ * so opening one of these cards finds its detail already there.
  */
 const useLiveRuns = (tasks: readonly Task[]) => {
   const queries = useMemo(
     () =>
       tasks.map((task) => ({
         ...taskQuery(task.id),
-        refetchInterval: LIVE_POLL_MS,
+        refetchInterval: BOARD_POLL_MS,
       })),
     [tasks]
   );

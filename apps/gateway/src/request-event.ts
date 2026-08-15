@@ -39,6 +39,13 @@
  * and can hold a token. Path parameters are caller-controlled too, so the ids
  * lifted off them are clipped like any other free text.
  *
+ * **A request is counted once and stored sometimes.** This is the one marker in
+ * the system whose volume follows a screen being open rather than work being
+ * done, so the row passes `./request-sampling` before it is written: everything
+ * that failed, streamed or ran long is kept, the rest is thinned and stamped
+ * with what it weighs. The counters in `./request-metrics` are updated above
+ * that decision and still describe every request.
+ *
  * Wiring is one line in the composition root — `Layer.provide(requestEventLayer)`
  * on the API layer in `./layers`. The layer registers itself with the router, so
  * every route is covered, including the ones added later.
@@ -89,6 +96,7 @@ import {
   recordRequestMetrics,
   UNMATCHED_ROUTE,
 } from "./request-metrics";
+import { makeRequestSampler, type RequestSampler } from "./request-sampling";
 
 /** The filter key every query over gateway traffic starts from. */
 export const REQUEST_EVENT_MARKER = "atm.request";
@@ -207,6 +215,17 @@ export const RequestEvent = defineEvent(REQUEST_EVENT_MARKER, {
   pathShape: Schema.NullOr(SanitizedText),
   /** The pattern that matched — never the path, which is unbounded. */
   route: SanitizedText,
+  /**
+   * How many requests this row stands for — 1 for a row kept on its own merits,
+   * the thinning factor for one kept as a representative of the traffic around
+   * it. `./request-sampling` decides it; a count over these rows multiplies by
+   * it. This is the only marker in the ledger that is a sample, so the field is
+   * declared here rather than in the shared vocabulary: a row of any other kind
+   * stands for exactly itself and an absent `sampleRate` reads as 1.
+   */
+  sampleRate: Schema.Natural.pipe(
+    Schema.check(Schema.isGreaterThanOrEqualTo(1))
+  ),
   sse: Schema.Boolean,
   status: Schema.Int,
   /** Response to stream end. Null when nothing streamed; the reason this row waits. */
@@ -218,6 +237,12 @@ export const RequestEvent = defineEvent(REQUEST_EVENT_MARKER, {
 /** The row one request supplies, derived from the schema so it cannot drift. */
 export type RequestEventInput = Parameters<typeof RequestEvent.encode>[0];
 
+/**
+ * The row as the sampling predicate receives it: everything a finished request
+ * knows, before anything has decided what it weighs.
+ */
+export type FinishedRequest = Omit<RequestEventInput, "sampleRate">;
+
 /** How a request ended, as the ledger and the counters spell it. */
 type RequestOutcome = NonNullable<RequestEventInput["outcome"]>;
 
@@ -228,6 +253,11 @@ interface RequestContext {
   readonly method: HttpMethod.HttpMethod;
   /** Path only: a query string is caller-controlled and can carry a credential. */
   readonly path: string;
+  /**
+   * One per process, not one per request: what it decides about this row is
+   * read off a picture of the traffic every other request contributed to.
+   */
+  readonly sampler: RequestSampler;
   readonly span: Option.Option<Tracer.Span>;
   readonly startedAt: number;
 }
@@ -465,7 +495,7 @@ const requestRow = (
   auth: AuthRecord | null,
   exit: Exit.Exit<unknown, unknown>,
   endedAt: number
-): RequestEventInput => {
+): FinishedRequest => {
   const route = routeOf(context.span);
   const identity = pathIdentity(route, context.path);
   const span = Option.getOrUndefined(context.span);
@@ -509,9 +539,13 @@ const requestRow = (
 };
 
 /**
- * The one emit site: the row, then the counters derived from it. Everything is
- * inside `ignoreCause`, construction included, so a field that will not encode
- * is a dropped row rather than a request that dies finalizing.
+ * The one emit site: the row, the counters derived from it, then the predicate
+ * that decides whether the row is stored. The counters go first and
+ * unconditionally — they describe every request the gateway answered, and the
+ * ledger a sample of them, which is the only ordering under which an exact
+ * count and a thinned ledger can both be true. Everything is inside
+ * `ignoreCause`, construction included, so a field that will not encode is a
+ * dropped row rather than a request that dies finalizing.
  */
 const closeRequest = (
   context: RequestContext,
@@ -526,13 +560,16 @@ const closeRequest = (
     if (state.sse) {
       yield* moveSseConnections(row.route, -1);
     }
-    yield* emitEvent(RequestEvent, row);
     yield* recordRequestMetrics({
       durationMs: row.durationMs ?? 0,
       method: row.method,
       route: row.route,
       status: row.status,
     });
+    const sampleRate = yield* context.sampler.rateFor(row);
+    if (sampleRate !== null) {
+      yield* emitEvent(RequestEvent, { ...row, sampleRate });
+    }
   }).pipe(Effect.ignoreCause);
 
 /** Where a URL stops being a path. */
@@ -552,7 +589,7 @@ const pathOf = (url: string) => url.split(PATH_END)[0] ?? url;
  * stream's byte count have all finished by then.
  */
 const instrument =
-  (telemetry: TelemetryInterface) =>
+  (telemetry: TelemetryInterface, sampler: RequestSampler) =>
   <A extends HttpServerResponse.HttpServerResponse, E, R>(
     app: Effect.Effect<A, E, R>
   ) =>
@@ -564,6 +601,7 @@ const instrument =
         auth: yield* makeRequestAuth,
         method: methodOf(request.method),
         path: pathOf(request.url),
+        sampler,
         // The span the platform's tracer opened for this request, parented from
         // the caller's `traceparent` where there was one. Captured now and read
         // as the row is built: by then `Effect.currentSpan` answers nothing.
@@ -599,15 +637,21 @@ const instrument =
  * The instrumentation, as a global router middleware. Global rather than
  * per-route: a route added without it would be a route with no row, and
  * "somebody remembered" is not a property worth resting on. The telemetry
- * handle is resolved once, at layer build, so the per-request path costs no
- * service lookup.
+ * handle and the sampler are resolved once, at layer build, so the per-request
+ * path costs no service lookup — and the sampler's picture of the traffic
+ * belongs to the built layer rather than to the module, so a second gateway in
+ * the same process does not sample against the first one's latencies.
  */
 export const requestEventLayer = HttpRouter.middleware(
-  // Applied through an arrow rather than passed by name: a generic function
-  // handed over as a value is instantiated at its constraints, which would
-  // leave the middleware's error and requirement channels as `unknown` and
-  // demand a context from every caller of the router.
-  Effect.map(Telemetry, (telemetry) => (app) => instrument(telemetry)(app)),
+  Effect.gen(function* () {
+    const telemetry = yield* Telemetry;
+    const sampler = yield* makeRequestSampler;
+    // Applied through an arrow rather than passed by name: a generic function
+    // handed over as a value is instantiated at its constraints, which would
+    // leave the middleware's error and requirement channels as `unknown` and
+    // demand a context from every caller of the router.
+    return (app) => instrument(telemetry, sampler)(app);
+  }),
   { global: true }
 );
 
