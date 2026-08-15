@@ -132,7 +132,7 @@ import { makeTokenSigner } from "@workspace/token";
 import type { Context } from "effect";
 import { DateTime, Effect, Layer, Redacted, Schedule } from "effect";
 import type { Transformer } from "grammy";
-import type { Update } from "grammy/types";
+import type { MessageEntity, Update } from "grammy/types";
 import { registerHandlers } from "../apps/bot/src/index";
 import { appLayer, type BotWiring } from "../apps/bot/src/layers";
 import {
@@ -231,6 +231,19 @@ interface ApiCall {
 const carries = (call: ApiCall, data: string) =>
   JSON.stringify(call.payload.reply_markup ?? {}).includes(data);
 
+/**
+ * The words in a recorded call, wherever that call keeps them.
+ *
+ * The bot's chrome sends `text`; a manager's answer goes out as a rich message,
+ * whose words are in `rich_message.markdown` and which has no `text` at all.
+ * Reading only the first is how a claim about an answer passes by looking at a
+ * message that was never sent.
+ */
+const wordsIn = (call: ApiCall) => {
+  const rich = call.payload.rich_message as { markdown?: string } | undefined;
+  return String(call.payload.text ?? rich?.markdown ?? "");
+};
+
 /** What `getMe` would have said, so `bot.init()` succeeds with no network. */
 const botInfo = {
   can_connect_to_business: false,
@@ -269,6 +282,16 @@ const apiResultFor = (method: string, payload: Record<string, unknown>) => {
       text: String(payload.text ?? ""),
     };
   }
+  if (method === "sendRichMessage") {
+    // No `text` on the way back, as Telegram sends none: the words of a rich
+    // message live in a block tree, and this stands in for one it did not parse.
+    return {
+      chat: { id: Number(payload.chat_id ?? 0), type: "private" },
+      date: Math.floor(Date.now() / MS_PER_SECOND),
+      message_id: Math.floor(Math.random() * FAKE_MESSAGE_ID_RANGE),
+      rich_message: { blocks: [] },
+    };
+  }
   return true;
 };
 
@@ -284,6 +307,10 @@ const recordingTransformer = (calls: ApiCall[]): Transformer =>
   ((_next: unknown, method: string, payload: Record<string, unknown>) => {
     calls.push({ method, payload });
     return Promise.resolve({ ok: true, result: apiResultFor(method, payload) });
+    // SAFETY: grammy's Transformer is generic per method, and a recorder is
+    // uniform across methods — one signature cannot be written in the other.
+    // The payload is only ever read back by claims that already know which call
+    // they made.
   }) as unknown as Transformer;
 
 /**
@@ -437,7 +464,7 @@ const turnStoreLayer = Layer.mergeAll(
  * exactly the failure the registration order in `index.ts` is about, and would
  * make this check pass for the wrong reason.
  */
-const commandEntities = (text: string) => {
+const commandEntities = (text: string): MessageEntity[] | undefined => {
   if (!text.startsWith("/")) {
     return;
   }
@@ -452,48 +479,46 @@ const messageUpdate = (options: {
   readonly fromId: number;
   readonly messageId: number;
   readonly text: string;
-}) =>
-  ({
-    message: {
-      chat: { first_name: "Check", id: options.chatId, type: "private" },
-      date: Math.floor(Date.now() / MS_PER_SECOND),
-      entities: commandEntities(options.text),
-      ...(options.forwardedFrom === undefined
-        ? {}
-        : {
-            forward_origin: {
-              date: 0,
-              sender_user: {
-                first_name: options.forwardedFrom,
-                id: 1,
-                is_bot: false,
-              },
-              type: "user",
+}): Update => ({
+  message: {
+    chat: { first_name: "Check", id: options.chatId, type: "private" },
+    date: Math.floor(Date.now() / MS_PER_SECOND),
+    entities: commandEntities(options.text),
+    ...(options.forwardedFrom === undefined
+      ? {}
+      : {
+          forward_origin: {
+            date: 0,
+            sender_user: {
+              first_name: options.forwardedFrom,
+              id: 1,
+              is_bot: false,
             },
-          }),
-      from: { first_name: "Check", id: options.fromId, is_bot: false },
-      message_id: options.messageId,
-      text: options.text,
-    },
-    update_id: options.messageId,
-  }) as Update;
+            type: "user",
+          },
+        }),
+    from: { first_name: "Check", id: options.fromId, is_bot: false },
+    message_id: options.messageId,
+    text: options.text,
+  },
+  update_id: options.messageId,
+});
 
 /** A voice note as Telegram would deliver it. */
 const voiceUpdate = (options: {
   readonly chatId: number;
   readonly fromId: number;
   readonly messageId: number;
-}) =>
-  ({
-    message: {
-      chat: { first_name: "Check", id: options.chatId, type: "private" },
-      date: Math.floor(Date.now() / MS_PER_SECOND),
-      from: { first_name: "Check", id: options.fromId, is_bot: false },
-      message_id: options.messageId,
-      voice: { duration: 3, file_id: "AgADvoice", file_unique_id: "u" },
-    },
-    update_id: options.messageId,
-  }) as Update;
+}): Update => ({
+  message: {
+    chat: { first_name: "Check", id: options.chatId, type: "private" },
+    date: Math.floor(Date.now() / MS_PER_SECOND),
+    from: { first_name: "Check", id: options.fromId, is_bot: false },
+    message_id: options.messageId,
+    voice: { duration: 3, file_id: "AgADvoice", file_unique_id: "u" },
+  },
+  update_id: options.messageId,
+});
 
 /** A tapped inline button as Telegram would deliver it. */
 const callbackUpdate = (options: {
@@ -501,21 +526,20 @@ const callbackUpdate = (options: {
   readonly data: string;
   readonly fromId: number;
   readonly messageId: number;
-}) =>
-  ({
-    callback_query: {
-      chat_instance: String(options.chatId),
-      data: options.data,
-      from: { first_name: "Check", id: options.fromId, is_bot: false },
-      id: String(options.messageId),
-      message: {
-        chat: { first_name: "Check", id: options.chatId, type: "private" },
-        date: Math.floor(Date.now() / MS_PER_SECOND),
-        message_id: options.messageId,
-      },
+}): Update => ({
+  callback_query: {
+    chat_instance: String(options.chatId),
+    data: options.data,
+    from: { first_name: "Check", id: options.fromId, is_bot: false },
+    id: String(options.messageId),
+    message: {
+      chat: { first_name: "Check", id: options.chatId, type: "private" },
+      date: Math.floor(Date.now() / MS_PER_SECOND),
+      message_id: options.messageId,
     },
-    update_id: options.messageId,
-  }) as Update;
+  },
+  update_id: options.messageId,
+});
 
 /**
  * Waits for something a forked update fiber will make true.
@@ -802,6 +826,49 @@ const restartClaims = (options: {
         backUpText.includes("down for") &&
         !backUpText.includes("crash or a hard reboot"),
       step: "the start after a graceful stop reports the downtime rather than a crash",
+    });
+  });
+
+/**
+ * What one delivered answer left in the chat.
+ *
+ * Four reads of the same recording, so they are stated here rather than in the
+ * middle of {@link wiredClaims}. The answer goes out through `sendRichMessage`
+ * — that is the claim about Markdown a person sees rendered rather than as
+ * source — so the words are read with {@link wordsIn} and not off `text`, which
+ * a rich message does not have.
+ */
+const answerClaims = (options: {
+  readonly delivered: readonly ApiCall[];
+  readonly spoken: string;
+}) =>
+  Effect.gen(function* () {
+    const { delivered, spoken } = options;
+    const answers = delivered.filter(
+      (call) => call.method === "sendRichMessage"
+    );
+    const first = answers.at(0);
+    yield* check({
+      detail: `the bot said ${JSON.stringify(first === undefined ? null : wordsIn(first))}`,
+      ok: answers.some((call) => wordsIn(call).includes(spoken)),
+      step: "the finished turn's own row is what the conversation is answered with",
+    });
+    yield* check({
+      detail: `${answers.length} answers sent as rich messages, ${delivered.filter((call) => call.method === "sendMessage").length} as plain text`,
+      ok: answers.length > 0,
+      step: "a manager's answer goes out as Markdown Telegram parses, not as its source",
+    });
+    yield* check({
+      detail: `${delivered.filter((call) => wordsIn(call).includes("without an answer")).length} answerless lines sent`,
+      ok: delivered.every(
+        (call) => !wordsIn(call).includes("without an answer")
+      ),
+      step: "a turn still closing out is waited for, not called answerless",
+    });
+    yield* check({
+      detail: `${delivered.filter((call) => call.method === "deleteMessage").length} queued lines taken down`,
+      ok: delivered.some((call) => call.method === "deleteMessage"),
+      step: "the queued line comes down with the answer that overtook it",
     });
   });
 
@@ -1334,28 +1401,7 @@ const wiredClaims = (options: {
       ],
       { concurrency: "unbounded" }
     );
-    const delivered = calls.slice(beforeAnswer);
-    yield* check({
-      detail: `the bot said ${JSON.stringify(delivered.find((call) => call.method === "sendMessage")?.payload.text)}`,
-      ok: delivered.some(
-        (call) =>
-          call.method === "sendMessage" &&
-          String(call.payload.text ?? "").includes(spoken)
-      ),
-      step: "the finished turn's own row is what the conversation is answered with",
-    });
-    yield* check({
-      detail: `${delivered.filter((call) => String(call.payload.text ?? "").includes("without an answer")).length} answerless lines sent`,
-      ok: delivered.every(
-        (call) => !String(call.payload.text ?? "").includes("without an answer")
-      ),
-      step: "a turn still closing out is waited for, not called answerless",
-    });
-    yield* check({
-      detail: `${delivered.filter((call) => call.method === "deleteMessage").length} queued lines taken down`,
-      ok: delivered.some((call) => call.method === "deleteMessage"),
-      step: "the queued line comes down with the answer that overtook it",
-    });
+    yield* answerClaims({ delivered: calls.slice(beforeAnswer), spoken });
 
     // The switch.
     yield* Effect.promise(() =>

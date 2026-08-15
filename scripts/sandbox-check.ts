@@ -80,7 +80,7 @@ import {
 import {
   CONTAINER_RUN_DIR,
   TURN_ENV_VARS,
-  TURN_EVENT_MARKER,
+  TurnEvent,
 } from "@workspace/harness";
 import {
   CONTAINER_AGENT_HOME_DIR,
@@ -94,13 +94,13 @@ import {
   type RunIdentity,
   type RunLabels,
   runTreeOf,
-  SANDBOX_EVENT_MARKER,
   Sandbox,
+  SandboxEvent,
   type SandboxSpec,
   Workspace,
   workspaceLayer,
 } from "@workspace/sandbox";
-import { EventLog, telemetryLayer } from "@workspace/telemetry";
+import { EventLog, telemetryLayer, UNKNOWN } from "@workspace/telemetry";
 import { Config, Effect, Layer, Schema } from "effect";
 
 /** Names the ledger file and the OTLP resource, as every service does. */
@@ -155,8 +155,9 @@ const CREDENTIAL_FILE = ".credentials.json";
 const REFRESHED_FILE = "refreshed-inside.json";
 
 /**
- * Which provider's home the materializer is told about. Only names the login
- * line a missing home is reported with; nothing else in this check reads it.
+ * Which provider's home the materializer is told about, and the provider named
+ * on the row the container writes. No agent of either kind runs here: it picks
+ * the login line a missing home is reported with, and nothing else.
  */
 const CHECK_PROVIDER = "claude" as const;
 
@@ -306,6 +307,68 @@ const makeSentinel = (): Sentinel => {
 };
 
 /**
+ * The `atm.turn` row the container writes about itself, quoted so a shell can
+ * carry it inside a double-quoted string.
+ *
+ * Encoded through the turn event's own schema rather than spelled out here,
+ * because the host reads the file back with that same schema: a row short of a
+ * field the event has since declared is skipped, and the claim it carries — that
+ * the ids crossed the mount — would come back as a ledger with nothing in it.
+ * Every measurement is zero and every flag false, since nothing ran. The three
+ * ids are shell expansions rather than values, because what is under test is
+ * that the row arrives carrying what the *host* minted, and an id baked in here
+ * would prove only that this script can print one.
+ */
+const CONTAINER_TURN_ROW = JSON.stringify({
+  ...TurnEvent.encode({
+    agentHomeSet: false,
+    assistantChars: 0,
+    assistantMessages: 0,
+    costUsd: null,
+    durationMs: null,
+    effort: null,
+    errorClass: null,
+    errorEvents: 0,
+    errorMessage: null,
+    eventsSeen: 0,
+    inputTokens: null,
+    model: null,
+    outcome: "done",
+    outputTokens: null,
+    phase: "end",
+    promptChars: 0,
+    provider: CHECK_PROVIDER,
+    providerSessionId: null,
+    queueWaitMs: null,
+    rateLimitPeakPct: null,
+    rateLimitStatus: null,
+    rateLimitType: null,
+    reasoningChars: 0,
+    resumed: false,
+    runId: `$${TURN_ENV_VARS.runId}`,
+    sessionId: null,
+    spanId: null,
+    subagents: 0,
+    taskId: `$${TURN_ENV_VARS.taskId}`,
+    toolCalls: 0,
+    toolErrors: 0,
+    totalTokens: null,
+    traceId: null,
+    turns: null,
+    workspaceId: `$${TURN_ENV_VARS.workspaceId}`,
+  }),
+  event: TurnEvent.marker,
+  // The stamp an emitter puts on a row it writes. There is no emitter in this
+  // container, and `UNKNOWN` is what this repo writes where the stamp genuinely
+  // is not known; the clock is the container's own, which is the one part of it
+  // a row written in here can answer truthfully.
+  gitSha: UNKNOWN,
+  host: UNKNOWN,
+  ts: "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  version: UNKNOWN,
+}).replaceAll('"', '\\"');
+
+/**
  * What the container runs. POSIX `sh`, so the same script runs under alpine's
  * busybox and the base image's Debian shell.
  *
@@ -336,11 +399,10 @@ const containerScript = (sentinel: Sentinel) =>
     // a refresh written there is a write the host keeps.
     `printf 'credential:[%s]\\n' "$(cat ${CONTAINER_AGENT_HOME_DIR}/${CREDENTIAL_FILE} 2>/dev/null || true)"`,
     `printf 'refresh:[%s]\\n' "$( (printf '{"refreshed":"%s"}' "$${TURN_ENV_VARS.runId}" > ${CONTAINER_AGENT_HOME_DIR}/${REFRESHED_FILE}) 2>/dev/null && echo yes || echo no )"`,
-    // Claim 4: an atm.turn-shaped row, written where EVENT_LOG_DIR points,
-    // carrying the ids the sandbox passed in.
-    `printf '{"event":"%s","runId":"%s","taskId":"%s","workspaceId":"%s","provider":"claude","phase":"end","outcome":"done","source":"container"}\\n' \\
-      '${TURN_EVENT_MARKER}' "$${TURN_ENV_VARS.runId}" "$${TURN_ENV_VARS.taskId}" "$${TURN_ENV_VARS.workspaceId}" \\
-      >> "$EVENT_LOG_DIR/${CONTAINER_LEDGER_FILE}"`,
+    // Claim 4: an atm.turn row, written where EVENT_LOG_DIR points, carrying the
+    // ids the sandbox passed in. The row is an argument rather than the format,
+    // so the shell expands the ids and printf reads no `%` inside it.
+    `printf '%s\\n' "${CONTAINER_TURN_ROW}" >> "$EVENT_LOG_DIR/${CONTAINER_LEDGER_FILE}"`,
     // The host's export credential must not have crossed the boundary.
     // `printenv` rather than an expansion, so an unset variable prints nothing
     // instead of aborting the script under `set -u`.
@@ -386,20 +448,70 @@ const readField = (output: string, key: string) => {
   return line === undefined ? null : line.slice(prefix.length, -1);
 };
 
-/** Every row in one JSONL ledger carrying one marker. */
-const rowsIn = (path: string, marker: string) => {
+/** Whether a parsed ledger line is a row of one wide event. */
+const isRowOf = (parsed: unknown, marker: string) =>
+  typeof parsed === "object" &&
+  parsed !== null &&
+  Reflect.get(parsed, "event") === marker;
+
+/**
+ * One wide event as `defineEvent` returns it: the marker its rows are filed
+ * under, and the schema those rows are stored in.
+ */
+interface LedgerEvent<Row> {
+  readonly marker: string;
+  readonly rowSchema: Schema.ConstraintDecoder<Row>;
+}
+
+/**
+ * Every row of one wide event in a JSONL ledger, decoded through that event's
+ * own schema.
+ *
+ * The definition travels as one value because the two halves are one fact. A
+ * marker and a decoder passed side by side can be paired wrongly at a call site,
+ * and the answer to that is an empty ledger rather than an error — this file
+ * reads two different events out of two different files, so it is exactly the
+ * mistake available to make here.
+ *
+ * A line that is not JSON, carries another unit's marker, or is a row shape this
+ * script has moved past is skipped rather than fatal: the ledger is append-only
+ * and shared with every run on this host, and a neighbour's row is not this
+ * check's failure. The marker is compared against the parsed `event` field
+ * rather than searched for in the raw line, because an error message quoting a
+ * command or an image tag can carry a marker anywhere in a row.
+ */
+const rowsIn = <Row>(input: {
+  readonly event: LedgerEvent<Row>;
+  readonly path: string;
+}): Row[] => {
   const raw = ((): string => {
     try {
-      return readFileSync(path, "utf-8");
+      return readFileSync(input.path, "utf-8");
     } catch {
       return "";
     }
   })();
-  return raw
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as Record<string, unknown>)
-    .filter((row) => row.event === marker);
+  const decode = Schema.decodeUnknownOption(input.event.rowSchema);
+  const rows: Row[] = [];
+  for (const line of raw.split("\n")) {
+    if (line.trim().length === 0) {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRowOf(parsed, input.event.marker)) {
+      continue;
+    }
+    const decoded = decode(parsed);
+    if (decoded._tag === "Some") {
+      rows.push(decoded.value);
+    }
+  }
+  return rows;
 };
 
 /** The spec one check runs, over the directories the workspace materializer made. */
@@ -475,7 +587,7 @@ const sandboxCheck = Effect.gen(function* () {
         .join("\n")}\n${toolScript()}\nexit ${CONTAINER_EXIT_CODE}`
     : containerScript(sentinel);
 
-  const before = rowsIn(ledger.path, SANDBOX_EVENT_MARKER).length;
+  const before = rowsIn({ event: SandboxEvent, path: ledger.path }).length;
 
   // Everything the run needs on disk, made by the same materializer a dispatch
   // uses. `repo: null` is the scratch case — a task with no repository — which
@@ -682,17 +794,17 @@ const sandboxCheck = Effect.gen(function* () {
   });
 
   // Claim 4 — a row written inside the container, on the host, joined by runId.
-  const turnRows = rowsIn(
-    join(eventLogDirOf(runDir), CONTAINER_LEDGER_FILE),
-    TURN_EVENT_MARKER
-  );
+  const turnRows = rowsIn({
+    event: TurnEvent,
+    path: join(eventLogDirOf(runDir), CONTAINER_LEDGER_FILE),
+  });
   yield* check({
     detail: `found ${turnRows.length} rows under ${eventLogDirOf(runDir)}`,
     ok: turnRows.length === 1,
     step: "the row the container wrote to the event mount is on the host",
   });
   yield* check({
-    detail: `the row carries runId ${String(turnRows[0]?.runId)}, the host minted ${identity.runId}`,
+    detail: `the row carries runId ${turnRows[0]?.runId}, the host minted ${identity.runId}`,
     ok:
       turnRows[0]?.runId === identity.runId &&
       turnRows[0]?.taskId === identity.taskId &&
@@ -701,7 +813,7 @@ const sandboxCheck = Effect.gen(function* () {
   });
 
   // Claim 5 — the container's own row.
-  const sandboxRows = rowsIn(ledger.path, SANDBOX_EVENT_MARKER).filter(
+  const sandboxRows = rowsIn({ event: SandboxEvent, path: ledger.path }).filter(
     (candidate) => candidate.runId === identity.runId
   );
   yield* check({
@@ -711,7 +823,7 @@ const sandboxCheck = Effect.gen(function* () {
   });
   const [row] = sandboxRows;
   yield* check({
-    detail: `outcome ${String(row?.outcome)}, kind ${String(row?.kind)}, runAsRoot ${String(row?.runAsRoot)}`,
+    detail: `outcome ${row?.outcome}, kind ${row?.kind}, runAsRoot ${row?.runAsRoot}`,
     ok:
       row?.outcome === "done" &&
       row.kind === "docker" &&
@@ -720,7 +832,7 @@ const sandboxCheck = Effect.gen(function* () {
     step: "that row says a container ran, as a non-root user, and exited as it did",
   });
   yield* Effect.logInfo(
-    `      image ${String(row?.image)}, ${String(row?.mountCount)} mounts, ${String(row?.containerMs)}ms in the container, peak ${String(row?.peakMemoryBytes ?? "not sampled")}`
+    `      image ${row?.image}, ${row?.mountCount} mounts, ${row?.containerMs}ms in the container, peak ${row?.peakMemoryBytes ?? "not sampled"}`
   );
 
   if (agent) {

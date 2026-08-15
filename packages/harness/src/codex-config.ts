@@ -35,7 +35,11 @@
 import { join } from "node:path";
 import { Effect } from "effect";
 import { FileSystem } from "effect/FileSystem";
-import { codexExecutorConfig, type ExecutorMcp } from "./executor-mcp";
+import {
+  type CodexExecutorConfig,
+  codexExecutorConfig,
+  type ExecutorMcp,
+} from "./executor-mcp";
 import { ATM_ROOT_MARKER } from "./paths";
 
 /** Codex's config file, at the root of whichever directory is `CODEX_HOME`. */
@@ -62,23 +66,51 @@ export const codexConfigPath = (agentHomeDir: string) =>
  */
 export const CODEX_PROJECT_DOC_MAX_BYTES = 262_144;
 
+/** Codex's config as its own CLI declares it: a table, and what a table holds. */
+type CodexConfigTable = CodexExecutorConfig["config"];
+type CodexConfigValue = CodexConfigTable[string];
+
 /**
- * Codex's `mcp_servers` table as TOML. Deliberately not a general encoder: the
- * only thing this ever renders is a server's string fields, so a table header
- * and quoted strings is the whole grammar, and a dependency for it would be a
- * dependency inside a container image.
+ * A nested table rather than a scalar. A predicate and not a cast, and it turns
+ * away arrays and null as well: `typeof` calls both an object, and neither is a
+ * table — one would render as a header over positional keys, the other throws.
  */
-const mcpServersToml = (servers: unknown) =>
-  Object.entries((servers ?? {}) as Record<string, unknown>)
-    .filter(([, server]) => typeof server === "object" && server !== null)
-    .map(([name, server]) => {
-      const fields = Object.entries(server as Record<string, unknown>)
-        .filter(([, value]) => typeof value === "string")
-        .map(([key, value]) => `${key} = ${JSON.stringify(value)}`)
-        .join("\n");
-      return `[mcp_servers.${name}]\n${fields}\n`;
-    })
+const isTable = (
+  value: CodexConfigValue | undefined
+): value is CodexConfigTable =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * One server, as a TOML table. Deliberately not a general encoder: the only
+ * thing this ever renders is a server's string fields, so a table header and
+ * quoted strings is the whole grammar, and a dependency for it would be a
+ * dependency inside a container image.
+ *
+ * Every other kind of value a table can hold is therefore dropped — the day
+ * `startup_timeout_sec`, a real Codex setting, is added to
+ * {@link codexExecutorConfig}, that number leaves no trace in the rendered
+ * file. The type does not prevent it: `CodexOptions["config"]` is a recursive
+ * index signature and not a discriminated union, so nothing here can be made
+ * exhaustive. Naming the case is the whole of what typing this buys — which is
+ * more than the cast it replaced ever admitted.
+ */
+const serverToml = (name: string, server: CodexConfigTable) => {
+  const fields = Object.entries(server)
+    .filter(([, value]) => typeof value === "string")
+    .map(([key, value]) => `${key} = ${JSON.stringify(value)}`)
     .join("\n");
+  return `[mcp_servers.${name}]\n${fields}\n`;
+};
+
+/** The `mcp_servers` table, or nothing where the config carries no such table. */
+const mcpServersToml = (servers: CodexConfigValue | undefined) =>
+  isTable(servers)
+    ? Object.entries(servers)
+        .flatMap(([name, server]) =>
+          isTable(server) ? [serverToml(name, server)] : []
+        )
+        .join("\n")
+    : "";
 
 /**
  * The whole file, as a string. Pure, and the two settings are unconditional:

@@ -66,10 +66,17 @@ const SEVEN_DAY_SECONDS = 604_800;
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
-const asRecord = (value: unknown) =>
-  value !== null && typeof value === "object"
-    ? (value as Readonly<Record<string, unknown>>)
-    : null;
+/**
+ * Whether a parsed JSON value is a plain object, which every window and the body
+ * around them is. Arrays are excluded on purpose: one answers `undefined` to
+ * every field read, so a window arriving as `[]` would report as "not limiting"
+ * instead of as a shape this reader cannot read.
+ */
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** A nested object field, or null when it is absent or of another shape. */
+const asRecord = (value: unknown) => (isRecord(value) ? value : null);
 
 /**
  * One window of the flat body. `utilization` is already 0–100 here, so nothing
@@ -189,11 +196,12 @@ export class ClaudeUsageUnavailable extends Schema.TaggedErrorClass<ClaudeUsageU
   }
 ) {}
 
-/** The credentials file, as much of it as this needs. */
-interface ClaudeAuth {
-  readonly claudeAiOauth?: { readonly accessToken?: unknown };
-}
-
+/**
+ * The token off disk. The credentials file is written by the Claude CLI and
+ * carries far more than this needs, so it is read through the same defensive
+ * helpers as the response body: a file whose shape moved lands as `no-token`,
+ * which is unavailable, rather than as a token-shaped `undefined` in a header.
+ */
 const readToken = (fs: FileSystem, authPath: string) =>
   fs.readFileString(authPath).pipe(
     Effect.mapError(
@@ -203,11 +211,11 @@ const readToken = (fs: FileSystem, authPath: string) =>
       Effect.try({
         catch: (cause) =>
           new ClaudeUsageUnavailable({ cause, reason: "auth-parse" }),
-        try: () => JSON.parse(text) as ClaudeAuth,
+        try: (): unknown => JSON.parse(text),
       })
     ),
     Effect.flatMap((auth) => {
-      const token = auth.claudeAiOauth?.accessToken;
+      const token = asRecord(asRecord(auth)?.claudeAiOauth)?.accessToken;
       return typeof token === "string" && token.length > 0
         ? Effect.succeed(token)
         : Effect.fail(

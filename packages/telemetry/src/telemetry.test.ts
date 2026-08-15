@@ -6,7 +6,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunFileSystem } from "@effect/platform-bun";
 import {
@@ -41,7 +41,25 @@ const TestEvent = defineEvent("atm.test", {
 // @ts-expect-error prompt is a content-carrying field name
 defineEvent("atm.rejected", { prompt: Schema.String });
 
-type Row = Record<string, unknown>;
+/**
+ * What the log annotation sinks receive. Open by nature: a logger is handed
+ * whatever annotations the fiber carries, so this is `CurrentLogAnnotations`'
+ * own type rather than a shape anything here declares.
+ */
+type Annotations = Record<string, unknown>;
+
+/**
+ * One stored row, decoded through the same `rowSchema` the consumers read it
+ * with.
+ *
+ * `defineEvent` builds `encode` and `rowSchema` from one fields object, so a
+ * renamed field moves both at once and is a compile error. The half that can
+ * genuinely drift is the one this file's own emitter spells by hand — `ts`, the
+ * `event` tag and the environment stamp — and that is what the decode holds.
+ */
+type Row = typeof TestEvent.rowSchema.Type;
+
+const decodeRow = Schema.decodeUnknownSync(TestEvent.rowSchema);
 
 const baseInput = (
   over: Partial<Parameters<typeof TestEvent.encode>[0]> = {}
@@ -68,7 +86,7 @@ const baseInput = (
   }) satisfies Parameters<typeof TestEvent.encode>[0];
 
 /** Captures the wide event by its marker, and every log line for comparison. */
-const captureLogger = (events: Row[], lines: Row[]) =>
+const captureLogger = (events: Annotations[], lines: Annotations[]) =>
   Logger.make((options) => {
     const annotations = options.fiber.getRef(References.CurrentLogAnnotations);
     lines.push({ ...annotations });
@@ -78,8 +96,8 @@ const captureLogger = (events: Row[], lines: Row[]) =>
   });
 
 interface Capture {
-  readonly events: Row[];
-  readonly lines: Row[];
+  readonly events: Annotations[];
+  readonly lines: Annotations[];
 }
 
 const testLayer = (
@@ -137,13 +155,43 @@ const run = <A>(
     )
   );
 
-const readRows = (path: string): Row[] =>
+/** One ledger line, or null where the line is not JSON at all. */
+const jsonOf = (line: string): unknown => {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Whether a parsed line is this unit's row, read off the parsed `event` field.
+ * A substring test over the line would also match the marker inside a field
+ * value and hand a foreign row to the decoder, failing the test for the wrong
+ * reason.
+ */
+const isTestRow = (value: unknown) =>
+  typeof value === "object" &&
+  value !== null &&
+  "event" in value &&
+  value.event === TestEvent.marker;
+
+const readRows = (path: string): readonly Row[] =>
   readFileSync(path, "utf-8")
     .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as Row);
+    .map(jsonOf)
+    .filter(isTestRow)
+    .map((row) => decodeRow(row));
 
 const ledgerPath = () => join(directory, `${SERVICE}.jsonl`);
+
+/**
+ * The ledger as bytes, which is what an assertion about a secret has to be made
+ * against. `SanitizedText` runs `clipError` on decode as well as on encode, so
+ * a decoded row would be showing the reader's own redaction rather than the
+ * emitter's.
+ */
+const ledgerText = () => readFileSync(ledgerPath(), "utf-8");
 
 const withoutNulls = (row: Row) =>
   Object.fromEntries(Object.entries(row).filter(([, value]) => value !== null));
@@ -173,7 +221,9 @@ describe("emitEvent", () => {
     expect(row.outcome).toBe("done");
     expect(row.costUsd).toBe(0.01);
     expect(row.runId).toBe("r-1");
-    expect(typeof row.ts).toBe("string");
+    // An instant in the one spelling whose lexical order is its chronological
+    // order, which is what every reader of the ledger sorts on.
+    expect(new Date(row.ts).toISOString()).toBe(row.ts);
     // Both sinks carry the same record. They differ on one point only, and only
     // where a value is missing: the ledger stores a JSON null, the annotation
     // sinks drop the key, because an OTLP attribute cannot hold a null.
@@ -198,7 +248,8 @@ describe("emitEvent", () => {
     const row = onlyRow(ledgerPath());
     expect(row.version).toBe("1.2.3");
     expect(row.gitSha).toBe("abc1234");
-    expect(typeof row.host).toBe("string");
+    // Nothing configures the host: it is read off the machine writing the row.
+    expect(row.host).toBe(hostname());
   });
 
   test("two emits append two rows", async () => {
@@ -268,6 +319,7 @@ describe("emitEvent", () => {
 
     const row = onlyRow(ledgerPath());
     expect(row.errorMessage).toBe("failed with Authorization: [redacted]");
+    expect(ledgerText()).not.toContain("abc.def-123");
   });
 
   test("a write fault never aborts the work it describes", async () => {
@@ -366,7 +418,7 @@ describe("withWideEvent", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.outcome).toBe("done");
     expect(rows[0]?.costUsd).toBe(0.01);
-    expect(typeof rows[0]?.durationMs).toBe("number");
+    expect(rows[0]?.durationMs).toBeGreaterThanOrEqual(0);
   });
 
   test("a failure terminus leaves exactly one row, with null economics", async () => {

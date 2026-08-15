@@ -72,7 +72,26 @@ export const recordingApi = (
         },
       });
     }
+    if (method === "sendRichMessage") {
+      nextMessageId += 1;
+      return Promise.resolve({
+        ok: true,
+        result: {
+          chat: { id: Number(payload.chat_id ?? 0), type: "private" },
+          date: 0,
+          message_id: nextMessageId,
+          // A rich message carries no `text` and no `caption`: its words live
+          // in a block tree Telegram parsed. This fake does not parse, so the
+          // tree is empty and what a test reads is the payload it was sent.
+          rich_message: { blocks: [] },
+        },
+      });
+    }
     return Promise.resolve({ ok: true, result: true });
+    // SAFETY: grammy's Transformer is generic per method, and a recorder is
+    // uniform across methods — one signature cannot be written in the other.
+    // The payload is only ever read back by tests that already know which call
+    // they made.
   }) as unknown as Transformer;
 
   const bot = new Bot<BotContext>(FAKE_TOKEN);
@@ -80,13 +99,46 @@ export const recordingApi = (
   return { api: bot.api, calls };
 };
 
+/** The last call to one method, or null if it was never made. */
+export const lastCallOf = (input: {
+  readonly calls: readonly ApiCall[];
+  readonly method: string;
+}) => [...input.calls].reverse().find((c) => c.method === input.method) ?? null;
+
 /** The text of the last call to one method, or null if it was never made. */
 export const lastTextOf = (input: {
   readonly calls: readonly ApiCall[];
   readonly method: string;
 }) => {
-  const call = [...input.calls]
-    .reverse()
-    .find((c) => c.method === input.method);
-  return call === undefined ? null : String(call.payload.text ?? "");
+  const call = lastCallOf(input);
+  return call === null ? null : String(call.payload.text ?? "");
 };
+
+/**
+ * The Markdown of the last rich message sent, or null if none was.
+ *
+ * A rich send puts its words in `rich_message`, so this is the `lastTextOf` of
+ * that path — the one place a test looks to see what a person would read.
+ */
+export const lastRichMarkdownOf = (input: {
+  readonly calls: readonly ApiCall[];
+}) => {
+  const call = lastCallOf({ calls: input.calls, method: "sendRichMessage" });
+  if (call === null) {
+    return null;
+  }
+  const rich = call.payload.rich_message as { markdown?: string } | undefined;
+  return rich?.markdown ?? null;
+};
+
+/** Every rich message sent, in order, as the Markdown each carried. */
+export const richMarkdownsOf = (input: {
+  readonly calls: readonly ApiCall[];
+}) =>
+  input.calls
+    .filter((call) => call.method === "sendRichMessage")
+    .map(
+      (call) =>
+        (call.payload.rich_message as { markdown?: string } | undefined)
+          ?.markdown ?? ""
+    );

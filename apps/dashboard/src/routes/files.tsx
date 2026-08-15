@@ -26,7 +26,7 @@ export interface FilesSearch {
  * decodes into: what goes back into the address bar is whatever the typed
  * search holds, and the union would put JSON where `project:<id>` belongs.
  */
-const validateSearch = (search: Record<string, unknown>): FilesSearch => ({
+const parseFilesSearch = (search: Record<string, unknown>): FilesSearch => ({
   path: parseScopePath(search.path),
   scope: parseFileScopeAddress(search.scope),
   view: parseScopeView(search.view),
@@ -51,5 +51,5 @@ export const filesRoute = createRoute({
   errorComponent: RouteError,
   getParentRoute: () => layoutRoute,
   path: "/files",
-  validateSearch,
+  validateSearch: parseFilesSearch,
 });

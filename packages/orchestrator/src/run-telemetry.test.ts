@@ -26,6 +26,7 @@ import {
   Metric,
   Ref,
   References,
+  Schema,
 } from "effect";
 import type {
   DispatchContext,
@@ -38,6 +39,7 @@ import {
   makeRunProgress,
   observeRunProgress,
   RUN_EVENT_MARKER,
+  RunEvent,
   type RunEventContext,
   type RunEventSettings,
   type RunProgress,
@@ -47,10 +49,27 @@ import { workerAttachment } from "./subject";
 
 const SERVICE = "run-telemetry-test";
 
-type Row = Record<string, unknown>;
+/**
+ * What the log annotation sinks receive. Open by nature: a logger is handed
+ * whatever annotations the fiber carries, so this is `CurrentLogAnnotations`'
+ * own type rather than a shape anything here declares.
+ */
+type Annotations = Record<string, unknown>;
+
+/**
+ * One `atm.run` row, decoded through the schema its readers use.
+ *
+ * `defineEvent` builds `encode` and `rowSchema` from one fields object, so a
+ * renamed field moves both at once and is a compile error. The half that can
+ * genuinely drift is what the emitter spells by hand — `ts`, the `event` tag
+ * and the environment stamp — and that is what the decode holds.
+ */
+type Row = typeof RunEvent.rowSchema.Type;
+
+const decodeRow = Schema.decodeUnknownSync(RunEvent.rowSchema);
 
 /** Captures the wide event by its marker, and every log line for comparison. */
-const captureLogger = (events: Row[], lines: Row[]) =>
+const captureLogger = (events: Annotations[], lines: Annotations[]) =>
   Logger.make((options) => {
     const annotations = options.fiber.getRef(References.CurrentLogAnnotations);
     lines.push({ ...annotations });
@@ -60,8 +79,8 @@ const captureLogger = (events: Row[], lines: Row[]) =>
   });
 
 interface Capture {
-  readonly events: Row[];
-  readonly lines: Row[];
+  readonly events: Annotations[];
+  readonly lines: Annotations[];
 }
 
 const testLayer = (
@@ -102,11 +121,41 @@ afterEach(() => {
 
 const ledgerPath = () => join(directory, `${SERVICE}.jsonl`);
 
-const readRows = (): Row[] =>
-  readFileSync(ledgerPath(), "utf-8")
+/**
+ * The ledger as bytes, which is what an assertion about a credential has to be
+ * made against: a decode drops keys the schema does not declare and re-runs
+ * `clipError` over the sanitized ones, so a clean row is no evidence of a clean
+ * file.
+ */
+const ledgerText = () => readFileSync(ledgerPath(), "utf-8");
+
+/** One ledger line, or null where the line is not JSON at all. */
+const jsonOf = (line: string): unknown => {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Whether a parsed line is a run row, read off the parsed `event` field. A
+ * substring test over the line would also match the marker inside a field
+ * value — an image tag, an error message quoting a command — and hand a foreign
+ * row to the decoder, failing the test for the wrong reason.
+ */
+const isRunRow = (value: unknown) =>
+  typeof value === "object" &&
+  value !== null &&
+  "event" in value &&
+  value.event === RUN_EVENT_MARKER;
+
+const readRows = (): readonly Row[] =>
+  ledgerText()
     .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as Row);
+    .map(jsonOf)
+    .filter(isRunRow)
+    .map((row) => decodeRow(row));
 
 /** The two rows one run writes. Fails loudly when the count is not two. */
 const bothRows = () => {
@@ -360,6 +409,9 @@ describe("withRunEvent", () => {
       expect(row.repo).toBe("acme/api");
       expect(JSON.stringify(row)).not.toContain("ghp_");
     }
+    // And on the bytes, which is the only reading that also covers a key the
+    // row schema does not declare.
+    expect(ledgerText()).not.toContain("ghp_");
   });
 
   test("a finished run reports the terminus economics and what it left behind", async () => {
@@ -386,7 +438,7 @@ describe("withRunEvent", () => {
     expect(end.promptChars).toBe(1200);
     expect(end.branch).toBe("atm/task-1");
     // measured by the loop across every exit path
-    expect(typeof end.leaseDurationMs).toBe("number");
+    expect(end.leaseDurationMs).toBeGreaterThanOrEqual(0);
   });
 
   test("the row names the commit each shared scope stood at", async () => {
@@ -577,6 +629,9 @@ describe("withRunEvent", () => {
     expect(end.outcome).toBe("errored");
     expect(end.errorClass).toBe("DispatchFailed");
     expect(end.errorMessage).toBe("clone failed: Authorization: [redacted]");
+    // The row read the sanitizer's answer; only the file can say the token was
+    // never written in the first place.
+    expect(ledgerText()).not.toContain("abc.def-123");
   });
 
   test("a failing exit outranks a terminus the loop had already recorded", async () => {

@@ -13,6 +13,10 @@
  * events join to, and runs the query you give it. It takes a query rather than
  * a marker.
  *
+ * `atm.request` is thinned before it is stored, so `stats` prints what is on
+ * disk and, beside it, what those rows stand for once each is multiplied by the
+ * `sampleRate` it carries.
+ *
  * Usage: `bun run logs [runs|errors|stats|follow] [marker|all]`
  *        `bun run logs sql ["<query>"] [--json]`
  */
@@ -68,6 +72,7 @@ interface EventRow {
   provider?: string;
   repo?: string | null;
   runId?: string | null;
+  sampleRate?: number | null;
   totalTokens?: number | null;
   ts?: string;
   turns?: number | null;
@@ -242,27 +247,62 @@ const ERR_HEADER = [
   "MESSAGE",
 ].join(" ");
 
+/**
+ * How many units of work one stored row stands for.
+ *
+ * The gateway thins its own marker and stamps every row it keeps with the
+ * number of requests that row represents, so a count over `atm.request` is a
+ * count of the sample until it is multiplied by this. Every other marker stores
+ * every row and so weighs one, which is also what a row that names no weight
+ * gets: a row that cannot say what it stands for still happened once.
+ */
+const weightOf = (row: EventRow) =>
+  typeof row.sampleRate === "number" && row.sampleRate >= 1
+    ? row.sampleRate
+    : 1;
+
+/**
+ * The estimate beside a stored count, shown only where the two differ — on an
+ * unsampled marker the parenthesis would be the same number twice.
+ */
+const fmtEstimate = (stored: number, estimated: number) =>
+  estimated === stored ? "" : `  (~${Math.round(estimated)} before sampling)`;
+
 /** Print aggregate counts, total cost, and total wall time across all rows. */
 const printStats = (rows: EventRow[], marker: string) => {
   const counts: Record<string, number> = {};
+  const estimates: Record<string, number> = {};
+  let storedRows = 0;
+  let estimatedRows = 0;
   let totalCost = 0;
   let totalMs = 0;
   for (const r of rows) {
     const outcome = r.outcome ?? "unknown";
+    const weight = weightOf(r);
     counts[outcome] = (counts[outcome] ?? 0) + 1;
+    estimates[outcome] = (estimates[outcome] ?? 0) + weight;
+    storedRows += 1;
+    estimatedRows += weight;
     if (typeof r.costUsd === "number") {
-      totalCost += r.costUsd;
+      totalCost += r.costUsd * weight;
     }
     if (typeof r.durationMs === "number") {
-      totalMs += r.durationMs;
+      totalMs += r.durationMs * weight;
     }
   }
   // The count is labelled with what was counted: totals mean nothing until you
-  // know whether they are over runs, agent turns, or everything at once.
-  process.stdout.write(`${pad(marker, PROJECT_W)} ${rows.length}\n`);
+  // know whether they are over runs, agent turns, or everything at once — and,
+  // where the marker is sampled, whether they are over the rows on disk or over
+  // the traffic those rows stand for. Both are printed rather than one.
+  process.stdout.write(
+    `${pad(marker, PROJECT_W)} ${storedRows}${fmtEstimate(storedRows, estimatedRows)}\n`
+  );
   for (const [outcome, n] of Object.entries(counts).sort()) {
     const mark = MARK[outcome] ?? "?";
-    process.stdout.write(`  ${mark} ${pad(outcome, PROJECT_W)} ${n}\n`);
+    const estimated = estimates[outcome] ?? n;
+    process.stdout.write(
+      `  ${mark} ${pad(outcome, PROJECT_W)} ${n}${fmtEstimate(n, estimated)}\n`
+    );
   }
   process.stdout.write(`total cost  $${totalCost.toFixed(COST_DECIMALS)}\n`);
   process.stdout.write(

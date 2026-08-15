@@ -59,6 +59,7 @@ import {
   type ExecutorMcp,
   readExecutorMcp,
 } from "./executor-mcp";
+import { type ClaudeMcpServers, parseMcpServersFile } from "./mcp-servers";
 import { containerRunLayout, runLayout } from "./paths";
 import { ProviderRegistry } from "./provider";
 import { readStdin as readStdinRaw } from "./stdin";
@@ -146,42 +147,18 @@ const identityConfig = (identity: TurnSpecIdentity) => ({
 });
 
 /**
- * A JSON object off disk, or an empty one. Absent, unreadable and unparseable
- * all answer the same way on purpose: this is only ever used to merge into a
- * file the provider owns, and refusing to write because the vendor left
- * something we cannot parse would cost the run its tools over a file we did not
- * write.
- */
-const readJsonObject = (path: string) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem;
-    return yield* fs.readFileString(path).pipe(
-      Effect.flatMap((raw) =>
-        Effect.try({
-          catch: () => new Error("unparseable"),
-          try: () => JSON.parse(raw) as Record<string, unknown>,
-        })
-      ),
-      Effect.orElseSucceed(() => ({}) as Record<string, unknown>)
-    );
-  });
-
-/** The object at `key`, or an empty one where the file holds something else. */
-const objectAt = (source: Record<string, unknown>, key: string) => {
-  const value = source[key];
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : {};
-};
-
-/**
  * The `mcpServers` map the host left on the run mount, or null where it left
- * none.
+ * none this build can start.
  *
  * Absence is the ordinary case and is not an error, exactly as a missing
  * Executor configuration is not: a turn with no extra servers is a smaller
  * agent, and a file this build cannot parse costs the turn those tools rather
  * than the turn itself.
+ *
+ * Both ways of losing tools are warned about, because a server that silently
+ * stops being there is how a container ends up narrating work it could not do:
+ * a file this build cannot read at all, and an entry inside one in a shape it
+ * cannot launch.
  */
 const readExtraMcpServers = Effect.fnUntraced(function* (path: string) {
   const fs = yield* FileSystem;
@@ -191,9 +168,24 @@ const readExtraMcpServers = Effect.fnUntraced(function* (path: string) {
   if (!present) {
     return null;
   }
-  const file = yield* readJsonObject(path);
-  const servers = objectAt(file, "mcpServers");
-  return Object.keys(servers).length === 0 ? null : servers;
+  const text = yield* fs
+    .readFileString(path)
+    .pipe(Effect.orElseSucceed(() => ""));
+  const read = parseMcpServersFile(text);
+  if (read === null) {
+    yield* Effect.logWarning(
+      "mcp servers file unreadable: this turn gets none of its servers",
+      { path }
+    );
+    return null;
+  }
+  if (read.dropped.length > 0) {
+    yield* Effect.logWarning(
+      "mcp servers dropped: this build has no way to launch them",
+      { names: read.dropped, path }
+    );
+  }
+  return Object.keys(read.servers).length === 0 ? null : read.servers;
 });
 
 /**
@@ -349,7 +341,7 @@ const writeResult = (input: {
 const streamTurn = (input: {
   readonly counters: Ref.Ref<TurnCounters>;
   readonly executor: ExecutorMcp | null;
-  readonly mcpServers: Readonly<Record<string, unknown>> | null;
+  readonly mcpServers: ClaudeMcpServers | null;
   readonly spec: TurnSpec;
 }) =>
   Effect.gen(function* () {

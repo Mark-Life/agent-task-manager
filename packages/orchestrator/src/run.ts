@@ -43,6 +43,7 @@ import type { EnvFileWrite } from "@workspace/domain";
 import {
   type AgentEvent,
   AgentEventRecord,
+  type ClaudeMcpServers,
   CONTAINER_AGENT_MCP_PATH,
   entrypointBundlePathOf,
   MESSAGE_MARKER_ENV_VAR,
@@ -554,7 +555,7 @@ export const executeRun = (input: ExecuteRunInput) =>
       });
 
     /** The turn in this process, against host paths. The escape hatch. */
-    const hostTurn = (servers: Readonly<Record<string, unknown>> | null) =>
+    const hostTurn = (servers: ClaudeMcpServers | null) =>
       Effect.gen(function* () {
         const said = registry.get(context.provider).run({
           agentHomeDir: input.agentHomeDir,

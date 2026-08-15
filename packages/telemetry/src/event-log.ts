@@ -6,12 +6,26 @@ import type { PlatformError } from "effect/PlatformError";
 /**
  * Size cap for one ledger file, in bytes.
  *
- * Volume assumption: a single-operator system does on the order of a few
- * hundred units of work a day, and one wide event encodes to roughly 1 KB, so
- * the ledger grows by a few hundred KB a day. 64 MiB is therefore several
- * months of history in the live file and years across the two generations kept.
- * Sampling stays off at this volume: every event is kept. Revisit the cap and
- * the retention window if daily volume rises about tenfold.
+ * The volume this assumed — a few hundred units of work a day at roughly 1 KB
+ * each, so several months in the live file — was wrong about which unit of work
+ * dominates. Measured over the gateway's first 15,695 rows: 2,569 rows/day at
+ * 772 B/row, of which 69.7% were `/tasks/:taskId` and `/tasks/board` answered in
+ * a couple of dozen milliseconds for a dashboard nobody was watching. That is
+ * roughly two megabytes a day and a turnover of 34 days, ten times faster than
+ * this comment used to claim, which is exactly the trigger it named.
+ *
+ * The answer was to thin the traffic rather than to raise the cap: the gateway
+ * now tail-samples its own marker in `apps/gateway/src/request-sampling.ts`,
+ * keeping every failure, every stream and every request above its route's p99,
+ * and one in twenty of the rest under a `sampleRate` that says what each stands
+ * for. That is on the order of 160 rows and 124 KB a day from the gateway, so
+ * 64 MiB is again more than a year in the live file and years across the two
+ * generations kept.
+ *
+ * Every other marker is unsampled and stays that way: a run, a turn, a sandbox
+ * and a chat are units of work a person asked for, they are counted in the
+ * hundreds a day, and each one is worth a row. Revisit this the day a second
+ * marker needs a predicate.
  */
 export const MAX_LEDGER_BYTES = 67_108_864;
 

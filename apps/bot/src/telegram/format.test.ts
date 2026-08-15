@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { blockquote, bold, code, formatFooter, link, taskLine } from "./format";
+import {
+  blockquote,
+  bold,
+  code,
+  FOOTER_SEPARATOR,
+  footerParts,
+  formatFooter,
+  link,
+  taskLine,
+} from "./format";
 
 describe("html primitives", () => {
   test("escape what they wrap", () => {
@@ -71,6 +80,42 @@ describe("formatFooter", () => {
         turns: 1,
       })
     ).toBe("");
+  });
+});
+
+describe("footerParts", () => {
+  /**
+   * The fields carry no markup of their own, which is what lets the manager's
+   * answer write them in Markdown while the chrome writes them in HTML.
+   */
+  test("are the same fields the HTML footer shows, without the markup", () => {
+    const economics = {
+      costUsd: 0.0312,
+      durationMs: 4200,
+      totalTokens: 15_400,
+      turns: 3,
+    };
+
+    expect(footerParts(economics)).toEqual([
+      "$0.0312",
+      "4.2s",
+      "15.4k tokens",
+      "3 turns",
+    ]);
+    expect(formatFooter(economics)).toBe(
+      `<i>${footerParts(economics).join(FOOTER_SEPARATOR)}</i>`
+    );
+  });
+
+  test("are empty when the turn reported nothing", () => {
+    expect(
+      footerParts({
+        costUsd: null,
+        durationMs: null,
+        totalTokens: null,
+        turns: null,
+      })
+    ).toEqual([]);
   });
 });
 

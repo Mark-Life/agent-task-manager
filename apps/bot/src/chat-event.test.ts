@@ -14,6 +14,7 @@ import {
   type LogLevel,
   Metric,
   References,
+  Schema,
 } from "effect";
 import {
   CHAT_EVENT_MARKER,
@@ -29,10 +30,27 @@ const SERVICE = "bot-test";
 const COUNTER = "atm_chat_updates_total";
 const HISTOGRAM = "atm_chat_turn_duration_ms";
 
-type Row = Record<string, unknown>;
+/**
+ * What the log annotation sinks receive. Open by nature: a logger is handed
+ * whatever annotations the fiber carries, so this is `CurrentLogAnnotations`'
+ * own type rather than a shape anything here declares.
+ */
+type Annotations = Record<string, unknown>;
+
+/**
+ * One `atm.chat` row, decoded through the schema its readers use.
+ *
+ * `defineEvent` builds `encode` and `rowSchema` from one fields object, so a
+ * renamed field moves both at once and is a compile error. The half that can
+ * genuinely drift is what the emitter spells by hand — `ts`, the `event` tag
+ * and the environment stamp — and that is what the decode holds.
+ */
+type Row = typeof ChatEvent.rowSchema.Type;
+
+const decodeRow = Schema.decodeUnknownSync(ChatEvent.rowSchema);
 
 /** Captures the wide event by its marker, and every log line for comparison. */
-const captureLogger = (events: Row[], lines: Row[]) =>
+const captureLogger = (events: Annotations[], lines: Annotations[]) =>
   Logger.make((options) => {
     const annotations = options.fiber.getRef(References.CurrentLogAnnotations);
     lines.push({ ...annotations });
@@ -42,8 +60,8 @@ const captureLogger = (events: Row[], lines: Row[]) =>
   });
 
 interface Capture {
-  readonly events: Row[];
-  readonly lines: Row[];
+  readonly events: Annotations[];
+  readonly lines: Annotations[];
 }
 
 const telemetryLayer = (
@@ -93,16 +111,50 @@ const run = <A, E>(
     )
   );
 
-const readRows = (): Row[] => {
+/**
+ * The ledger as bytes, and empty until the first row lands.
+ *
+ * Every "this never reached a row" assertion is made against this rather than
+ * against a decoded row, for two reasons that both make the decoded reading
+ * worthless as evidence: `SanitizedText` runs `clipError` on the way in as well
+ * as out, so the reader redacts the very value it would then swear is clean,
+ * and a key the schema does not declare is dropped rather than reported.
+ */
+const ledgerText = () => {
   try {
-    return readFileSync(join(directory, `${SERVICE}.jsonl`), "utf-8")
-      .split("\n")
-      .filter((line) => line.trim().length > 0)
-      .map((line) => JSON.parse(line) as Row);
+    return readFileSync(join(directory, `${SERVICE}.jsonl`), "utf-8");
   } catch {
-    return [];
+    return "";
   }
 };
+
+/** One ledger line, or null where the line is not JSON at all. */
+const jsonOf = (line: string): unknown => {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Whether a parsed line is a chat row, read off the parsed `event` field. A
+ * substring test over the line would also match the marker inside a field
+ * value — a command name, an error message — and hand a foreign row to the
+ * decoder, failing the test for the wrong reason.
+ */
+const isChatRow = (value: unknown) =>
+  typeof value === "object" &&
+  value !== null &&
+  "event" in value &&
+  value.event === CHAT_EVENT_MARKER;
+
+const readRows = (): readonly Row[] =>
+  ledgerText()
+    .split("\n")
+    .map(jsonOf)
+    .filter(isChatRow)
+    .map((row) => decodeRow(row));
 
 /** The single row a unit of work just wrote. Fails loudly when the count is not one. */
 const onlyRow = () => {
@@ -182,12 +234,13 @@ describe("the atm.chat row", () => {
     expect(row.turns).toBeNull();
     expect(row.queueWaitMs).toBeNull();
     // the one number this row measures itself
-    expect(typeof row.durationMs).toBe("number");
+    expect(row.durationMs).toBeGreaterThanOrEqual(0);
     expect(row.errorClass).toBeNull();
-    // content is measured, never carried
+    // content is measured, never carried — asked of the bytes, since a decode
+    // drops an undeclared key rather than reporting it
     expect(row.promptChars).toBe(812);
-    expect(row).not.toHaveProperty("prompt");
-    expect(row).not.toHaveProperty("body");
+    expect(ledgerText()).not.toContain('"prompt"');
+    expect(ledgerText()).not.toContain('"body"');
     // nothing about a voice note happened, so neither field invents a 0
     expect(row.transcriptChars).toBeNull();
     expect(row.transcribeMs).toBeNull();
@@ -222,7 +275,7 @@ describe("the atm.chat row", () => {
     expect(row.turns).toBeNull();
     expect(row.queueWaitMs).toBeNull();
     // the one number a degraded row still carries, because it was measured
-    expect(typeof row.durationMs).toBe("number");
+    expect(row.durationMs).toBeGreaterThanOrEqual(0);
   });
 
   test("an expired button is rejected, and the update kind is the one it really was", async () => {
@@ -257,11 +310,12 @@ describe("the atm.chat row", () => {
     // what the bot measured itself stays: this is what makes a failure readable
     expect(row.promptChars).toBe(812);
     expect(row.threadId).toBe("thread_1");
-    expect(typeof row.durationMs).toBe("number");
-    // the failure names itself, and its text never carries a credential
+    expect(row.durationMs).toBeGreaterThanOrEqual(0);
+    // the failure names itself, and its text never carries a credential — the
+    // row read the sanitizer's answer, so only the file is evidence of that
     expect(row.errorClass).toBe("Error");
     expect(row.errorMessage).toContain("the update failed");
-    expect(JSON.stringify(row)).not.toContain("secret-token");
+    expect(ledgerText()).not.toContain("secret-token");
   });
 
   test("a defect leaves the same single row as a typed failure", async () => {
