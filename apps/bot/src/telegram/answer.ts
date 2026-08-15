@@ -22,8 +22,10 @@
  *
  * **The answer is rendered at the end of the turn.** Nothing streams here: the
  * bot hears the run's terminal event, reads the answer row the turn wrote, and
- * sends it. A model's own markdown is escaped rather than parsed — a code fence
- * that Telegram refuses is an answer nobody sees at all.
+ * sends it once. The model's own Markdown is sent as Markdown, through
+ * `sendRichMessage`, which parses it server-side — and a body Telegram refuses
+ * to parse falls back to a plain send of the same words, because a code fence
+ * that costs a person their answer is the failure that matters here.
  *
  * **The terminal event is not the last write of the turn.** It is appended by
  * the ingest while the container is still shutting down, and the run's outcome
@@ -46,10 +48,9 @@ import { InlineKeyboard } from "grammy";
 import { settle, settledRun } from "../settle";
 import { BotService } from "./bot-service";
 import { encodeCallbackData } from "./callback-data";
-import { formatFooter, italic } from "./format";
-import { escapeHtml } from "./helpers";
+import { FOOTER_SEPARATOR, footerParts } from "./format";
 import type { KeyboardRefresh } from "./keyboard";
-import { deleteMessage, editText, sendText } from "./send";
+import { deleteMessage, editText, sendRich, sendText } from "./send";
 
 /** How Telegram is told to parse everything this module composes. */
 const HTML = { parse_mode: "HTML" } as const;
@@ -176,32 +177,54 @@ export const clearQueued = Effect.fnUntraced(function* (target: NoticeTarget) {
 });
 
 /**
- * The answer as one message body: what the model said, escaped, with the turn's
- * economics under it.
+ * Markdown punctuation in a value this module interpolated, defused.
  *
- * Escaped rather than parsed as markdown, because Telegram answers markup it
- * cannot parse with a 400 and the fallback for a lost answer is a person asking
- * again. A failed turn says what class of failure it was — silence after a
+ * Nothing the model wrote goes through here — parsing that is the point. This
+ * is for the words the bot puts around it: a run's error class is this system's
+ * own text but not a closed set, and a `_` in one would otherwise italicise the
+ * rest of the line it lands in.
+ */
+const escapeMarkdown = (text: string) =>
+  text.replace(/[\\`*_~[\]<>|$]/g, (char) => `\\${char}`);
+
+/** Italic, in Markdown. Callers escape what they pass. */
+const italicMarkdown = (text: string) => `_${text}_`;
+
+/**
+ * The answer as one rich-message body: what the model wrote, as it wrote it,
+ * with the turn's economics under it.
+ *
+ * The body is passed through untouched, because {@link sendRich} sends it to an
+ * endpoint that parses Markdown and falls back to plain text on a refusal — the
+ * escape this used to do bought safety the fallback now buys, at the cost of
+ * showing every reader the asterisks.
+ *
+ * One dialect throughout: `InputRichMessage` is Markdown or HTML and not both,
+ * so the footer is written in Markdown here rather than borrowed from
+ * `format.ts`, which speaks the HTML the rest of the bot's chrome speaks. A
+ * failed turn still says what class of failure it was — silence after a
  * question is the one ending nobody can act on.
  */
-export const answerText = (input: {
+export const answerMarkdown = (input: {
   readonly answer: ChatMessage | null;
   readonly run: Run;
 }) => {
   const { answer, run } = input;
   const body =
     answer === null
-      ? italic(
-          `The turn ended ${run.outcome ?? run.status} without an answer${run.errorClass === null ? "" : ` — ${run.errorClass}`}.`
+      ? italicMarkdown(
+          `The turn ended ${escapeMarkdown(run.outcome ?? run.status)} without an answer${run.errorClass === null ? "" : ` — ${escapeMarkdown(run.errorClass)}`}.`
         )
-      : escapeHtml(answer.body);
-  const footer = formatFooter({
+      : answer.body;
+  const parts = footerParts({
     costUsd: run.costUsd === null ? null : Number(run.costUsd),
     durationMs: run.durationMs,
     totalTokens: run.totalTokens,
     turns: run.turns,
   });
-  return footer.length === 0 ? body : `${body}\n\n${footer}`;
+  return parts.length === 0
+    ? body
+    : `${body}\n\n${italicMarkdown(parts.join(FOOTER_SEPARATOR))}`;
 };
 
 /** What the reads behind a delivered answer need. */
@@ -299,15 +322,11 @@ export const deliverAnswer = Effect.fn("bot.answer.deliver")(function* (input: {
   // An answer carries no buttons of its own, which makes it the message that
   // hands over a menu this chat has not been shown since the process started.
   const menu = input.keyboards.markupFor(chatId);
-  const sent = yield* sendText({
+  const sent = yield* sendRich({
     api: telegram.api,
     chatId,
-    send: {
-      ...HTML,
-      link_preview_options: { is_disabled: true },
-      ...(menu === undefined ? {} : { reply_markup: menu }),
-    },
-    text: answerText({ answer, run }),
+    markdown: answerMarkdown({ answer, run }),
+    send: menu === undefined ? {} : { reply_markup: menu },
   }).pipe(Effect.orElseSucceed(() => []));
 
   return sent.at(-1)?.message_id ?? null;
