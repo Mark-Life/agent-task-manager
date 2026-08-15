@@ -1,5 +1,70 @@
 # 09: Filesystem redesign
 
+## Summary
+
+Delete the database half of the file system and keep the disk. One directory tree becomes the
+whole model. About 6,000 lines go.
+
+### Now
+
+- Files live twice: as directories on disk, and as `artifact` rows in Postgres. The table is a
+  cache, rebuilt by a rescan at run teardown — so listings are stale mid-run, and the `global`
+  scope is never rescanned at all.
+- The same folders have two names: `ArtifactScope` (task/project/global) in the database,
+  `FileScope` (`workspace`, `manager`, `project:<id>`, `task:<id>`) on the wire.
+- Two HTTP groups over the same bytes, `artifacts` and `files`, neither able to do the other's
+  job. Two dashboard editors, different verbs.
+- Host layout is flat, container layout is nested, `slugOf` translates between them.
+- Promoting a file up a scope is a copy, two rows and a 409 on conflict. Proposals are their own
+  table, trigger and 17 files.
+- A run sees exactly one project. There is no path at any layer to read another one.
+
+### After
+
+```
+<DATA_ROOT>/files/
+  AGENTS.md            house rules
+  notes/               free directory, no row, no route
+  manager/AGENTS.md
+  projects/<pid>/tasks/<tid>/
+  tasks/<tid>/         a task with no project
+```
+
+- A run is two paths: the read root, bound read-only at `/workspace`, and the write root, bound
+  read-write at its own task directory. The manager is the same function with write root `""`.
+- Container path = `/workspace` plus the host path relative to `files/`. Host and container agree
+  on one suffix, which is what kills `slugOf` and the second layout.
+- Postgres keeps only what has a lifecycle, an actor and a query — `project`, `task`, `run`, audit,
+  `project_env`. Nothing file-shaped.
+- History is git: one repository at `files/`, task directories ignored.
+- Promote becomes `mv`, done by whoever is looking at the file. No promote route, no 409, no
+  `promoted_at`.
+- Proposals become a convention: a run writes `.atm/proposals/<name>.md` with a `to:` key. Accept
+  is `mv`, decline is `rm`, each leaves an `audit_entry` row.
+- Reads on `/files` drop from `AdminAccess` to `ReadAccess`. Writes stay admin.
+
+### What it costs
+
+- A worker cannot write to its project directly — material goes by proposal plus a manager `mv`,
+  or by raising the write root on the card. One hop more.
+- A worker can read every task and project. That is the cross-project win and the exfiltration
+  risk in one line.
+- Provenance dies. `last_run_id`, `content_hash` and `promoted_at` all go; git answers "who touched
+  this" for shared directories and nothing answers it for a task folder.
+- No SQL over files. "Everything over 1 MB" becomes a directory walk.
+- Directory names are uuids, so they show up in container paths and therefore in transcripts.
+- One git repository serialises every commit and grows forever. Per-project histories are deleted,
+  not carried across.
+
+### Shipping
+
+Ten steps. Nine ship on their own; step 8 — rename `artifacts` to `files`, move the bytes, rewrite
+`mountsFor` — moves data and schema together with the loop stopped, and rolls back from the backup,
+not a revert. Step 1 is a standalone bug fix: deleting a task leaves its directory behind today.
+
+Archive, download, upload, binary editing and search are additions, deferred to a follow-up plan.
+Open questions: none.
+
 ## Recommendation
 
 Delete the index, keep the disk, and make one tree the whole model. `<DATA_ROOT>/files/`
