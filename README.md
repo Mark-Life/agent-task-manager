@@ -109,7 +109,7 @@ A claim that stops holding is a named line, not a diff in a five-hundred-line pr
 bun run typecheck            # all packages
 bun run test                 # all packages
 bun run check                # lint; `bun run fix` to repair
-bun run logs                 # read the event ledger: runs | errors | stats | follow
+bun run logs                 # read the event ledger: runs | errors | stats | follow | sql
 ```
 
 The libraries are consumed as source through tsconfig paths and have no build step, so
@@ -200,7 +200,8 @@ the [data model](.docs/plan/03-data-model.md), the
 How each part actually behaves: [agent homes](.docs/agent-homes.md),
 [harness](.docs/harness.md), [sandbox](.docs/sandbox.md),
 [project env files](.docs/project-env.md), [orchestrator](.docs/orchestrator.md),
-[gateway](.docs/gateway.md), [bot](.docs/bot.md), [event ledger](.docs/telemetry.md).
+[gateway](.docs/gateway.md), [bot](.docs/bot.md), [telemetry](.docs/telemetry.md) — which is
+also where the ledger is declared the system of record, and the `run` table its cache.
 
 What is under `DATA_ROOT`, what removes each of it, and what to delete when the disk gets
 tight: [`.docs/disk.md`](.docs/disk.md).

@@ -1,19 +1,26 @@
 #!/usr/bin/env bun
 
 /**
- * Wide-event ledger viewer: `runs | errors | stats | follow` over the JSONL
- * files under EVENT_LOG_DIR (default `${DATA_ROOT}/events`), one file per
+ * Wide-event ledger viewer: `runs | errors | stats | follow | sql` over the
+ * JSONL files under EVENT_LOG_DIR (default `${DATA_ROOT}/events`), one file per
  * service (`loop.jsonl`, `gateway.jsonl`, ...). Within a file the `event` field
- * names the unit of work, so one service may write several markers; every view
- * takes a marker so counts stay about one kind of thing. Reads the ledger
+ * names the unit of work, so one service may write several markers; the fixed
+ * views take a marker so counts stay about one kind of thing. Reads the ledger
  * directly; never talks to a running service.
  *
+ * `sql` is the view for the questions the fixed four do not answer: it loads
+ * every row into a scratch SQLite database, alongside the database tables the
+ * events join to, and runs the query you give it. It takes a query rather than
+ * a marker.
+ *
  * Usage: `bun run logs [runs|errors|stats|follow] [marker|all]`
+ *        `bun run logs sql ["<query>"] [--json]`
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { open, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { runSqlView } from "./logs-sql";
 
 /**
  * Reads an environment variable, treating blank as unset. `.env` files routinely
@@ -338,10 +345,32 @@ process.stdout.on("error", (e) => {
   }
 });
 
-const mode = process.argv[2] ?? "runs";
-const requestedMarker = process.argv[3] ?? DEFAULT_MARKER;
+/** Prints one JSON object per row instead of an aligned table. `sql` only. */
+const JSON_FLAG = "--json";
 
-if (mode === "follow") {
+/** Standard input, read as a file so the whole pipe arrives before the query runs. */
+const STDIN_FD = 0;
+
+// Only the exact flag is removed, not every argument that starts with `-`: a
+// SQL query may legitimately open with a `--` comment line.
+const json = process.argv.includes(JSON_FLAG);
+const args = process.argv.slice(2).filter((arg) => arg !== JSON_FLAG);
+const mode = args[0] ?? "runs";
+const requestedMarker = args[1] ?? DEFAULT_MARKER;
+
+if (mode === "sql") {
+  // A query long enough to be worth writing is long enough to want a heredoc or
+  // a file, so a piped stdin is read as the query when the argument is absent.
+  const piped =
+    args[1] === undefined && !process.stdin.isTTY
+      ? readFileSync(STDIN_FD, "utf8")
+      : undefined;
+  process.exitCode = await runSqlView({
+    files: listLedgerFiles(EVENT_LOG_DIR),
+    json,
+    query: args[1] ?? piped,
+  });
+} else if (mode === "follow") {
   await runFollow(EVENT_LOG_DIR, requestedMarker);
 } else {
   const rows = readAllRows(EVENT_LOG_DIR, requestedMarker);
