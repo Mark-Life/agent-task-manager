@@ -424,6 +424,14 @@ const gatewayCheck = Effect.gen(function* () {
       EVENT_LOG_DIR: CHECK_EVENT_DIR,
       GATEWAY_PORT: String(port),
       GATEWAY_PUBLIC_URL: origin,
+      // The claims below are "one request, one row", counted exactly. In
+      // production the gateway thins its own marker, and a check that ran under
+      // the thinning would be asserting which of its own requests happened to
+      // fall on the turn — which is a property of the counter, not of the
+      // instrumentation this check is about. One in one keeps every row; what
+      // the predicate does with the rest is pinned in
+      // `apps/gateway/src/request-sampling.test.ts`.
+      GATEWAY_SAMPLE_ONE_IN: "1",
     },
     repoRoot: join(import.meta.dir, ".."),
   });

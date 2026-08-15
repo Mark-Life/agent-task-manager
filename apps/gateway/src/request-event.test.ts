@@ -28,6 +28,13 @@ const COUNTER = "atm_requests_total";
 const HISTOGRAM = "atm_request_duration_ms";
 const GAUGE = "atm_sse_connections";
 
+/** The route the thinning is exercised on, and the rate it is exercised at. */
+const TASK_ROUTE = "/tasks/:taskId";
+const ONE_IN = 20;
+
+/** Requests the poll test makes: enough that a one-in-twenty turn comes round. */
+const POLLED = 42;
+
 /** A trace context from an upstream caller, in the form the header carries it. */
 const UPSTREAM_TRACE = "4f2b1c9d8e7a6b5c4d3e2f1a0b9c8d7e";
 const UPSTREAM_TRACEPARENT = `00-${UPSTREAM_TRACE}-1a2b3c4d5e6f7a8b-01`;
@@ -49,29 +56,43 @@ interface Capture {
   readonly lines: Row[];
 }
 
+/**
+ * Keeping one row in one is the sampling predicate turned off, which is what
+ * every assertion about the *content* of a row wants: the row's fields are the
+ * subject, and a test that had to guess which request survived a thinning would
+ * be testing the predicate by accident. `./request-sampling.test.ts` is where
+ * the thinning is the subject.
+ */
+const KEEP_EVERY = 1;
+
+const configLayer = (logDirectory: string, sampleOneIn: number) =>
+  ConfigProvider.layer(
+    ConfigProvider.fromUnknown({
+      EVENT_LOG_DIR: logDirectory,
+      GATEWAY_SAMPLE_ONE_IN: String(sampleOneIn),
+      GIT_SHA: "abc1234",
+      SERVICE_VERSION: "1.2.3",
+    })
+  );
+
 const telemetryLayer = (
   logDirectory: string,
   sink: Capture,
-  level: LogLevel.LogLevel
-) =>
-  Layer.mergeAll(
+  level: LogLevel.LogLevel,
+  sampleOneIn: number
+) => {
+  const config = configLayer(logDirectory, sampleOneIn);
+  return Layer.mergeAll(
     Telemetry.layer({ serviceName: SERVICE }).pipe(
-      Layer.provide(
-        Layer.mergeAll(
-          BunFileSystem.layer,
-          ConfigProvider.layer(
-            ConfigProvider.fromUnknown({
-              EVENT_LOG_DIR: logDirectory,
-              GIT_SHA: "abc1234",
-              SERVICE_VERSION: "1.2.3",
-            })
-          )
-        )
-      )
+      Layer.provide(Layer.mergeAll(BunFileSystem.layer, config))
     ),
+    // Merged out as well as provided in, so the sampler the middleware builds
+    // beside the emitter reads these values rather than the process environment.
+    config,
     Logger.layer([captureLogger(sink.events, sink.lines)]),
     Layer.succeed(References.MinimumLogLevel, level)
   );
+};
 
 /** What a refused credential looks like when the access middleware files it. */
 const REFUSAL = {
@@ -159,13 +180,16 @@ let directory: string;
 let capture: Capture;
 let web: ReturnType<typeof buildHandler>;
 
-const buildHandler = (level: LogLevel.LogLevel) =>
+const buildHandler = (
+  level: LogLevel.LogLevel,
+  sampleOneIn: number = KEEP_EVERY
+) =>
   HttpRouter.toWebHandler(
     Layer.mergeAll(routesLayer, requestEventLayer).pipe(
       // Merged rather than provided: the capture logger is a reference on the
       // built context, and a plain `provide` keeps it out of the one the
       // request fibers run on — where the row is annotated.
-      Layer.provideMerge(telemetryLayer(directory, capture, level))
+      Layer.provideMerge(telemetryLayer(directory, capture, level, sampleOneIn))
     )
   );
 
@@ -410,6 +434,35 @@ describe("the atm.request row", () => {
     expect(row.bytesOut).toBe("data: one\n\n".length);
   });
 
+  test("a poll is thinned, and every row kept says what it stands for", async () => {
+    await web.dispose();
+    web = buildHandler("Info", ONE_IN);
+    const before = await countedOn(TASK_ROUTE);
+
+    // one dashboard card, polled for three and a half minutes
+    for (let index = 0; index < POLLED; index += 1) {
+      // biome-ignore lint/performance/noAwaitInLoops: the turn is sequential
+      await get(`/tasks/task-${index}`);
+    }
+    // the counter, which sits above the predicate, saw all of them — and it is
+    // moved by the same finalizer that writes the row, so waiting on it is how
+    // the ledger below is read after the last request has finished closing
+    expect((await waitForCount(TASK_ROUTE, before + POLLED)) - before).toBe(
+      POLLED
+    );
+    await waitForRows(2);
+
+    const rows = readRows();
+    // the ledger holds a fraction of them, and every one of those carries the
+    // number of requests it stands for
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    expect(rows.length).toBeLessThan(POLLED / 2);
+    for (const row of rows) {
+      expect(typeof row.sampleRate).toBe("number");
+      expect(row.sampleRate).toBeGreaterThanOrEqual(1);
+    }
+  });
+
   test("the row survives a Warn floor that silences ordinary log lines", async () => {
     await web.dispose();
     web = buildHandler("Warn");
@@ -430,6 +483,33 @@ const seriesOf = (id: string) =>
       snapshot.filter((metric) => metric.id === id)
     )
   );
+
+/**
+ * Requests the counter has recorded on one route, across every method and
+ * status class. Read as a delta by its caller: `Metric` is process-wide and
+ * every test in this file has already moved it.
+ */
+const countedOn = async (route: string) =>
+  (await seriesOf(COUNTER))
+    .filter((metric) => metric.attributes?.route === route)
+    .reduce(
+      (total, metric) => total + (metric.state as { count: number }).count,
+      0
+    );
+
+/** That counter, once it has reached `target` or the deadline has passed. */
+const waitForCount = async (route: string, target: number) => {
+  const deadline = Date.now() + ROW_DEADLINE_MS;
+  while (Date.now() < deadline) {
+    // biome-ignore lint/performance/noAwaitInLoops: polling the metric is the point
+    const counted = await countedOn(route);
+    if (counted >= target) {
+      return counted;
+    }
+    await sleep(ROW_POLL_MS);
+  }
+  return countedOn(route);
+};
 
 const attributeKeys = async (id: string) => {
   const series = await seriesOf(id);

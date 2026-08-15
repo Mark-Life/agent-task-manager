@@ -13,6 +13,8 @@ const DEFAULT_BOT_SPLIT_AT = 4000;
 const DEFAULT_BOT_ANNOUNCE_RESTART = true;
 const DEFAULT_BOT_ANNOUNCE_QUIET_MS = 900_000;
 const DEFAULT_BOT_GATEWAY_URL = "http://localhost:3100";
+/** Mirrors the default `apps/gateway` applies to `GATEWAY_SAMPLE_ONE_IN`. */
+const DEFAULT_GATEWAY_SAMPLE_ONE_IN = 20;
 const DEFAULT_NOTIFY_REPAIR_INTERVAL_MS = 60_000;
 const DEFAULT_NOTIFY_RETRY_GRACE_MS = 60_000;
 const DEFAULT_STUCK_SCAN_INTERVAL_MS = 60_000;
@@ -90,6 +92,15 @@ const load = Effect.gen(function* () {
   // localhost that only works on the server.
   const gatewayPublicUrl = yield* Config.option(
     Config.string("GATEWAY_PUBLIC_URL")
+  );
+
+  // How much of its own `atm.request` traffic the gateway stores: one row in
+  // this many, once the failures, the streams and the requests above a route's
+  // p99 have been kept whole. `1` keeps everything. Mirrors the default the
+  // gateway applies to its own Config read — see
+  // `apps/gateway/src/request-sampling.ts` for what the figure buys.
+  const gatewaySampleOneIn = yield* Config.int("GATEWAY_SAMPLE_ONE_IN").pipe(
+    Config.withDefault(DEFAULT_GATEWAY_SAMPLE_ONE_IN)
   );
 
   // The dashboard's origin — scheme and host, no path, no trailing slash. Two
@@ -246,6 +257,7 @@ const load = Effect.gen(function* () {
     executorMcpKey,
     executorMcpUrl,
     gatewayPublicUrl,
+    gatewaySampleOneIn,
     gitSha,
     groqApiKey,
     logFormat,

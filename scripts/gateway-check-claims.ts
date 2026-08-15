@@ -815,6 +815,16 @@ export const ledgerClaims = (input: {
       step: "and the ledger holds no rows nobody asked for",
     });
 
+    // The child gateway runs with the thinning off, so each of these rows
+    // stands for the one request that wrote it. The claim is that the weight is
+    // on the row at all: without it a count over a thinned ledger is a count of
+    // the sample, and there is no second field to recover it from.
+    yield* check({
+      detail: `weights ${[...new Set(rows.map((row) => row.sampleRate))].join(", ") || "none"}`,
+      ok: rows.every((row) => row.sampleRate === 1),
+      step: "every row says how many requests it stands for",
+    });
+
     yield* check({
       detail: "a row carried a trace this check never sent",
       ok: rows.every((row) =>

@@ -169,8 +169,14 @@ const requestsTotal = boundedCounter("atm_requests_total", {
   },
 });
 
-/** Requests are milliseconds to tens of seconds; the buckets follow. */
-const DURATION_MS_BOUNDARIES = Metric.exponentialBoundaries({
+/**
+ * Requests are milliseconds to tens of seconds; the buckets follow. Exported
+ * because `./request-sampling` measures its tail against the same edges: a
+ * threshold that is a bucket boundary of the latency histogram is one an
+ * operator can read straight off the chart, rather than a second number derived
+ * somewhere else that has to be trusted.
+ */
+export const DURATION_MS_BOUNDARIES = Metric.exponentialBoundaries({
   count: 15,
   factor: 2,
   start: 1,
