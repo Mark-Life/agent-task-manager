@@ -16,18 +16,33 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunFileSystem } from "@effect/platform-bun";
 import { Telemetry } from "@workspace/telemetry";
-import { ConfigProvider, Deferred, Effect, Fiber, Layer, Stream } from "effect";
+import {
+  ConfigProvider,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Schema,
+  Stream,
+} from "effect";
 import { CLAUDE_SETTINGS_ENV_VAR } from "./claude-settings";
 import type { AgentEvent } from "./events";
 import { costUsdOf } from "./events";
 import type { AgentProvider, RunOptions } from "./provider";
 import { ProviderRegistry } from "./provider";
 import { instrumented, providerRegistryLayer } from "./registry";
-import { TURN_EVENT_MARKER } from "./turn-event";
+import { TURN_EVENT_MARKER, TurnEvent } from "./turn-event";
 
 const SERVICE = "harness-registry-test";
 
-type Row = Record<string, unknown>;
+/**
+ * One `atm.turn` row, decoded through the schema the roll-up reads it with, so
+ * the half of a row the emitter spells by hand — `ts`, the `event` tag, the
+ * environment stamp — is checked here rather than assumed.
+ */
+type Row = typeof TurnEvent.rowSchema.Type;
+
+const decodeRow = Schema.decodeUnknownSync(TurnEvent.rowSchema);
 
 const options: RunOptions = {
   agentHomeDir: "/run/agent-home/claude",
@@ -114,11 +129,33 @@ const testLayer = () =>
 const run = <A, E>(program: Effect.Effect<A, E, Telemetry>) =>
   Effect.runPromise(program.pipe(Effect.provide(testLayer()), Effect.exit));
 
-const rows = (): Row[] =>
+/** One ledger line, or null where the line is not JSON at all. */
+const jsonOf = (line: string): unknown => {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Whether a parsed line is a turn row, read off the parsed `event` field. A
+ * substring test over the line would also match the marker inside a field
+ * value and hand a foreign row to the decoder, failing the test for the wrong
+ * reason.
+ */
+const isTurnRow = (value: unknown) =>
+  typeof value === "object" &&
+  value !== null &&
+  "event" in value &&
+  value.event === TURN_EVENT_MARKER;
+
+const rows = (): readonly Row[] =>
   readFileSync(join(directory, `${SERVICE}.jsonl`), "utf-8")
     .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as Row);
+    .map(jsonOf)
+    .filter(isTurnRow)
+    .map((row) => decodeRow(row));
 
 /** The one row a turn left. Fails loudly when it left none or several. */
 const onlyRow = () => {

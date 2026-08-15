@@ -14,7 +14,7 @@ export interface TaskSearch {
   readonly tab?: TaskTab;
 }
 
-const validateSearch = (search: Record<string, unknown>): TaskSearch => ({
+const parseTaskSearch = (search: Record<string, unknown>): TaskSearch => ({
   runId: parseRunId(search.runId),
   tab: parseTaskTab(search.tab),
 });
@@ -36,5 +36,5 @@ export const taskRoute = createRoute({
   errorComponent: RouteError,
   getParentRoute: () => layoutRoute,
   path: "/tasks/$taskId",
-  validateSearch,
+  validateSearch: parseTaskSearch,
 });

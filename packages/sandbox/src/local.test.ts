@@ -21,7 +21,7 @@ import {
 } from "@workspace/domain";
 import { TURN_ENV_VARS } from "@workspace/harness";
 import { Telemetry } from "@workspace/telemetry";
-import { ConfigProvider, Effect, Layer, Result } from "effect";
+import { ConfigProvider, Effect, Layer, Result, Schema } from "effect";
 import {
   CONTAINER_LOG_ENV,
   EVENT_LOG_DIR_ENV_VAR,
@@ -44,7 +44,7 @@ import {
   type RunLabels,
   runTreeOf,
 } from "./mounts";
-import { SANDBOX_EVENT_MARKER } from "./sandbox-event";
+import { SANDBOX_EVENT_MARKER, SandboxEvent } from "./sandbox-event";
 import {
   type OutputChunk,
   Sandbox,
@@ -84,7 +84,34 @@ const testLayer = localSandboxLayer.pipe(
   )
 );
 
-/** Every `atm.sandbox` row in the ledger, for the run this file uses. */
+const decodeRow = Schema.decodeUnknownSync(SandboxEvent.rowSchema);
+
+/** One ledger line, or null where the line is not JSON at all. */
+const jsonOf = (line: string): unknown => {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Whether a parsed line is a sandbox row, read off the parsed `event` field
+ * rather than the line's text: the marker also occurs inside field values, and
+ * matching one of those would hand a foreign row to the decoder.
+ */
+const isSandboxRow = (value: unknown) =>
+  typeof value === "object" &&
+  value !== null &&
+  "event" in value &&
+  value.event === SANDBOX_EVENT_MARKER;
+
+/**
+ * Every `atm.sandbox` row in the ledger, for the run this file uses, decoded
+ * through the schema its readers use. The half of a row that can genuinely
+ * drift is the part the emitter spells by hand — `ts`, the `event` tag, the
+ * environment stamp — and that is what the decode holds.
+ */
 const ledgerRows = () => {
   const raw = ((): string => {
     try {
@@ -95,9 +122,9 @@ const ledgerRows = () => {
   })();
   return raw
     .split("\n")
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as Record<string, unknown>)
-    .filter((row) => row.event === SANDBOX_EVENT_MARKER);
+    .map(jsonOf)
+    .filter(isSandboxRow)
+    .map((row) => decodeRow(row));
 };
 
 /** The names this file's runs spell their container paths with. */

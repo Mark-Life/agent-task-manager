@@ -50,10 +50,17 @@ const USER_AGENT = "agent-task-manager-quota-gate";
 const isFiniteNumber = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
-const asRecord = (value: unknown) =>
-  value !== null && typeof value === "object"
-    ? (value as Readonly<Record<string, unknown>>)
-    : null;
+/**
+ * Whether a parsed JSON value is a plain object, which every window and the body
+ * around them is. Arrays are excluded on purpose: one answers `undefined` to
+ * every field read, so a window arriving as `[]` would report as "not limiting"
+ * instead of as a shape this reader cannot read.
+ */
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** A nested object field, or null when it is absent or of another shape. */
+const asRecord = (value: unknown) => (isRecord(value) ? value : null);
 
 /**
  * One nested window object, or null when it is absent or unusable.
@@ -121,20 +128,18 @@ export class CodexUsageUnavailable extends Schema.TaggedErrorClass<CodexUsageUna
   }
 ) {}
 
-/** The credentials file, as much of it as this needs. */
-interface CodexAuth {
-  readonly tokens?: {
-    readonly access_token?: unknown;
-    readonly account_id?: unknown;
-  };
-}
-
 /** The bearer token, and the account header the endpoint wants where one exists. */
 interface CodexCredentials {
   readonly accountId: string | null;
   readonly token: string;
 }
 
+/**
+ * The credentials off disk. The file belongs to the Codex CLI, which rewrites it
+ * on every refresh, so it is read through the same defensive helpers as the
+ * response body: a file whose shape moved lands as `no-token`, which is
+ * unavailable, rather than as a token-shaped `undefined` in a header.
+ */
 const readCredentials = (fs: FileSystem, authPath: string) =>
   fs.readFileString(authPath).pipe(
     Effect.mapError(
@@ -144,17 +149,18 @@ const readCredentials = (fs: FileSystem, authPath: string) =>
       Effect.try({
         catch: (cause) =>
           new CodexUsageUnavailable({ cause, reason: "auth-parse" }),
-        try: () => JSON.parse(text) as CodexAuth,
+        try: (): unknown => JSON.parse(text),
       })
     ),
     Effect.flatMap((auth) => {
-      const token = auth.tokens?.access_token;
+      const tokens = asRecord(asRecord(auth)?.tokens);
+      const token = tokens?.access_token;
       if (typeof token !== "string" || token.length === 0) {
         return Effect.fail(
           new CodexUsageUnavailable({ cause: null, reason: "no-token" })
         );
       }
-      const accountId = auth.tokens?.account_id;
+      const accountId = tokens?.account_id;
       return Effect.succeed<CodexCredentials>({
         accountId:
           typeof accountId === "string" && accountId.length > 0

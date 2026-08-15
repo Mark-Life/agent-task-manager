@@ -132,7 +132,7 @@ import { makeTokenSigner } from "@workspace/token";
 import type { Context } from "effect";
 import { DateTime, Effect, Layer, Redacted, Schedule } from "effect";
 import type { Transformer } from "grammy";
-import type { Update } from "grammy/types";
+import type { MessageEntity, Update } from "grammy/types";
 import { registerHandlers } from "../apps/bot/src/index";
 import { appLayer, type BotWiring } from "../apps/bot/src/layers";
 import {
@@ -307,6 +307,10 @@ const recordingTransformer = (calls: ApiCall[]): Transformer =>
   ((_next: unknown, method: string, payload: Record<string, unknown>) => {
     calls.push({ method, payload });
     return Promise.resolve({ ok: true, result: apiResultFor(method, payload) });
+    // SAFETY: grammy's Transformer is generic per method, and a recorder is
+    // uniform across methods — one signature cannot be written in the other.
+    // The payload is only ever read back by claims that already know which call
+    // they made.
   }) as unknown as Transformer;
 
 /**
@@ -460,7 +464,7 @@ const turnStoreLayer = Layer.mergeAll(
  * exactly the failure the registration order in `index.ts` is about, and would
  * make this check pass for the wrong reason.
  */
-const commandEntities = (text: string) => {
+const commandEntities = (text: string): MessageEntity[] | undefined => {
   if (!text.startsWith("/")) {
     return;
   }
@@ -475,48 +479,46 @@ const messageUpdate = (options: {
   readonly fromId: number;
   readonly messageId: number;
   readonly text: string;
-}) =>
-  ({
-    message: {
-      chat: { first_name: "Check", id: options.chatId, type: "private" },
-      date: Math.floor(Date.now() / MS_PER_SECOND),
-      entities: commandEntities(options.text),
-      ...(options.forwardedFrom === undefined
-        ? {}
-        : {
-            forward_origin: {
-              date: 0,
-              sender_user: {
-                first_name: options.forwardedFrom,
-                id: 1,
-                is_bot: false,
-              },
-              type: "user",
+}): Update => ({
+  message: {
+    chat: { first_name: "Check", id: options.chatId, type: "private" },
+    date: Math.floor(Date.now() / MS_PER_SECOND),
+    entities: commandEntities(options.text),
+    ...(options.forwardedFrom === undefined
+      ? {}
+      : {
+          forward_origin: {
+            date: 0,
+            sender_user: {
+              first_name: options.forwardedFrom,
+              id: 1,
+              is_bot: false,
             },
-          }),
-      from: { first_name: "Check", id: options.fromId, is_bot: false },
-      message_id: options.messageId,
-      text: options.text,
-    },
-    update_id: options.messageId,
-  }) as Update;
+            type: "user",
+          },
+        }),
+    from: { first_name: "Check", id: options.fromId, is_bot: false },
+    message_id: options.messageId,
+    text: options.text,
+  },
+  update_id: options.messageId,
+});
 
 /** A voice note as Telegram would deliver it. */
 const voiceUpdate = (options: {
   readonly chatId: number;
   readonly fromId: number;
   readonly messageId: number;
-}) =>
-  ({
-    message: {
-      chat: { first_name: "Check", id: options.chatId, type: "private" },
-      date: Math.floor(Date.now() / MS_PER_SECOND),
-      from: { first_name: "Check", id: options.fromId, is_bot: false },
-      message_id: options.messageId,
-      voice: { duration: 3, file_id: "AgADvoice", file_unique_id: "u" },
-    },
-    update_id: options.messageId,
-  }) as Update;
+}): Update => ({
+  message: {
+    chat: { first_name: "Check", id: options.chatId, type: "private" },
+    date: Math.floor(Date.now() / MS_PER_SECOND),
+    from: { first_name: "Check", id: options.fromId, is_bot: false },
+    message_id: options.messageId,
+    voice: { duration: 3, file_id: "AgADvoice", file_unique_id: "u" },
+  },
+  update_id: options.messageId,
+});
 
 /** A tapped inline button as Telegram would deliver it. */
 const callbackUpdate = (options: {
@@ -524,21 +526,20 @@ const callbackUpdate = (options: {
   readonly data: string;
   readonly fromId: number;
   readonly messageId: number;
-}) =>
-  ({
-    callback_query: {
-      chat_instance: String(options.chatId),
-      data: options.data,
-      from: { first_name: "Check", id: options.fromId, is_bot: false },
-      id: String(options.messageId),
-      message: {
-        chat: { first_name: "Check", id: options.chatId, type: "private" },
-        date: Math.floor(Date.now() / MS_PER_SECOND),
-        message_id: options.messageId,
-      },
+}): Update => ({
+  callback_query: {
+    chat_instance: String(options.chatId),
+    data: options.data,
+    from: { first_name: "Check", id: options.fromId, is_bot: false },
+    id: String(options.messageId),
+    message: {
+      chat: { first_name: "Check", id: options.chatId, type: "private" },
+      date: Math.floor(Date.now() / MS_PER_SECOND),
+      message_id: options.messageId,
     },
-    update_id: options.messageId,
-  }) as Update;
+  },
+  update_id: options.messageId,
+});
 
 /**
  * Waits for something a forked update fiber will make true.

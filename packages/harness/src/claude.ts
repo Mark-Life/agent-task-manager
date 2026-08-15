@@ -324,9 +324,7 @@ export const buildQuery = ({
     // Given here rather than written into the config directory: that directory
     // is shared by every run on the host, and a turn's own servers carry a
     // bearer token that has no business outliving it.
-    ...(options.mcpServers === null
-      ? {}
-      : { mcpServers: options.mcpServers as Options["mcpServers"] }),
+    ...(options.mcpServers === null ? {} : { mcpServers: options.mcpServers }),
     ...(cliPath === null ? {} : { pathToClaudeCodeExecutable: cliPath }),
     ...(options.model === null ? {} : { model: options.model }),
     ...(options.resumeSessionId === null

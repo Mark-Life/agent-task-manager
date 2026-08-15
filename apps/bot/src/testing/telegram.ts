@@ -88,6 +88,10 @@ export const recordingApi = (
       });
     }
     return Promise.resolve({ ok: true, result: true });
+    // SAFETY: grammy's Transformer is generic per method, and a recorder is
+    // uniform across methods — one signature cannot be written in the other.
+    // The payload is only ever read back by tests that already know which call
+    // they made.
   }) as unknown as Transformer;
 
   const bot = new Bot<BotContext>(FAKE_TOKEN);

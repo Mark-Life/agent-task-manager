@@ -13,6 +13,7 @@ import {
   Logger,
   type LogLevel,
   References,
+  Schema,
 } from "effect";
 import { ProviderCrashed, TimedOut } from "./errors";
 import { type AgentEvent, costUsdOf } from "./events";
@@ -25,12 +26,38 @@ import {
   TURN_ENV_VARS,
   TURN_EVENT_MARKER,
   type TurnContext,
+  TurnEvent,
   withTurnEvent,
 } from "./turn-event";
 
 const SERVICE = "harness-test";
 
-type Row = Record<string, unknown>;
+/**
+ * What the log annotation sinks receive. Open by nature: a logger is handed
+ * whatever annotations the fiber carries, so this is `CurrentLogAnnotations`'
+ * own type rather than a shape anything here declares.
+ */
+type Annotations = Record<string, unknown>;
+
+/**
+ * One `atm.turn` row, decoded through the schema the roll-up reads it with.
+ *
+ * `defineEvent` builds `encode` and `rowSchema` from the same fields object, so
+ * a renamed field or a changed encoded type moves both at once and is a compile
+ * error — the decode adds nothing there. What it does cover is the other half
+ * of a row, the part `telemetry.ts` spells by hand and `rowSchema` declares
+ * separately: `ts`, the `event` tag and the environment stamp. Those two can
+ * disagree, and `turn-rollup.ts` drops a row it cannot decode, so a
+ * disagreement costs every run its economics with the suite still green.
+ *
+ * What no test in one process can reach is cross-build skew: the container runs
+ * a prebuilt entrypoint bundle while the host decodes with its own compiled
+ * `rowSchema`, so a required field added on the host makes every row from a
+ * container on the old image undecodable. That gap is still open.
+ */
+type Row = typeof TurnEvent.rowSchema.Type;
+
+const decodeRow = Schema.decodeUnknownSync(TurnEvent.rowSchema);
 
 /** The environment the orchestrator sets on the container, plus the ledger's own. */
 const ENVIRONMENT = {
@@ -43,7 +70,7 @@ const ENVIRONMENT = {
 };
 
 /** Captures the wide event by its marker, and every log line for comparison. */
-const captureLogger = (events: Row[], lines: Row[]) =>
+const captureLogger = (events: Annotations[], lines: Annotations[]) =>
   Logger.make((options) => {
     const annotations = options.fiber.getRef(References.CurrentLogAnnotations);
     lines.push({ ...annotations });
@@ -53,8 +80,8 @@ const captureLogger = (events: Row[], lines: Row[]) =>
   });
 
 interface Capture {
-  readonly events: Row[];
-  readonly lines: Row[];
+  readonly events: Annotations[];
+  readonly lines: Annotations[];
 }
 
 const testLayer = (
@@ -89,11 +116,41 @@ afterEach(() => {
 
 const ledgerPath = () => join(directory, `${SERVICE}.jsonl`);
 
-const readRows = (): Row[] =>
-  readFileSync(ledgerPath(), "utf-8")
+/**
+ * The ledger as bytes, which is what every "this never reached a row" assertion
+ * has to be made against. A decoded row is no witness for a leak: most text
+ * fields are `SanitizedText`, which runs `clipError` on the way in as well as
+ * out, so the reader would be redacting the very value it then swears is clean.
+ */
+const ledgerText = () => readFileSync(ledgerPath(), "utf-8");
+
+/** One ledger line, or null where the line is not JSON at all. */
+const jsonOf = (line: string): unknown => {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Whether a parsed line is a turn row, read off the parsed `event` field. A
+ * substring test over the line would also match the marker inside a field
+ * value — an error message quoting a command, a path — and hand a foreign row
+ * to the decoder, failing the test for the wrong reason.
+ */
+const isTurnRow = (value: unknown) =>
+  typeof value === "object" &&
+  value !== null &&
+  "event" in value &&
+  value.event === TURN_EVENT_MARKER;
+
+const readRows = (): readonly Row[] =>
+  ledgerText()
     .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as Row);
+    .map(jsonOf)
+    .filter(isTurnRow)
+    .map((row) => decodeRow(row));
 
 /** The single row a turn just wrote. Fails loudly when the count is not one. */
 const onlyRow = () => {
@@ -337,7 +394,7 @@ describe("withTurnEvent", () => {
     expect(row.turns).toBe(2);
     expect(row.rateLimitStatus).toBe("allowed_warning");
     expect(row.rateLimitPeakPct).toBe(84.5);
-    expect(typeof row.durationMs).toBe("number");
+    expect(row.durationMs).toBeGreaterThanOrEqual(0);
     expect(row.errorClass).toBeNull();
   });
 
@@ -356,7 +413,7 @@ describe("withTurnEvent", () => {
     // how far it got is still on the row: that is what makes a kill worth reading
     expect(row.toolCalls).toBe(1);
     expect(row.eventsSeen).toBe(7);
-    expect(typeof row.durationMs).toBe("number");
+    expect(row.durationMs).toBeGreaterThanOrEqual(0);
   });
 
   test("a stream that stopped without a terminus is its own outcome", async () => {
@@ -420,6 +477,9 @@ describe("withTurnEvent", () => {
     );
 
     expect(onlyRow().errorMessage).toBe("refused: Authorization: [redacted]");
+    // The row read the sanitizer's answer; only the file can say the token was
+    // never written in the first place.
+    expect(ledgerText()).not.toContain("abc.def-123");
   });
 
   test("the row survives a Warn floor that silences ordinary log lines", async () => {
