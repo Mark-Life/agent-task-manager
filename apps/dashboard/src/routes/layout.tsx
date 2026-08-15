@@ -27,7 +27,7 @@ export interface LayoutSearch {
  * leave it out: a required parameter, even one allowed to be undefined, makes
  * `search` compulsory at every call site that navigates anywhere.
  */
-const validateSearch = (search: Record<string, unknown>): LayoutSearch => ({
+const parseLayoutSearch = (search: Record<string, unknown>): LayoutSearch => ({
   thread: parseThreadId(search.thread),
 });
 
@@ -99,5 +99,5 @@ export const layoutRoute = createRoute({
   errorComponent: RouteError,
   getParentRoute: () => rootRoute,
   id: "authenticated",
-  validateSearch,
+  validateSearch: parseLayoutSearch,
 });

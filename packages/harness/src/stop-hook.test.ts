@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HANDOFF_FILENAME, TaskId } from "@workspace/domain";
 import { spawn } from "bun";
+import { Schema } from "effect";
 import {
   ALLOW_TURN_END,
   decideStop,
@@ -16,6 +17,7 @@ import {
   parseStopHookPayload,
   STOP_HOOK_COMMAND_ENV_VAR,
   type StopHookPayload,
+  StopHookResponse,
   stopHookCommand,
   stopHookResponseOf,
 } from "./stop-hook";
@@ -240,7 +242,19 @@ describe("stopHookCommand", () => {
 describe("the hook as a process", () => {
   const script = new URL("../scripts/stop-hook.ts", import.meta.url).pathname;
 
-  /** One run of the script, given a payload on stdin and a marker path. */
+  const decodeResponse = Schema.decodeUnknownSync(StopHookResponse);
+
+  /**
+   * One run of the script, given a payload on stdin and a marker path. The
+   * payload stays a bag on purpose: several cases send something the schema
+   * would refuse, which is the whole point of asking.
+   *
+   * Both readings of the answer come back. `decoded` is what the harness sees
+   * and is where a field is read from; `printed` is what the hook actually
+   * wrote, and it is the only one an equality against {@link ALLOW_TURN_END}
+   * means anything on — every field of the response is optional, so a decode
+   * drops an extra key the hook started printing instead of reporting it.
+   */
   const ask = async (options: {
     readonly markerPath: string;
     readonly payload: Readonly<Record<string, unknown>>;
@@ -252,7 +266,8 @@ describe("the hook as a process", () => {
     });
     const answer = await new Response(child.stdout).text();
     await child.exited;
-    return JSON.parse(answer) as Record<string, unknown>;
+    const printed: unknown = JSON.parse(answer);
+    return { decoded: decodeResponse(printed), printed };
   };
 
   /** A path nothing has created, so the marker is absent rather than stale. */
@@ -263,8 +278,8 @@ describe("the hook as a process", () => {
       markerPath: absentMarker,
       payload: claudePayload,
     });
-    expect(answer.decision).toBe("block");
-    expect(answer.reason).toBe(NO_MESSAGE_REFUSAL);
+    expect(answer.decoded.decision).toBe("block");
+    expect(answer.decoded.reason).toBe(NO_MESSAGE_REFUSAL);
   });
 
   test("allows the ending once the marker is there", async () => {
@@ -274,9 +289,9 @@ describe("the hook as a process", () => {
     );
     writeFileSync(markerPath, "");
     try {
-      expect(await ask({ markerPath, payload: claudePayload })).toEqual(
-        ALLOW_TURN_END
-      );
+      const answer = await ask({ markerPath, payload: claudePayload });
+      expect(answer.decoded).toEqual(ALLOW_TURN_END);
+      expect(answer.printed).toEqual(ALLOW_TURN_END);
     } finally {
       rmSync(markerPath, { force: true });
     }
@@ -305,9 +320,9 @@ describe("the hook as a process", () => {
       stdin: new TextEncoder().encode(JSON.stringify(claudePayload)),
       stdout: "pipe",
     });
-    const answer = JSON.parse(
-      await new Response(child.stdout).text()
-    ) as Record<string, unknown>;
+    const answer = decodeResponse(
+      JSON.parse(await new Response(child.stdout).text())
+    );
     await child.exited;
     expect(answer.decision).toBe("block");
   });

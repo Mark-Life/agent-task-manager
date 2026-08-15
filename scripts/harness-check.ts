@@ -56,7 +56,7 @@ import {
 import { join } from "node:path";
 import process from "node:process";
 import { BunFileSystem, BunRuntime } from "@effect/platform-bun";
-import { newRunId, type SessionProvider } from "@workspace/domain";
+import { newRunId, type RunId, type SessionProvider } from "@workspace/domain";
 import {
   AGENT_HOME_DIR_ENV_VAR,
   type AgentEvent,
@@ -71,7 +71,8 @@ import {
   providerRegistryLayer,
   readTranscript,
   STOP_HOOK_COMMAND_ENV_VAR,
-  TURN_EVENT_MARKER,
+  StopHookResponse,
+  TurnEvent,
   transcriptDirOf,
 } from "@workspace/harness";
 import { EventLog, telemetryLayer } from "@workspace/telemetry";
@@ -156,11 +157,8 @@ const onlyProvider = () => {
   return named === undefined || named.startsWith("--") ? null : named;
 };
 
-/** The response the stop hook wrote, as much of it as the rule decides. */
-interface HookResponse {
-  readonly decision?: string;
-  readonly reason?: string;
-}
+/** Decoder over the hook's answer, built once — it compiles an AST on every call otherwise. */
+const decodeHookResponse = Schema.decodeUnknownEffect(StopHookResponse);
 
 /**
  * Runs the hook the way a provider runs it: a process, one JSON payload on
@@ -168,12 +166,17 @@ interface HookResponse {
  * the decision function is unit-tested next door, and what is untested until
  * here is that the file parses its input, finds the marker, and answers on the
  * stream a harness is listening to.
+ *
+ * The answer is decoded through the harness's own `StopHookResponse` rather than
+ * read as whatever this script expects of it. That schema is what both vendors
+ * are held to, so a hook that answered in some other shape is a broken hook and
+ * not a check with a stale idea of the contract.
  */
 const askStopHook = (input: {
   readonly markerPath: string;
   readonly payload: Readonly<Record<string, unknown>>;
 }) =>
-  Effect.promise(async () => {
+  Effect.promise(async (): Promise<unknown> => {
     const child = spawn(["bun", STOP_HOOK_SCRIPT], {
       env: { ...process.env, [MESSAGE_MARKER_ENV_VAR]: input.markerPath },
       stdin: new TextEncoder().encode(JSON.stringify(input.payload)),
@@ -181,8 +184,8 @@ const askStopHook = (input: {
     });
     const answer = await new Response(child.stdout).text();
     await child.exited;
-    return JSON.parse(answer) as HookResponse;
-  });
+    return JSON.parse(answer);
+  }).pipe(Effect.flatMap(decodeHookResponse));
 
 /** A payload shaped like the one both harnesses send when a turn tries to end. */
 const stopPayload = (options: {
@@ -197,20 +200,57 @@ const stopPayload = (options: {
   transcript_path: null,
 });
 
-/** Every `atm.turn` row in the ledger that belongs to this run. */
-const turnRows = (ledgerPath: string, runId: string) => {
+/** Whether a parsed ledger line is a row of one wide event. */
+const isRowOf = (parsed: unknown, marker: string) =>
+  typeof parsed === "object" &&
+  parsed !== null &&
+  Reflect.get(parsed, "event") === marker;
+
+/** Decoder over one stored `atm.turn` row, built once. */
+const decodeTurnRow = Schema.decodeUnknownOption(TurnEvent.rowSchema);
+
+/**
+ * Every `atm.turn` row in the ledger that belongs to this run, decoded through
+ * the harness's own row schema so what is printed below is what the event
+ * declares rather than whatever the line happened to hold.
+ *
+ * A line that is not JSON, carries another unit's marker, or is a row shape this
+ * script has moved past is skipped rather than fatal: the file is append-only
+ * and every earlier invocation's rows are still in it, and one of them being
+ * unreadable here says nothing about this run.
+ *
+ * The marker is compared against the parsed `event` field rather than searched
+ * for in the raw line, because a marker quoted in some other row's error message
+ * or image tag would otherwise be handed to the decoder and silently dropped.
+ */
+const turnRows = (input: { readonly path: string; readonly runId: string }) => {
   const raw = ((): string => {
     try {
-      return readFileSync(ledgerPath, "utf-8");
+      return readFileSync(input.path, "utf-8");
     } catch {
       return "";
     }
   })();
-  return raw
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as Record<string, unknown>)
-    .filter((row) => row.event === TURN_EVENT_MARKER && row.runId === runId);
+  const rows: (typeof TurnEvent.rowSchema.Type)[] = [];
+  for (const line of raw.split("\n")) {
+    if (line.trim().length === 0) {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRowOf(parsed, TurnEvent.marker)) {
+      continue;
+    }
+    const decoded = decodeTurnRow(parsed);
+    if (decoded._tag === "Some" && decoded.value.runId === input.runId) {
+      rows.push(decoded.value);
+    }
+  }
+  return rows;
 };
 
 /** A one-line, content-free rendering of a normalized event. */
@@ -275,7 +315,7 @@ const streamTurn = (input: {
   readonly agentHomeDir: string;
   readonly markerPath: string;
   readonly provider: SessionProvider;
-  readonly runId: string;
+  readonly runId: RunId;
   readonly workspaceDir: string;
 }) =>
   Effect.gen(function* () {
@@ -289,7 +329,7 @@ const streamTurn = (input: {
       model: null,
       prompt: PROMPT,
       resumeSessionId: null,
-      runId: input.runId as never,
+      runId: input.runId,
       signal: null,
       taskId: null,
       workspaceDir: input.workspaceDir,
@@ -306,7 +346,7 @@ interface LiveTurnInput {
   readonly agentHomeDir: string;
   readonly markerPath: string;
   readonly provider: SessionProvider;
-  readonly runId: string;
+  readonly runId: RunId;
   readonly workspaceDir: string;
 }
 
@@ -465,7 +505,7 @@ const checkProvider = Effect.fnUntraced(function* (input: {
   readonly live: boolean;
   readonly markerPath: string;
   readonly provider: SessionProvider;
-  readonly runId: string;
+  readonly runId: RunId;
   readonly workspaceDir: string;
 }) {
   const { live, provider } = input;
@@ -598,7 +638,7 @@ const harnessCheck = Effect.gen(function* () {
 
   yield* checkStopHook({ markerPath, workspaceDir });
 
-  const rows = turnRows(ledger.path, runId);
+  const rows = turnRows({ path: ledger.path, runId });
   if (live) {
     yield* check({
       detail: `found ${rows.length} rows for ${checked.length} invocations`,

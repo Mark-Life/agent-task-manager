@@ -12,6 +12,7 @@ import {
   type LogLevel,
   Metric,
   References,
+  Schema,
   Stream,
 } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
@@ -19,6 +20,7 @@ import { type AuthRecord, recordAuth } from "./auth/record";
 import {
   pathIdentity,
   REQUEST_EVENT_MARKER,
+  RequestEvent,
   requestEventLayer,
 } from "./request-event";
 import { pathShapeOf } from "./request-metrics";
@@ -35,14 +37,37 @@ const ONE_IN = 20;
 /** Requests the poll test makes: enough that a one-in-twenty turn comes round. */
 const POLLED = 42;
 
+/** A W3C trace id, as the row carries it: 32 lowercase hex characters. */
+const TRACE_ID = /^[0-9a-f]{32}$/;
+
+/** A W3C span id, which is half the width of a trace id. */
+const SPAN_ID = /^[0-9a-f]{16}$/;
+
 /** A trace context from an upstream caller, in the form the header carries it. */
 const UPSTREAM_TRACE = "4f2b1c9d8e7a6b5c4d3e2f1a0b9c8d7e";
 const UPSTREAM_TRACEPARENT = `00-${UPSTREAM_TRACE}-1a2b3c4d5e6f7a8b-01`;
 
-type Row = Record<string, unknown>;
+/**
+ * What the log annotation sinks receive. Open by nature: a logger is handed
+ * whatever annotations the fiber carries, so this is `CurrentLogAnnotations`'
+ * own type rather than a shape anything here declares.
+ */
+type Annotations = Record<string, unknown>;
+
+/**
+ * One `atm.request` row, decoded through the schema its readers use.
+ *
+ * `defineEvent` builds `encode` and `rowSchema` from one fields object, so a
+ * renamed field moves both at once and is a compile error. The half that can
+ * genuinely drift is what the emitter spells by hand — `ts`, the `event` tag
+ * and the environment stamp — and that is what the decode holds.
+ */
+type Row = typeof RequestEvent.rowSchema.Type;
+
+const decodeRow = Schema.decodeUnknownSync(RequestEvent.rowSchema);
 
 /** Captures the wide event by its marker, and every log line for comparison. */
-const captureLogger = (events: Row[], lines: Row[]) =>
+const captureLogger = (events: Annotations[], lines: Annotations[]) =>
   Logger.make((options) => {
     const annotations = options.fiber.getRef(References.CurrentLogAnnotations);
     lines.push({ ...annotations });
@@ -52,8 +77,8 @@ const captureLogger = (events: Row[], lines: Row[]) =>
   });
 
 interface Capture {
-  readonly events: Row[];
-  readonly lines: Row[];
+  readonly events: Annotations[];
+  readonly lines: Annotations[];
 }
 
 /**
@@ -206,16 +231,50 @@ afterEach(async () => {
   rmSync(directory, { force: true, recursive: true });
 });
 
-const readRows = (): Row[] => {
+/**
+ * The ledger as bytes, and empty until the first row lands.
+ *
+ * Every "this never reached a row" assertion is made against this rather than
+ * against a decoded row, for two reasons that both make the decoded reading
+ * worthless as evidence: `SanitizedText` runs `clipError` on the way in as well
+ * as out, so the reader redacts the very value it would then swear is clean,
+ * and a key the schema does not declare is dropped rather than reported.
+ */
+const ledgerText = () => {
   try {
-    return readFileSync(join(directory, `${SERVICE}.jsonl`), "utf-8")
-      .split("\n")
-      .filter((line) => line.trim().length > 0)
-      .map((line) => JSON.parse(line) as Row);
+    return readFileSync(join(directory, `${SERVICE}.jsonl`), "utf-8");
   } catch {
-    return [];
+    return "";
   }
 };
+
+/** One ledger line, or null where the line is not JSON at all. */
+const jsonOf = (line: string): unknown => {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Whether a parsed line is a request row, read off the parsed `event` field. A
+ * substring test over the line would also match the marker inside a field
+ * value — a route, an error message — and hand a foreign row to the decoder,
+ * failing the test for the wrong reason.
+ */
+const isRequestRow = (value: unknown) =>
+  typeof value === "object" &&
+  value !== null &&
+  "event" in value &&
+  value.event === REQUEST_EVENT_MARKER;
+
+const readRows = (): readonly Row[] =>
+  ledgerText()
+    .split("\n")
+    .map(jsonOf)
+    .filter(isRequestRow)
+    .map((row) => decodeRow(row));
 
 /**
  * How long a row is waited for before the ledger is read one last time and the
@@ -292,7 +351,7 @@ describe("the atm.request row", () => {
     expect(row.outcome).toBe("done");
     // the pattern, never the path — and never the query string either
     expect(row.route).toBe("/tasks/:taskId");
-    expect(JSON.stringify(row)).not.toContain("fields=all");
+    expect(ledgerText()).not.toContain("fields=all");
     expect(row.method).toBe("GET");
     expect(row.status).toBe(200);
     // the id the route named, lifted so no handler has to record it
@@ -300,8 +359,8 @@ describe("the atm.request row", () => {
     expect(row.bytesOut).toBe("task body".length);
     expect(row.sse).toBe(false);
     expect(row.streamHeldMs).toBeNull();
-    expect(typeof row.durationMs).toBe("number");
-    expect(typeof row.traceId).toBe("string");
+    expect(row.durationMs).toBeGreaterThanOrEqual(0);
+    expect(row.traceId).toMatch(TRACE_ID);
     expect(row.errorClass).toBeNull();
     // no credential was checked on this route, so the verdict fields are absent
     expect(row.authOutcome).toBeNull();
@@ -313,7 +372,7 @@ describe("the atm.request row", () => {
 
     const row = await onlyRow();
     expect(row.traceId).toBe(UPSTREAM_TRACE);
-    expect(typeof row.spanId).toBe("string");
+    expect(row.spanId).toMatch(SPAN_ID);
     // and a request without one still gets a trace, minted here
     expect(row.spanId).not.toBe("1a2b3c4d5e6f7a8b");
   });
@@ -333,7 +392,7 @@ describe("the atm.request row", () => {
     expect(row.errorMessage).toBeNull();
     // what the suppressed message was wanted for, bounded: this one got nowhere
     expect(row.pathShape).toBe("/*");
-    expect(JSON.stringify(row)).not.toContain("7f3a9c2e1b4d8a6f");
+    expect(ledgerText()).not.toContain("7f3a9c2e1b4d8a6f");
   });
 
   test("a 404 on a real endpoint is a different shape from a probe", async () => {
@@ -387,7 +446,7 @@ describe("the atm.request row", () => {
     expect(row.turns).toBeNull();
     expect(row.queueWaitMs).toBeNull();
     // the credential itself never reaches a sink
-    expect(JSON.stringify(row)).not.toContain("sk-not-a-real-token");
+    expect(ledgerText()).not.toContain("sk-not-a-real-token");
   });
 
   test("an event stream leaves one row, written when the stream ends", async () => {
@@ -413,7 +472,7 @@ describe("the atm.request row", () => {
     expect(row.runId).toBe("run-3");
     // how long it held, measured from the response rather than from the request
     expect(row.streamHeldMs).toBeGreaterThanOrEqual(30);
-    expect(row.durationMs).toBeLessThan(Number(row.streamHeldMs));
+    expect(row.durationMs).toBeLessThan(row.streamHeldMs ?? 0);
     // counted as it went out, since a stream has no content length to read
     expect(row.bytesOut).toBe(body.length);
   });
@@ -430,7 +489,7 @@ describe("the atm.request row", () => {
     expect(row.outcome).toBe("interrupted");
     expect(row.sse).toBe(true);
     // it really did hold, and it really did send what it sent
-    expect(typeof row.streamHeldMs).toBe("number");
+    expect(row.streamHeldMs).toBeGreaterThanOrEqual(0);
     expect(row.bytesOut).toBe("data: one\n\n".length);
   });
 
