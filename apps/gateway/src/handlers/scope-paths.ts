@@ -218,8 +218,8 @@ export const resolveInScope = Effect.fnUntraced(function* (input: {
     yield* Effect.logWarning("file path leaves its scope", {
       path: input.path,
     });
-    return yield* Effect.fail(
-      escaped("the path names a file outside the scope it addressed")
+    return yield* escaped(
+      "the path names a file outside the scope it addressed"
     );
   }
 
@@ -231,8 +231,8 @@ export const resolveInScope = Effect.fnUntraced(function* (input: {
       path: input.path,
       through: ancestor,
     });
-    return yield* Effect.fail(
-      escaped("the path resolves through a link that leaves the scope")
+    return yield* escaped(
+      "the path resolves through a link that leaves the scope"
     );
   }
 
@@ -245,9 +245,7 @@ export const resolveInScope = Effect.fnUntraced(function* (input: {
       path: input.path,
       through: landed,
     });
-    return yield* Effect.fail(
-      escaped("the path resolves into the scope's git directory")
-    );
+    return yield* escaped("the path resolves into the scope's git directory");
   }
 
   return {
@@ -395,17 +393,15 @@ export const makeParent = Effect.fnUntraced(function* (input: {
     yield* Effect.logWarning("file parent resolves outside its scope", {
       parent: real,
     });
-    return yield* Effect.fail(
-      escaped("the path resolves through a link that leaves the scope")
+    return yield* escaped(
+      "the path resolves through a link that leaves the scope"
     );
   }
   if (insideGitDir({ path: real, root: input.root })) {
     yield* Effect.logWarning("file parent resolves into an object store", {
       parent: real,
     });
-    return yield* Effect.fail(
-      escaped("the path resolves into the scope's git directory")
-    );
+    return yield* escaped("the path resolves into the scope's git directory");
   }
   return real;
 });

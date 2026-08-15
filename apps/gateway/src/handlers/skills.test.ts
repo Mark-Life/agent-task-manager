@@ -99,12 +99,10 @@ const REPO_URL = "https://github.com/acme/skills";
 const SKILL_PATH = "skills/writing/SKILL.md";
 
 /** A path the schema has already accepted, as a route hands one to a handler. */
-const sourcePath = (path: string) =>
-  Schema.decodeUnknownSync(SkillSourcePath)(path);
+const sourcePath = (path: string) => Schema.decodeSync(SkillSourcePath)(path);
 
 /** A name the schema has already accepted. */
-const skillName = (name: string) =>
-  Schema.decodeUnknownSync(SkillNameSchema)(name);
+const skillName = (name: string) => Schema.decodeSync(SkillNameSchema)(name);
 
 /** A value the schema would never accept, forced past it, to prove the handler refuses it too. */
 const forcedPath = (path: string) => path as ReturnType<typeof sourcePath>;
@@ -360,7 +358,7 @@ test("an update reports the changed hash, and applying a stale one is refused", 
  */
 test("a skill name that is a path, or a hidden directory, is not a name", async () => {
   const accepts = (name: string) =>
-    Option.isSome(Schema.decodeUnknownOption(SkillNameSchema)(name));
+    Option.isSome(Schema.decodeOption(SkillNameSchema)(name));
 
   expect(accepts("../evil")).toBe(false);
   expect(accepts("nested/skill")).toBe(false);
@@ -391,7 +389,7 @@ test("a skill name that is a path, or a hidden directory, is not a name", async 
  */
 test("a SKILL.md path that leaves the repository it named is refused twice", async () => {
   const accepts = (path: string) =>
-    Option.isSome(Schema.decodeUnknownOption(SkillSourcePath)(path));
+    Option.isSome(Schema.decodeOption(SkillSourcePath)(path));
 
   expect(accepts("../../secrets/SKILL.md")).toBe(false);
   expect(accepts("/etc/passwd")).toBe(false);

@@ -114,9 +114,9 @@ export class TokenRejected extends Schema.TaggedErrorClass<TokenRejected>()(
 export const TokenClaims = Schema.Struct({
   actor: Actor,
   /** Expiry, unix seconds. Required — a token with no end is a password. */
-  exp: Schema.Number,
+  exp: Schema.Finite,
   /** Issued at, unix seconds. Carried for the audit trail, not enforced. */
-  iat: Schema.Number,
+  iat: Schema.Finite,
   /** This token's identity, so a future denylist has something to name. */
   jti: Schema.String,
   scope: ApiScope,

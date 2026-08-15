@@ -87,13 +87,10 @@ export const messagesHandlers = HttpApiBuilder.group(
             const author = authorOf(actor);
 
             if (author === null) {
-              return yield* Effect.fail(
-                new Forbidden({
-                  reason: "a system credential has no voice in a task's thread",
-                  required:
-                    "a credential naming a person, a session or the loop",
-                })
-              );
+              return yield* new Forbidden({
+                reason: "a system credential has no voice in a task's thread",
+                required: "a credential naming a person, a session or the loop",
+              });
             }
 
             // The store checks the task belongs to this workspace inside the

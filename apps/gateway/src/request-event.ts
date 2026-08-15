@@ -210,7 +210,7 @@ export const RequestEvent = defineEvent(REQUEST_EVENT_MARKER, {
   sse: Schema.Boolean,
   status: Schema.Int,
   /** Response to stream end. Null when nothing streamed; the reason this row waits. */
-  streamHeldMs: Schema.NullOr(Schema.Number),
+  streamHeldMs: Schema.NullOr(Schema.Finite),
   /** The person behind the call. A run is on `runId` instead. */
   userId: Schema.NullOr(SanitizedText),
 });

@@ -88,15 +88,22 @@ export interface TurnEconomics {
   readonly turns: number | null;
 }
 
+/** What separates two fields of the footer, in every dialect it is written in. */
+export const FOOTER_SEPARATOR = " · ";
+
 /**
- * The one-line footer under a finished turn.
+ * The fields of the footer, in order, as the plain strings they are.
  *
  * Every field is dropped when it is null rather than shown as a zero, for the
  * same reason the wide event nulls them: a subscription run reports no dollars,
- * and a `$0.0000` in a chat is a claim that it was free. An empty footer is an
- * empty string, so a caller can append it unconditionally.
+ * and a `$0.0000` in a chat is a claim that it was free.
+ *
+ * Split out from {@link formatFooter} because the manager's answer carries the
+ * same economics in Markdown rather than in this module's HTML — the markup is
+ * the caller's, but what is shown and what is dropped is one decision and lives
+ * in one place.
  */
-export const formatFooter = (economics: TurnEconomics) => {
+export const footerParts = (economics: TurnEconomics): readonly string[] => {
   const parts: string[] = [];
   if (economics.costUsd !== null) {
     parts.push(`$${economics.costUsd.toFixed(COST_DECIMALS)}`);
@@ -111,7 +118,16 @@ export const formatFooter = (economics: TurnEconomics) => {
   if (economics.turns !== null && economics.turns > 1) {
     parts.push(`${economics.turns} turns`);
   }
-  return parts.length === 0 ? "" : italic(parts.join(" · "));
+  return parts;
+};
+
+/**
+ * The one-line footer under a finished turn, in Telegram HTML. An empty footer
+ * is an empty string, so a caller can append it unconditionally.
+ */
+export const formatFooter = (economics: TurnEconomics) => {
+  const parts = footerParts(economics);
+  return parts.length === 0 ? "" : italic(parts.join(FOOTER_SEPARATOR));
 };
 
 /**
