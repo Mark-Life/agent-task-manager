@@ -26,6 +26,9 @@ coverage
 # encrypted project environment, so it is never a thing to commit.
 .data-backups
 
+# Atlas: generated repository map and its viewer
+.atlas/
+
 # Vercel
 .vercel
 

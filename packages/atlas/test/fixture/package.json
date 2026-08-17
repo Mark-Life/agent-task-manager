@@ -1,0 +1,11 @@
+{
+  "name": "@fixture/root",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "workspaces": {
+    "packages": [
+      "pkg-*"
+    ]
+  }
+}

@@ -31,6 +31,7 @@
     "service:restart": "bun run scripts/service.ts restart",
     "service:uninstall": "bun run scripts/service.ts uninstall",
     "openapi": "bun run scripts/openapi.ts",
+    "atlas": "bun run packages/atlas/src/main.ts",
     "loop:dev": "bun run --watch apps/loop/src/main.ts",
     "loop:start": "bun run apps/loop/src/main.ts",
     "bot:dev": "bun run --watch apps/bot/src/main.ts",
