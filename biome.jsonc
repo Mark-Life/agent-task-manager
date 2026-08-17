@@ -77,6 +77,17 @@
       }
     },
     {
+      // Atlas is a Bun CLI that happens to live under `packages/`: it reads
+      // `Bun.argv`, scans with `Bun.Glob`, and calls `Bun.file`, `Bun.build`,
+      // `Bun.write` and `Bun.spawn` directly. Biome does not read `@types/bun`,
+      // so `noUndeclaredVariables` needs the global declared — for this one
+      // directory rather than repo-wide.
+      "includes": ["packages/atlas/**"],
+      "javascript": {
+        "globals": ["Bun"]
+      }
+    },
+    {
       // The dashboard's icon generator: a drawing and a file format, and both
       // of them are numbers by nature. `mark.ts` is the mark itself — the
       // coordinates of three lanes and three cards in a hundred-unit square,
