@@ -4,23 +4,25 @@ import { SidebarTrigger } from "@workspace/ui/components/sidebar";
 import { useCallback } from "react";
 import { EmptyState } from "@/components/empty-state";
 import { TaskDetailView } from "@/features/task/detail";
-import { parseTaskId, type TaskTab } from "@/routes/search";
+import { parseTaskId, type RunView, type TaskTab } from "@/routes/search";
 import { taskRoute } from "@/routes/task";
 
 interface TaskPageProps {
   readonly runId: RunId | undefined;
+  readonly runView: RunView;
   readonly tab: TaskTab;
   readonly taskId: TaskId;
 }
 
 /**
- * The task page: the shared task body on its own address, with the open tab
- * and chosen run kept in the URL so a link lands on exactly this view of it.
+ * The task page: the shared task body on its own address, with the open tab,
+ * the chosen run and the reading it is in kept in the URL so a link lands on
+ * exactly this view of it.
  *
  * The route it hangs off is imported rather than named by id — see the note in
  * `board.screen.tsx` for why that is not the cycle it looks like.
  */
-const TaskPage = ({ runId, tab, taskId }: TaskPageProps) => {
+const TaskPage = ({ runId, runView, tab, taskId }: TaskPageProps) => {
   const navigate = taskRoute.useNavigate();
 
   const selectTab = useCallback(
@@ -34,6 +36,22 @@ const TaskPage = ({ runId, tab, taskId }: TaskPageProps) => {
     (next: RunId) => {
       navigate({
         search: (previous) => ({ ...previous, runId: next, tab: "runs" }),
+        to: ".",
+      });
+    },
+    [navigate]
+  );
+
+  // The chat reading is the default, so it is spelled in the URL only when the
+  // reader has left it. A link then carries the table because somebody chose
+  // the table, rather than because they happened to send the link.
+  const selectRunView = useCallback(
+    (next: RunView) => {
+      navigate({
+        search: (previous) => ({
+          ...previous,
+          view: next === "chat" ? undefined : next,
+        }),
         to: ".",
       });
     },
@@ -60,8 +78,10 @@ const TaskPage = ({ runId, tab, taskId }: TaskPageProps) => {
       <TaskDetailView
         onDeleted={goToBoard}
         onSelectRun={selectRun}
+        onSelectRunView={selectRunView}
         onSelectTab={selectTab}
         runId={runId}
+        runView={runView}
         tab={tab}
         taskId={taskId}
       />
@@ -78,7 +98,7 @@ const TaskPage = ({ runId, tab, taskId }: TaskPageProps) => {
  */
 export const TaskScreen = () => {
   const { taskId } = taskRoute.useParams();
-  const { runId, tab } = taskRoute.useSearch();
+  const { runId, tab, view } = taskRoute.useSearch();
   const parsed = parseTaskId(taskId);
 
   if (parsed === undefined) {
@@ -92,5 +112,12 @@ export const TaskScreen = () => {
     );
   }
 
-  return <TaskPage runId={runId} tab={tab ?? "details"} taskId={parsed} />;
+  return (
+    <TaskPage
+      runId={runId}
+      runView={view ?? "chat"}
+      tab={tab ?? "details"}
+      taskId={parsed}
+    />
+  );
 };

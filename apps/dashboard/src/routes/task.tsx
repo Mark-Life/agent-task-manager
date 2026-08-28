@@ -2,21 +2,30 @@ import { createRoute, lazyRouteComponent } from "@tanstack/react-router";
 import type { RunId } from "@workspace/domain";
 import { RouteError } from "@/components/error-boundary";
 import { layoutRoute } from "@/routes/layout";
-import { parseRunId, parseTaskTab, type TaskTab } from "@/routes/search";
+import {
+  parseRunId,
+  parseRunView,
+  parseTaskTab,
+  type RunView,
+  type TaskTab,
+} from "@/routes/search";
 
 /**
- * Both parameters name something the reader chose to look at, which is why they
- * are in the URL: a link to one attempt of one task, on the panel it is about,
- * is the thing an operator sends to themselves at three in the morning.
+ * Every parameter names something the reader chose to look at, which is why they
+ * are in the URL: a link to one attempt of one task, on the panel it is about
+ * and in the reading it was being read in, is the thing an operator sends to
+ * themselves at three in the morning.
  */
 export interface TaskSearch {
   readonly runId?: RunId;
   readonly tab?: TaskTab;
+  readonly view?: RunView;
 }
 
 const parseTaskSearch = (search: Record<string, unknown>): TaskSearch => ({
   runId: parseRunId(search.runId),
   tab: parseTaskTab(search.tab),
+  view: parseRunView(search.view),
 });
 
 /**

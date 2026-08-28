@@ -33,7 +33,7 @@ import { TaskProposals } from "@/features/task/proposals";
 import { TaskRuns, useCurrentRun } from "@/features/task/runs";
 import { TaskSessions } from "@/features/task/sessions";
 import { RunTimeline } from "@/features/task/timeline";
-import { TASK_TABS, type TaskTab } from "@/routes/search";
+import { type RunView, TASK_TABS, type TaskTab } from "@/routes/search";
 
 /** How often an unsettled task re-reads itself. The cadence the board already uses per in-progress card. */
 const TASK_POLL_MS = 5000;
@@ -101,8 +101,10 @@ const TabCount = ({ value }: { readonly value: number | undefined }) =>
 interface RunsPanelProps {
   readonly liveRunId: RunId | null;
   readonly onSelectRun: (runId: RunId) => void;
+  readonly onSelectRunView: (view: RunView) => void;
   readonly runId: RunId | undefined;
   readonly taskId: TaskId;
+  readonly view: RunView;
 }
 
 /**
@@ -115,13 +117,21 @@ interface RunsPanelProps {
 const RunsPanel = ({
   liveRunId,
   onSelectRun,
+  onSelectRunView,
   runId,
   taskId,
+  view,
 }: RunsPanelProps) => (
   <div className="flex flex-col gap-6">
     <TaskRuns onSelectRun={onSelectRun} selectedRunId={runId} taskId={taskId} />
     {runId === undefined ? null : (
-      <RunTimeline live={liveRunId === runId} runId={runId} taskId={taskId} />
+      <RunTimeline
+        live={liveRunId === runId}
+        onSelectView={onSelectRunView}
+        runId={runId}
+        taskId={taskId}
+        view={view}
+      />
     )}
   </div>
 );
@@ -132,8 +142,11 @@ interface TaskDetailViewProps {
   /** Called once the task is gone: the page leaves for the board, the overlay closes. */
   readonly onDeleted: () => void;
   readonly onSelectRun: (runId: RunId) => void;
+  /** Which reading the run timeline is in; the URL on the page, local state in the overlay. */
+  readonly onSelectRunView: (view: RunView) => void;
   readonly onSelectTab: (tab: TaskTab) => void;
   readonly runId: RunId | undefined;
+  readonly runView: RunView;
   readonly tab: TaskTab;
   readonly taskId: TaskId;
 }
@@ -166,8 +179,10 @@ export const TaskDetailView = ({
   onClose,
   onDeleted,
   onSelectRun,
+  onSelectRunView,
   onSelectTab,
   runId,
+  runView,
   tab,
   taskId,
 }: TaskDetailViewProps) => {
@@ -256,8 +271,10 @@ export const TaskDetailView = ({
           <RunsPanel
             liveRunId={detail.data.liveRunId}
             onSelectRun={onSelectRun}
+            onSelectRunView={onSelectRunView}
             runId={currentRun}
             taskId={taskId}
+            view={runView}
           />
         </TabsContent>
         <TabsContent

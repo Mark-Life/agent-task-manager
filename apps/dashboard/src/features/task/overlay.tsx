@@ -2,7 +2,7 @@ import type { RunId, TaskId } from "@workspace/domain";
 import { Sheet, SheetContent } from "@workspace/ui/components/sheet";
 import { lazy, Suspense, useCallback, useState } from "react";
 import { Pending } from "@/components/query-state";
-import type { TaskTab } from "@/routes/search";
+import type { RunView, TaskTab } from "@/routes/search";
 
 /**
  * The task body, fetched the first time a card is opened.
@@ -73,14 +73,16 @@ interface TaskPeekProps {
 /**
  * The task body with its own idea of what is selected.
  *
- * Unlike the task page, the overlay keeps the open tab and chosen run in local
- * state: the board's URL validates only its own parameters, so selections made
- * here cannot live there. Keying the panel by task id at the call site resets
- * them when one open task is swapped for another.
+ * Unlike the task page, the overlay keeps the open tab, the chosen run and the
+ * reading its timeline is in as local state: the board's URL validates only its
+ * own parameters, so selections made here cannot live there. A reader who wants
+ * to send one of these has the task's own page to send. Keying the panel by task
+ * id at the call site resets them when one open task is swapped for another.
  */
 const TaskPeek = ({ onClosed, taskId }: TaskPeekProps) => {
   const [tab, setTab] = useState<TaskTab>("details");
   const [runId, setRunId] = useState<RunId | undefined>(undefined);
+  const [runView, setRunView] = useState<RunView>("chat");
 
   const selectRun = useCallback((next: RunId) => {
     setRunId(next);
@@ -101,8 +103,10 @@ const TaskPeek = ({ onClosed, taskId }: TaskPeekProps) => {
           onClose={onClosed}
           onDeleted={onClosed}
           onSelectRun={selectRun}
+          onSelectRunView={setRunView}
           onSelectTab={setTab}
           runId={runId}
+          runView={runView}
           tab={tab}
           taskId={taskId}
         />
