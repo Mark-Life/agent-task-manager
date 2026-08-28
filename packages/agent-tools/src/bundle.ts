@@ -22,6 +22,17 @@ export const AGENT_MCP_SEGMENT = "bin";
 export const AGENT_MCP_BUNDLE_FILE = "agent-mcp.js";
 
 /**
+ * The Pi extension's file name, beside the MCP bundle in the same directory.
+ *
+ * A second artefact rather than a second entry point on the first, because the
+ * two are loaded by different runtimes for different protocols: the MCP bundle
+ * is a process bun starts and talks to over a pipe, and this one is a module
+ * node imports inside Pi. They are built from the same tool table and they are
+ * not interchangeable files.
+ */
+export const PI_EXTENSION_BUNDLE_FILE = "atm-pi-extension.js";
+
+/**
  * The bundle on the host, under the data root. The build script writes exactly
  * here, and every run mounts exactly this file.
  *
@@ -48,6 +59,22 @@ export const agentMcpBundlePathOf = (dataRoot: string) =>
  */
 export const agentMcpPendingPathOf = (dataRoot: string) =>
   `${agentMcpBundlePathOf(dataRoot)}.next`;
+
+/**
+ * The Pi extension on the host, under the data root. Written by the same build
+ * and by the same write-then-rename, for the same reason.
+ *
+ * Usable by hand as well as by a turn: with `ATM_GATEWAY_URL` and a token in
+ * the environment, `pi --no-builtin-tools -e <this path>` is a Pi session
+ * holding exactly the board tools and nothing else, which is how the layer was
+ * verified and how an operator can look at it.
+ */
+export const piExtensionBundlePathOf = (dataRoot: string) =>
+  join(dataRoot, AGENT_MCP_SEGMENT, PI_EXTENSION_BUNDLE_FILE);
+
+/** Where a Pi extension build in progress is written before it is renamed into place. */
+export const piExtensionPendingPathOf = (dataRoot: string) =>
+  `${piExtensionBundlePathOf(dataRoot)}.next`;
 
 /**
  * The file the board credential is rolled through.

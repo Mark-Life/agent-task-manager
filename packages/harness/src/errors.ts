@@ -315,6 +315,9 @@ const ANCHORS: readonly (readonly [HarnessErrorClass, readonly string[]])[] = [
   [
     "NetworkFailed",
     [
+      // Pi's own wording for a socket that never opened, which is what it says
+      // on every attempt of a retried request to an unreachable endpoint.
+      "connection error",
       "eai_again",
       "econnrefused",
       "econnreset",

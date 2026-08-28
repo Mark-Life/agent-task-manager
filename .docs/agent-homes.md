@@ -4,21 +4,29 @@ There is **one system-owned directory per provider** on the host, and every cont
 read-write at `/agent-home`. It is not under `DATA_ROOT`, it is never copied, and it outlives
 every run.
 
-That is not tidiness. Both CLIs refresh their subscription token in place, so a private copy
+That is not tidiness. The two subscription CLIs refresh their token in place, so a private copy
 per run means the refresh is discarded with the container while the source goes permanently
 stale — which is a failure this repo has already had with Codex. One shared directory, written
 by whichever container refreshed last, is the same arrangement several interactive CLI sessions
 on one laptop already rely on. Claude locks its credential writes cross-process
 (`<dir>/.storage-write`), which is what makes concurrent containers safe there.
 
+Pi's home is the same directory in a different sense. Pi runs on an API key, which does not
+refresh and does not rotate, so nothing is racing to write it — but the directory still has to
+exist and still has to be the same one every container mounts, because it is where `models.json`
+declares the providers Pi can reach, where extensions live, and where Pi files every session.
+The transcript reader looks for a run's session under it by id, so a Pi run with no home is a run
+whose conversation cannot be found afterwards.
+
 **Nothing on the run path creates or seeds these directories.** An auto-created empty home is a
 container that boots and reports an auth error nobody can tell from an expired subscription, so
 a missing one fails the dispatch by name instead.
 
 ```bash
-bun run agent-home:login                     # creates both at 0700, says what each still needs
+bun run agent-home:login                     # creates all three at 0700, says what each still needs
 CLAUDE_CONFIG_DIR=~/.claude-task-management claude    # then /login
 CODEX_HOME=~/.codex-task-management codex login
+PI_CODING_AGENT_DIR=~/.pi-task-management pi          # then /login — or see below
 bun run harness:check                        # tells you whether that worked
 ```
 
@@ -57,7 +65,20 @@ home. It is a mount and not a copy: edit a skill and the next turn has it. Creat
 once, `mkdir -p <agent home>/skills`, so the daemon does not create it as root inside a
 directory that is yours.
 
-Override either path with `ATM_AGENT_HOME_DIR_CLAUDE` / `ATM_AGENT_HOME_DIR_CODEX`. They are
-deliberately not spelled `CLAUDE_CONFIG_DIR` / `CODEX_HOME`: those two relocate the config
-directory of whatever process exports them, including your own shell's.
+**Pi may need no login at all.** Pi reads its key from `auth.json` in the home *or* from the
+environment — `OPENROUTER_API_KEY`, `OPENAI_API_KEY` and about thirty others. `/login` writes the
+same file a hand-written `{"openrouter": {"type": "api_key", "key": "…"}}` does, at `0600`. So
+`harness:check` reports a missing `auth.json` for Pi as a note rather than as a failed claim,
+while a missing *directory* stays a hard failure for all three.
+
+What Pi's home holds beyond the key: `models.json`, which is where an OpenAI-shaped endpoint or
+an OpenRouter model becomes available without a code change; `settings.json`, whose
+`defaultProvider`, `defaultModel` and `defaultThinkingLevel` decide what a turn that names none
+of them gets; `extensions/`; and `sessions/`, one directory per working directory, holding the
+`<timestamp>_<session-id>.jsonl` files the transcript reader scans.
+
+Override any path with `ATM_AGENT_HOME_DIR_CLAUDE` / `ATM_AGENT_HOME_DIR_CODEX` /
+`ATM_AGENT_HOME_DIR_PI`. They are deliberately not spelled `CLAUDE_CONFIG_DIR` / `CODEX_HOME` /
+`PI_CODING_AGENT_DIR`: those three relocate the config directory of whatever process exports
+them, including your own shell's.
 

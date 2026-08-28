@@ -58,14 +58,32 @@ const DEFAULT_POLL_INTERVAL_MS = 300_000;
 const DEFAULT_COOLDOWN_MS = 900_000;
 
 /**
- * The providers the gate governs: both of them, and not a setting. There are two
- * harnesses, both run against a subscription, and a knob naming which of them to
- * watch is a knob that eventually names one — leaving the other to burn tasks
- * against a drained plan with the gate reporting itself as on.
+ * Which providers have an allowance to watch. Not a setting: a knob naming
+ * which subscription to watch is a knob that eventually names one, leaving the
+ * other to burn tasks against a drained plan with the gate reporting itself as
+ * on. What it is instead is a property of the provider, stated per literal so
+ * that a fourth harness has to answer the question rather than inherit an
+ * answer.
+ *
+ * Claude and Codex are both a subscription with a published remaining
+ * allowance, polled by a passive GET, which is what the whole gate is built on.
+ *
+ * Pi is not, and excluding it is the honest reading rather than a gap. It runs
+ * on the operator's own API key: there is no plan to drain, no endpoint that
+ * reports what is left, and the thing it can actually run out of is prepaid
+ * credit — which arrives as a refusal on a request and is already classified as
+ * `QuotaExhausted` by the harness. Polling it would publish a permanently
+ * unreadable column on the dashboard and gate nothing.
  */
-export const GATED_PROVIDERS: readonly SessionProvider[] = [
-  ...SESSION_PROVIDERS,
-];
+const HAS_ALLOWANCE = {
+  claude: true,
+  codex: true,
+  pi: false,
+} as const satisfies Record<SessionProvider, boolean>;
+
+/** The providers the gate governs. Derived, so it cannot disagree with the record above. */
+export const GATED_PROVIDERS: readonly SessionProvider[] =
+  SESSION_PROVIDERS.filter((provider) => HAS_ALLOWANCE[provider]);
 
 /** The gate's settings, resolved from the environment. */
 export const quotaConfig = Effect.gen(function* () {

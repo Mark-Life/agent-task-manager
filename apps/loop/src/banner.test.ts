@@ -11,6 +11,7 @@ const config: OrchestratorConfig = {
   agentHomeDirs: {
     claude: "/tmp/atm-banner-test/claude-home",
     codex: "/tmp/atm-banner-test/codex-home",
+    pi: "/tmp/atm-banner-test/pi-home",
   },
   agentTokenTtlMs: 1011,
   chatTimeoutMs: 1012,

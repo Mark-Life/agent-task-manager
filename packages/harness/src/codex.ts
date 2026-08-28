@@ -35,10 +35,7 @@
  */
 
 import { resolve } from "node:path";
-import * as BunChildProcessSpawner from "@effect/platform-bun/BunChildProcessSpawner";
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
-import * as BunPath from "@effect/platform-bun/BunPath";
-import { clipError } from "@workspace/telemetry";
 import { Clock, Effect, Layer, Ref, Result, Stream } from "effect";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner";
@@ -64,6 +61,7 @@ import {
 } from "./errors";
 import { agentHomeEnvAt } from "./paths";
 import type { AgentProvider, RunOptions } from "./provider";
+import { abortAsFailure, crashed, spawnerLayer } from "./subprocess";
 
 /** The binary, resolved on `PATH` inside whatever sandbox the run got. */
 const CODEX_COMMAND = "codex";
@@ -230,30 +228,6 @@ const harnessErrorOf = ({
   }
 };
 
-/** A failure that stopped the harness itself rather than the turn. */
-const crashed = (cause: unknown) =>
-  new ProviderCrashed({ cause, message: clipError(String(cause)) });
-
-/**
- * The caller's cancellation as a typed failure. Interrupting the fiber is the
- * ordinary way to stop a turn; this covers the case where the thing being
- * cancelled is wider than the fiber, and it has to arrive as a value so the run
- * is recorded as interrupted rather than vanishing.
- */
-const abortAsFailure = (signal: AbortSignal) =>
-  Effect.callback<never, Interrupted>((resume) => {
-    const fail = () =>
-      resume(Effect.fail(new Interrupted({ reason: "shutdown" })));
-    if (signal.aborted) {
-      fail();
-      return;
-    }
-    signal.addEventListener("abort", fail, { once: true });
-    return Effect.sync(() => {
-      signal.removeEventListener("abort", fail);
-    });
-  });
-
 /** The command, with the prompt already on its way to stdin. */
 const codexCommand = (options: RunOptions) =>
   ChildProcess.make(CODEX_COMMAND, codexArgs(options), {
@@ -264,15 +238,6 @@ const codexCommand = (options: RunOptions) =>
     extendEnv: true,
     stdin: Stream.encodeText(Stream.make(options.prompt)),
   });
-
-/**
- * Bun's process spawner and the two services it is built from. Named
- * explicitly rather than taken from the aggregate platform layer, which would
- * also construct a terminal and claim the host's stdin.
- */
-const spawnerLayer = BunChildProcessSpawner.layer.pipe(
-  Layer.provide(Layer.mergeAll(BunFileSystem.layer, BunPath.layer))
-);
 
 /**
  * The services one invocation needs. The filesystem is named again alongside

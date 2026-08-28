@@ -37,7 +37,7 @@ export const ActorKind = Schema.Literals(ACTOR_KINDS);
 export type ActorKind = typeof ActorKind.Type;
 
 /** The agent harnesses we run. */
-export const SESSION_PROVIDERS = ["claude", "codex"] as const;
+export const SESSION_PROVIDERS = ["claude", "codex", "pi"] as const;
 
 /** Which harness a session talks to. Stored apart from the provider's own session id, so the provider can change mid-task. */
 export const SessionProvider = Schema.Literals(SESSION_PROVIDERS);

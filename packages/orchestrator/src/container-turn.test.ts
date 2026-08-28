@@ -458,7 +458,11 @@ const forbiddenProvider: AgentProvider = {
 
 const registryLayer = Layer.succeed(
   ProviderRegistry,
-  makeProviderRegistry({ claude: forbiddenProvider, codex: forbiddenProvider })
+  makeProviderRegistry({
+    claude: forbiddenProvider,
+    codex: forbiddenProvider,
+    pi: forbiddenProvider,
+  })
 );
 
 const telemetry = Telemetry.layer({ serviceName: APPLICATION_NAME });

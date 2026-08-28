@@ -19,18 +19,18 @@
  *
  * Not exported, deliberately, and each for its own reason.
  *
- * The two provider implementations. `claudeProvider` and `codexProvider` are
- * reachable only through the registry, because the registry is where the wide
+ * The three provider implementations. `claudeProvider`, `codexProvider` and
+ * `piProvider` are reachable only through the registry, because that is where the wide
  * event is attached: a caller holding a bare provider could run a turn that
  * leaves no row, and "exactly one row per invocation" is not a property that
  * survives being optional. Selection is by the `SessionProvider` on a session
  * row, which is the only thing the orchestrator has anyway.
  *
- * Each vendor's own protocol. The SDK message normalizers, the Codex JSONL
- * stepper, the per-vendor transcript parsers and both `PROVIDER_ID` constants
- * stay inside — they are the shape of somebody else's release notes, and two of
- * them share a name. `parseTranscript` dispatches on the provider, which is all
- * a reader needs.
+ * Each vendor's own protocol. The SDK message normalizers, the Codex and Pi
+ * JSONL steppers, the per-vendor transcript parsers and all three `PROVIDER_ID`
+ * constants stay inside — they are the shape of somebody else's release notes,
+ * and they share a name. `parseTranscript` dispatches on the provider, which is
+ * all a reader needs.
  *
  * The Claude settings layer. `DEFAULT_CLAUDE_SETTINGS` and its merge are a
  * hardening decision about one vendor's permission model, applied by the harness
@@ -117,6 +117,7 @@ export {
 } from "./executor-mcp";
 export type { ClaudeMcpServers } from "./mcp-servers";
 export {
+  AGENT_HOME_CREDENTIAL_FILE,
   AGENT_HOME_DIR_ENV_VAR,
   AGENT_HOME_ENV_VAR,
   ATM_ROOT_MARKER,
