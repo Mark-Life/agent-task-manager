@@ -202,6 +202,11 @@ const epochMillisOf = (value: number | undefined) => {
  * instead of an `Unknown` nobody notices.
  */
 const CLASS_OF_SDK_ERROR = {
+  // Arrived with SDK 0.3.252. Grouped with `oauth_org_not_allowed` rather than
+  // with `billing_error`: both are an account barred from the API while its
+  // credentials are perfectly valid, and neither is fixed by waiting or by
+  // anything the run can do — a human has to go and lift it.
+  account_on_hold: "Unauthenticated",
   authentication_failed: "Unauthenticated",
   billing_error: "QuotaExhausted",
   invalid_request: "Unknown",
