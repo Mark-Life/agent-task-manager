@@ -1,5 +1,8 @@
 import type { RunEvent } from "@workspace/api";
 import { type RunEventKind, RunEventPayload } from "@workspace/domain";
+import { memo } from "react";
+import { Facts } from "@/features/task/chat-parts";
+import { sameEventRow } from "@/features/task/run-row";
 import {
   formatAbsolute,
   formatCost,
@@ -45,8 +48,8 @@ const timeOf = (event: RunEvent) =>
  * would flatten all of them into the same shape. Text arrives already clipped
  * by the ingest, and the clip is shown rather than hidden.
  */
-export const TimelineEvent = ({ event }: { readonly event: RunEvent }) => (
-  <li className="flex gap-3 text-xs">
+const TimelineEventBody = ({ event }: { readonly event: RunEvent }) => (
+  <li className="flex gap-3 text-xs [contain-intrinsic-size:auto_1.5rem] [content-visibility:auto]">
     <span className="w-20 shrink-0 pt-px text-muted-foreground tabular-nums">
       {timeOf(event)}
     </span>
@@ -64,6 +67,15 @@ export const TimelineEvent = ({ event }: { readonly event: RunEvent }) => (
     </div>
   </li>
 );
+
+/**
+ * One row, redrawn only when what it draws changes.
+ *
+ * A live run is polled and every poll decodes its pages afresh, so without this
+ * every row in a two-thousand-event timeline re-renders every three seconds.
+ * See `run-row.ts` for what counts as the same row.
+ */
+export const TimelineEvent = memo(TimelineEventBody, sameEventRow);
 
 /**
  * The part of an event that differs by kind. Exhaustive over the union the
@@ -97,7 +109,7 @@ const EventBody = ({ payload }: { readonly payload: RunEventPayload }) =>
     ),
 
     finished: (done) => (
-      <Facts
+      <FactRow
         items={[
           done.outcome,
           formatDuration(done.durationMs),
@@ -121,11 +133,11 @@ const EventBody = ({ payload }: { readonly payload: RunEventPayload }) =>
     ),
 
     reasoning: (thought) => (
-      <Facts items={[`${thought.chars} chars of reasoning`]} />
+      <FactRow items={[`${thought.chars} chars of reasoning`]} />
     ),
 
     started: (start) => (
-      <Facts
+      <FactRow
         items={[
           start.provider,
           start.model,
@@ -136,7 +148,7 @@ const EventBody = ({ payload }: { readonly payload: RunEventPayload }) =>
     ),
 
     stopped: (kill) => (
-      <Facts items={[`asked for by the ${kill.requestedByKind}`]} />
+      <FactRow items={[`asked for by the ${kill.requestedByKind}`]} />
     ),
 
     tool_call: (call) => (
@@ -158,7 +170,7 @@ const EventBody = ({ payload }: { readonly payload: RunEventPayload }) =>
     ),
 
     usage: (reading) => (
-      <Facts
+      <FactRow
         items={[
           `${formatTokens(reading.inputTokens)} in`,
           `${formatTokens(reading.outputTokens)} out`,
@@ -173,16 +185,12 @@ const EventBody = ({ payload }: { readonly payload: RunEventPayload }) =>
   });
 
 /**
- * A row of small facts with the absent ones dropped rather than drawn as
- * blanks. Nullable economics come through here, which is why a null is nothing
- * at all and never a zero.
+ * A row of small facts, shared with the conversation reading so the same event
+ * is worded the same way in both. The frame is the table's own: one line of
+ * muted text, which is what a dense reading of eleven kinds needs it to be.
  */
-const Facts = ({ items }: { readonly items: readonly (string | null)[] }) => (
+const FactRow = ({ items }: { readonly items: readonly (string | null)[] }) => (
   <div className="flex flex-wrap items-baseline gap-2 text-muted-foreground">
-    {items
-      .filter((item) => item !== null && item !== "")
-      .map((item) => (
-        <span key={item}>{item}</span>
-      ))}
+    <Facts items={items} />
   </div>
 );

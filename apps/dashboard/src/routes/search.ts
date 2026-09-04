@@ -117,3 +117,23 @@ const BY_NAME: Record<string, TaskTab> = {
 /** The panel a URL asks for, or undefined when it asks for nothing sensible. */
 export const parseTaskTab = (value: unknown) =>
   typeof value === "string" ? BY_NAME[value] : undefined;
+
+/**
+ * The two readings of a run's event stream.
+ *
+ * Chat first, and what a run opens on: the question a reader arrives with is
+ * what the agent did, and a conversation answers that where a line per event
+ * makes them assemble it. The table is the second reading, for when the first
+ * has smoothed over the thing they need — and it is in the URL rather than in
+ * the panel's own state for the same reason the open tab is, because a link to
+ * a run is something one operator sends another and it should open the way the
+ * sender was reading it.
+ */
+export const RUN_VIEWS = ["chat", "table"] as const;
+
+/** Which reading of a run is on screen. */
+export type RunView = (typeof RUN_VIEWS)[number];
+
+/** The reading a URL asks for, or undefined when it asks for nothing sensible. */
+export const parseRunView = (value: unknown) =>
+  RUN_VIEWS.find((view) => view === value);
