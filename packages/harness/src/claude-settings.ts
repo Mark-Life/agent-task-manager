@@ -96,6 +96,17 @@ export const DENIED_TOOLS: readonly string[] = [
 ];
 
 /**
+ * The output style every run starts in.
+ *
+ * A built-in of the CLI rather than anything this repo ships, which is why it
+ * is a bare string and why the CLI version matters: `Concise` was added in
+ * Claude Code 2.1.237, and an older binary resolves the name to nothing. The
+ * pin that keeps it real is `CLAUDE_CODE_VERSION` in `docker/base.Dockerfile`,
+ * held to the CLI version the pinned `@anthropic-ai/claude-agent-sdk` bundles.
+ */
+export const CONCISE_OUTPUT_STYLE = "Concise";
+
+/**
  * The base settings for a worker run.
  *
  * What goes off is everything that leaves the container. The claude.ai
@@ -109,12 +120,26 @@ export const DENIED_TOOLS: readonly string[] = [
  * actually gives it, the operator's shared directory and the repository's own,
  * and stops paying context for a document-authoring set a repository task never
  * calls.
+ *
+ * {@link CONCISE_OUTPUT_STYLE} is the one entry here that is about the run's
+ * writing rather than its reach. A worker's final message is posted to a card
+ * and built into a pull request body, and the Default style pads that with
+ * preamble a reader of a card does not want. Concise is documented to leave
+ * engineering work as thorough as Default and to keep error reports, security
+ * warnings and destructive-action confirmations at full length, so what it
+ * shortens is the narration around the work rather than the work.
+ *
+ * Two things it does not do. It is part of the system prompt, so it is read
+ * once at session start and a resumed session keeps the style it began with.
+ * And it applies to the main conversation only — a delegated subagent runs its
+ * own system prompt, so nothing here shortens what a subagent writes back.
  */
 export const DEFAULT_CLAUDE_SETTINGS: Settings = {
   disableArtifact: true,
   disableBundledSkills: true,
   disableClaudeAiConnectors: true,
   disableRemoteControl: true,
+  outputStyle: CONCISE_OUTPUT_STYLE,
   permissions: { deny: [...DENIED_TOOLS] },
 };
 

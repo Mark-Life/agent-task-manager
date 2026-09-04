@@ -13,6 +13,7 @@ import { describe, expect, test } from "bun:test";
 import { ConfigProvider, Effect } from "effect";
 import {
   CLAUDE_SETTINGS_ENV_VAR,
+  CONCISE_OUTPUT_STYLE,
   DEFAULT_CLAUDE_EFFORT,
   DEFAULT_CLAUDE_SETTINGS,
   DENIED_TOOLS,
@@ -44,6 +45,11 @@ describe("DEFAULT_CLAUDE_SETTINGS", () => {
   test("drops the shipped skills, and leaves workflows alone", () => {
     expect(DEFAULT_CLAUDE_SETTINGS.disableBundledSkills).toBe(true);
     expect(DEFAULT_CLAUDE_SETTINGS.disableWorkflows).toBeUndefined();
+  });
+
+  test("starts every run in the concise output style", () => {
+    expect(DEFAULT_CLAUDE_SETTINGS.outputStyle).toBe(CONCISE_OUTPUT_STYLE);
+    expect(CONCISE_OUTPUT_STYLE).toBe("Concise");
   });
 });
 
@@ -123,6 +129,17 @@ describe("readClaudeSettings", () => {
     if (exit._tag === "Success") {
       expect(exit.value.permissions?.deny).toEqual(["NotebookEdit"]);
       expect(exit.value.disableBundledSkills).toBe(true);
+      expect(exit.value.disableClaudeAiConnectors).toBe(true);
+    }
+  });
+
+  test("an overlay turns the concise style back off, with no code for it", async () => {
+    const exit = await settingsFrom({
+      [CLAUDE_SETTINGS_ENV_VAR]: '{"outputStyle":"Default"}',
+    });
+    expect(exit._tag).toBe("Success");
+    if (exit._tag === "Success") {
+      expect(exit.value.outputStyle).toBe("Default");
       expect(exit.value.disableClaudeAiConnectors).toBe(true);
     }
   });

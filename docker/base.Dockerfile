@@ -65,7 +65,7 @@ ARG RIPGREP_SHA256=a740b91c82eaf9914cfedd353572f2791cbe0162c84101ee0951058f4dcbc
 # `@anthropic-ai/claude-agent-sdk` release the harness depends on: the SDK
 # speaks a protocol version, and a CLI from a different release is the one
 # mismatch that produces a turn which starts fine and then stops making sense.
-ARG CLAUDE_CODE_VERSION=2.1.220
+ARG CLAUDE_CODE_VERSION=2.1.252
 
 # The Codex CLI. `packages/harness/src/codex.ts` spawns `codex` off PATH rather
 # than going through `@openai/codex-sdk`, so this — not the SDK — is what a
