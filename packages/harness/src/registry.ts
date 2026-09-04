@@ -28,6 +28,7 @@ import { readClaudeSettings } from "./claude-settings";
 import { codexProvider } from "./codex";
 import type { HarnessError } from "./errors";
 import type { AgentEvent } from "./events";
+import { piProvider } from "./pi";
 import {
   type AgentProvider,
   makeProviderRegistry,
@@ -111,17 +112,20 @@ export const instrumented = (provider: AgentProvider): AgentProvider => ({
  *
  * Only Claude takes a settings argument, because only Claude has a settings file
  * to override: Codex reads its own configuration and the harness renders it per
- * run.
+ * run, and Pi reads its own out of the agent home, which is the operator's and
+ * is where this card deliberately left it.
  */
 export const providerTableWith = (claudeSettings: Settings): ProviderTable => ({
   claude: instrumented(makeClaudeProvider(claudeSettings)),
   codex: instrumented(codexProvider),
+  pi: instrumented(piProvider),
 });
 
 /** The table under the hardened defaults, with nothing read from anywhere. */
 export const providerTable: ProviderTable = {
   claude: instrumented(claudeProvider),
   codex: instrumented(codexProvider),
+  pi: instrumented(piProvider),
 };
 
 /** The registry over {@link providerTable}. Pure, and built once. */

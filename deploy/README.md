@@ -137,14 +137,16 @@ into the account you meant — and the loop reads exactly the same files, so a
 provider that prints "no signal" here is one the board will dispatch against
 blind and show as unavailable on the dashboard.
 
-The paths must match `ATM_AGENT_HOME_DIR_CLAUDE` / `ATM_AGENT_HOME_DIR_CODEX` in
-`loop.env`, be mode `0700`, and be owned by the uid the loop's containers run as
+The paths must match `ATM_AGENT_HOME_DIR_CLAUDE` / `ATM_AGENT_HOME_DIR_CODEX` /
+`ATM_AGENT_HOME_DIR_PI` in `loop.env` (Pi's only if you run it — it has no
+subscription and so nothing for `quota:check` to read), be mode `0700`, and be
+owned by the uid the loop's containers run as
 — which is the loop's own, because a bind mount does no id translation. From
 then on the containers refresh the tokens in place and nothing re-seeds them.
 
-**8. Sandbox images and the two bundles.** The loop starts containers from
+**8. Sandbox images and the bundles.** The loop starts containers from
 images that exist only once somebody builds them; a loop without them fails
-every run it picks up. Minutes, and it needs the daemon. The two bundles are
+every run it picks up. Minutes, and it needs the daemon. The bundles are
 mounted read-only into each run rather than baked into the image, because they
 change with the code and the image does not — so they are rebuilt on every
 deploy, and a missing one fails the run by name. Rebuilding while runs are going
@@ -155,7 +157,7 @@ container that is already up keeps the file it started with.
 cd /opt/agent-task-manager
 sudo -u atm bun run images:build
 sudo -u atm bun run entrypoint:build   # ${DATA_ROOT}/bin/turn.js — the container's turn
-sudo -u atm bun run agent-mcp:build    # ${DATA_ROOT}/bin/agent-mcp.js — the board tools
+sudo -u atm bun run agent-mcp:build    # ${DATA_ROOT}/bin/agent-mcp.js and atm-pi-extension.js — the board tools
 ```
 
 `images:build` also sweeps: the image's dated tags beyond the newest two, and
@@ -333,8 +335,9 @@ Three things differ from the install above and are easy to miss.
 - **The units are `ProtectSystem=full`, not `strict`.** The checkout, the data
   root and the agent homes are all under `$HOME`, and `strict` would make every
   one of them read-only.
-- **The agent homes keep their defaults**, `~/.claude-task-management` and
-  `~/.codex-task-management`, because the service *is* the operator — so
+- **The agent homes keep their defaults**, `~/.claude-task-management`,
+  `~/.codex-task-management` and `~/.pi-task-management`, because the service
+  *is* the operator — so
   `ATM_AGENT_HOME_DIR_*` can stay unset and `bun run agent-home:login` creates
   them at the right mode.
 - **`DATA_ROOT` must be the same absolute path the build scripts write to.**

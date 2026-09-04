@@ -31,6 +31,7 @@ import {
   outcomeOfClass,
 } from "./errors";
 import { type AgentEvent, costUsdOf } from "./events";
+import { commandLabel, isRecord, stringOf, urlLabel } from "./tool-summary";
 
 /** This harness's name in the domain's provider union. */
 export const PROVIDER_ID: SessionProvider = "claude";
@@ -73,25 +74,6 @@ const TOOL_SUMMARY_FIELD: Readonly<Record<string, string>> = {
   Write: "file_path",
 };
 
-/**
- * Leading words of a shell command kept as its label.
- *
- * Three, because two is the width of a runner and not of a command: `bun run`,
- * `npm run` and `git submodule` all say nothing about what ran, and every
- * `bun run <script>` in the repository collapsed into one indistinguishable
- * row. The third word is what a reader is actually grouping by. It costs
- * nothing in safety — the bare-word rule below still stops at the first word
- * that could hold a value, and a positional secret in third place would already
- * have been reachable in second.
- */
-const COMMAND_LABEL_WORDS = 3;
-
-/** A word safe to show: no quotes, no separators, nothing that holds a value. */
-const BARE_WORD = /^[\w./-]+$/;
-
-/** Whitespace between the words of a shell command. */
-const WHITESPACE = /\s+/;
-
 /** Milliseconds in a second, for reading the rate-limit reset stamp. */
 const MILLIS_PER_SECOND = 1000;
 
@@ -100,48 +82,6 @@ const MILLIS_PER_SECOND = 1000;
  * and below it it cannot be milliseconds, since that would be before 1973.
  */
 const EPOCH_SECONDS_CEILING = 1e11;
-
-/** The text of a value that is supposed to be a string, and often is not. */
-const stringOf = (value: unknown) => (typeof value === "string" ? value : "");
-
-/**
- * Whether a tool's input is the open bag every caller here reads it as. The SDK
- * declares `ToolUseBlock.input` as `unknown`, so what a tool actually sent is
- * only known once something has looked.
- */
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-/**
- * A shell command reduced to its verb. The argv never travels: a `git push` or
- * a `gh api` line carries a token often enough that the only safe rule is to
- * keep the program and what it was asked to do — {@link COMMAND_LABEL_WORDS}
- * words at most — and stop at the first word that is not a bare one.
- */
-const commandLabel = (command: string) => {
-  const kept: string[] = [];
-  for (const word of command.trim().split(WHITESPACE)) {
-    if (
-      kept.length >= COMMAND_LABEL_WORDS ||
-      word.startsWith("-") ||
-      !BARE_WORD.test(word)
-    ) {
-      break;
-    }
-    kept.push(word);
-  }
-  return kept.join(" ");
-};
-
-/** A URL without its query or fragment, which is where a signed link hides. */
-const urlLabel = (value: string) => {
-  try {
-    const url = new URL(value);
-    return `${url.origin}${url.pathname}`;
-  } catch {
-    return "";
-  }
-};
 
 /** The short description of a tool call a reader wants, and nothing more. */
 const toolSummary = (

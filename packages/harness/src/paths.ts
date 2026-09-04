@@ -80,6 +80,7 @@ export const CLAUDE_INSTRUCTIONS_IMPORT = `@${AGENTS_INSTRUCTIONS_FILE}\n`;
 export const AGENT_HOME_ENV_VAR = {
   claude: "CLAUDE_CONFIG_DIR",
   codex: "CODEX_HOME",
+  pi: "PI_CODING_AGENT_DIR",
 } as const satisfies Record<SessionProvider, string>;
 
 /**
@@ -95,12 +96,25 @@ export const AGENT_HOME_ENV_VAR = {
 export const AGENT_HOME_DIR_ENV_VAR = {
   claude: "ATM_AGENT_HOME_DIR_CLAUDE",
   codex: "ATM_AGENT_HOME_DIR_CODEX",
+  pi: "ATM_AGENT_HOME_DIR_PI",
 } as const satisfies Record<SessionProvider, string>;
+
+/**
+ * The file Pi keeps its credentials in, inside its config directory.
+ *
+ * Named here rather than in the Pi harness because two readers that never meet
+ * want it: the login hint below tells an operator where to write a key, and
+ * `scripts/harness-check.ts` looks for it. It is the only one of the three
+ * vendors' credential files this package spells out, and only because the hint
+ * quotes a path.
+ */
+export const PI_AUTH_FILE = "auth.json";
 
 /** What each provider's system-owned home is called under the operator's home directory. */
 const AGENT_HOME_DIR_NAME = {
   claude: ".claude-task-management",
   codex: ".codex-task-management",
+  pi: ".pi-task-management",
 } as const satisfies Record<SessionProvider, string>;
 
 /**
@@ -116,32 +130,84 @@ const AGENT_HOME_DIR_NAME = {
 export const defaultAgentHomeDirOf = (provider: SessionProvider) =>
   join(homedir(), AGENT_HOME_DIR_NAME[provider]);
 
+/**
+ * What each provider's login looks like on disk, as a name to test for.
+ *
+ * Claude keeps its tokens in `.credentials.json` on any host with no keychain,
+ * which is every container — so that is the file the shared home must hold even
+ * on a Mac, and `scripts/agent-home-login.ts` is what puts it there. Codex and
+ * Pi both keep theirs in `auth.json`, in their own directories and in their own
+ * shapes; the shared name is a coincidence of two vendors, not a shared format.
+ *
+ * Existence is the whole of what a caller should ask. The contents are a live
+ * credential, and nothing in this system has a reason to read one.
+ *
+ * **Pi is the one where absence is not conclusive.** Pi also takes its key from
+ * the environment — `OPENROUTER_API_KEY` and the two dozen others in its
+ * provider table — so a Pi home with no `auth.json` may still run every turn it
+ * is asked to. A caller that treats this as a hard gate should say which of the
+ * two it is checking; see `scripts/harness-check.ts`, which reports Pi's as a
+ * note and not as a failed claim.
+ */
+export const AGENT_HOME_CREDENTIAL_FILE = {
+  claude: ".credentials.json",
+  codex: "auth.json",
+  pi: PI_AUTH_FILE,
+} as const satisfies Record<SessionProvider, string>;
+
+/**
+ * The one-time login a missing or empty agent home is fixed by.
+ *
+ * A record rather than a chain of conditionals, so a fourth provider is a build
+ * error here and not a run told to log into Codex.
+ *
+ * Pi's line names two routes because Pi has two, and the cheap one is the point
+ * of running it: the interactive `/login` writes the same `auth.json` that a
+ * hand-written `{"openrouter": {"type": "api_key", "key": "…"}}` does, and a
+ * host that already exports `OPENROUTER_API_KEY` needs neither. What the
+ * directory still has to be is *there*: Pi files every session under it, which
+ * is where {@link transcriptDirOf} looks, so an absent home is a run whose
+ * transcript can never be found — the same dispatch failure it is for the other
+ * two, arrived at for a different reason.
+ */
+const AGENT_HOME_LOGIN_HINT = {
+  claude: (dir: string) =>
+    `run \`CLAUDE_CONFIG_DIR=${dir} claude\` once and use /login`,
+  codex: (dir: string) => `run \`CODEX_HOME=${dir} codex login\` once`,
+  pi: (dir: string) =>
+    `run \`PI_CODING_AGENT_DIR=${dir} pi\` once and use /login, or write ${join(dir, PI_AUTH_FILE)} by hand as \`{"<provider>": {"type": "api_key", "key": "…"}}\``,
+} as const satisfies Record<SessionProvider, (dir: string) => string>;
+
 /** The one-time login a missing or empty agent home is fixed by. */
 export const agentHomeLoginHint = (
   provider: SessionProvider,
   agentHomeDir: string
-) =>
-  provider === "claude"
-    ? `run \`CLAUDE_CONFIG_DIR=${agentHomeDir} claude\` once and use /login`
-    : `run \`CODEX_HOME=${agentHomeDir} codex login\` once`;
+) => AGENT_HOME_LOGIN_HINT[provider](agentHomeDir);
 
 /** Where each provider writes transcripts, relative to its agent home. */
 const TRANSCRIPT_SUBDIR = {
   claude: "projects",
   codex: "sessions",
+  pi: "sessions",
 } as const satisfies Record<SessionProvider, string>;
 
 /**
  * How each provider names transcript files under its transcript directory,
  * as a glob. Documentation for the reader, which scans rather than composing a
  * path: Claude nests one directory per workspace and names the file after the
- * session id, Codex nests year/month/day and names it after the rollout. Both
- * conventions belong to the vendors, so a reader that scans keeps working when
- * one of them changes the nesting.
+ * session id, Codex nests year/month/day and names it after the rollout, and Pi
+ * nests one directory per working directory — `--tmp-run-workspace--`, the path
+ * with its separators flattened — and names the file
+ * `<timestamp>_<session-id>.jsonl`. Both halves of Pi's name matter to the
+ * reader: the id is in it, which is what makes the scan addressable, and the
+ * timestamp is in front of it, which is why the scan cannot be a composed path.
+ * All three conventions belong to the vendors, so a reader that scans keeps
+ * working when one of them changes the nesting.
  */
 export const TRANSCRIPT_GLOB = {
   claude: "*/*.jsonl",
   codex: "*/*/*/rollout-*.jsonl",
+  pi: "*/*.jsonl",
 } as const satisfies Record<SessionProvider, string>;
 
 /** The directories and files one run owns, under whichever root is looking. */

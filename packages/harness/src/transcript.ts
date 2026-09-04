@@ -41,6 +41,7 @@ import { FileSystem } from "effect/FileSystem";
 import { TRANSCRIPT_GLOB, transcriptDirOf } from "./paths";
 import { parseClaudeTranscript } from "./transcript-claude";
 import { parseCodexTranscript } from "./transcript-codex";
+import { parsePiTranscript } from "./transcript-pi";
 
 /**
  * What produced one line of the conversation. Deliberately not the providers'
@@ -205,6 +206,7 @@ export const transcriptChars = (entries: readonly TranscriptEntry[]) =>
 const PARSERS = {
   claude: parseClaudeTranscript,
   codex: parseCodexTranscript,
+  pi: parsePiTranscript,
 } as const satisfies Record<
   SessionProvider,
   (lines: readonly string[]) => Transcript

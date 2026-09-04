@@ -28,6 +28,7 @@ import { formatRelative } from "@/lib/format";
 const PROVIDER_NAMES = {
   claude: "Claude",
   codex: "Codex",
+  pi: "Pi",
 } as const satisfies Record<SessionProvider, string>;
 
 /**

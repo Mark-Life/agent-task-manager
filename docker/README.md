@@ -2,7 +2,7 @@
 
 One arm64 image. Every run gets a container from it, and everything that
 container can do is what was baked in here: bun, node, git, `gh`, ripgrep,
-`python3`, `jq`, `bc`, the Claude CLI, the Codex CLI, Chromium and
+`python3`, `jq`, `bc`, the Claude CLI, the Codex CLI, the Pi CLI, Chromium and
 `agent-browser`.
 
 `atm.local` is a registry that does not exist, deliberately. A bare name like
@@ -117,9 +117,12 @@ What a rebuild picks up:
 Bumping an agent CLI is an edit, not a schedule. `CLAUDE_CODE_VERSION` is held
 to the `claudeCodeVersion` that `@anthropic-ai/claude-agent-sdk` declares in
 `packages/harness`, and `CODEX_VERSION` to the version of `@openai/codex-sdk`
-pinned beside it — both harnesses parse a protocol that is versioned with the
-binary, so a CLI ahead of the harness is a turn that starts fine and then stops
-making sense.
+pinned beside it. `PI_VERSION` has no SDK to be held to — the Pi harness parses
+`pi --mode json` and nothing else — so it is pinned to the release the
+normalizer's fixtures in `packages/harness/src/pi-events.test.ts` were captured
+from. All three harnesses parse a protocol that is versioned with the binary, so
+a CLI ahead of the harness is a turn that starts fine and then stops making
+sense.
 
 ## What is in the image, and why
 

@@ -58,6 +58,7 @@ import process from "node:process";
 import { BunFileSystem, BunRuntime } from "@effect/platform-bun";
 import { newRunId, type RunId, type SessionProvider } from "@workspace/domain";
 import {
+  AGENT_HOME_CREDENTIAL_FILE,
   AGENT_HOME_DIR_ENV_VAR,
   type AgentEvent,
   agentHomeLoginHint,
@@ -297,18 +298,25 @@ const agentHomeDirOf = (provider: SessionProvider) =>
   );
 
 /**
- * What each provider's login looks like on disk, as a name to test for.
+ * Whether a missing credential file is a failed claim or a note.
  *
- * Claude keeps the tokens in `.credentials.json` on any host with no keychain,
- * which is every container — so that is the file the shared home must hold even
- * on a Mac, and `scripts/agent-home-login.ts` is what puts it there. Codex keeps
- * everything in `auth.json`. Existence only: the contents are a live
- * subscription token and this script has no reason to read one.
+ * It is a failure for the two subscription providers: their only credential is
+ * the one in the home, so an absent file is a container that boots and reports
+ * an auth error nobody can tell from an expired token.
+ *
+ * Pi is the exception, and it is not a weakening. Pi reads its key from
+ * `auth.json` *or* from the environment — `OPENROUTER_API_KEY` and two dozen
+ * others — so a Pi home with no `auth.json` is the ordinary shape of a host
+ * that exports its key, and failing on it would refuse the configuration this
+ * provider exists to make possible. What is still a hard failure for Pi is the
+ * directory itself: Pi files every session under it, so an absent home is a run
+ * whose transcript can never be found.
  */
-const CREDENTIAL_FILE = {
-  claude: ".credentials.json",
-  codex: "auth.json",
-} as const satisfies Record<SessionProvider, string>;
+const CREDENTIAL_REQUIRED = {
+  claude: true,
+  codex: true,
+  pi: false,
+} as const satisfies Record<SessionProvider, boolean>;
 
 /** One provider's turn, streamed to stdout as it arrives. */
 const streamTurn = (input: {
@@ -490,11 +498,23 @@ const checkAgentHome = Effect.fnUntraced(function* (input: {
     ok: ours,
     step: `${provider}'s agent home exists and is ours`,
   });
-  yield* check({
-    detail: `no ${CREDENTIAL_FILE[provider]} under ${agentHomeDir} — ${fix}`,
-    ok: existsSync(join(agentHomeDir, CREDENTIAL_FILE[provider])),
-    step: `${provider}'s agent home holds a credential`,
-  });
+  const credentialFile = AGENT_HOME_CREDENTIAL_FILE[provider];
+  const hasCredential = existsSync(join(agentHomeDir, credentialFile));
+  if (CREDENTIAL_REQUIRED[provider]) {
+    yield* check({
+      detail: `no ${credentialFile} under ${agentHomeDir} — ${fix}`,
+      ok: hasCredential,
+      step: `${provider}'s agent home holds a credential`,
+    });
+  } else {
+    yield* Effect.logInfo(
+      `      ${
+        hasCredential
+          ? `credential ${credentialFile} present`
+          : `no ${credentialFile}: this provider also takes its key from the environment, so this is a note and not a failure — ${fix}`
+      }`
+    );
+  }
   yield* Effect.logInfo(
     `      home ${agentHomeDir}, overridable with ${AGENT_HOME_DIR_ENV_VAR[provider]}`
   );
@@ -575,7 +595,7 @@ const checkSelection = Effect.fnUntraced(function* (
   for (const harness of registry.list) {
     const flags = harness.capabilities;
     yield* Effect.logInfo(
-      `      ${harness.id.padEnd(PROVIDER_COLUMN)} ${harness.displayName}: cost=${flags.cost} hooks=${flags.hooks} resume=${flags.resume} rate-limit-signal=${flags.rateLimitSignal}`
+      `      ${harness.id.padEnd(PROVIDER_COLUMN)} ${harness.displayName}: cost=${flags.cost} hooks=${flags.hooks} resume=${flags.resume} rate-limit-signal=${flags.rateLimitSignal} reasoning=${flags.reasoning} subagents=${flags.subagents}`
     );
     yield* check({
       detail: `the registry answers ${registry.get(harness.id).id} for ${harness.id}`,

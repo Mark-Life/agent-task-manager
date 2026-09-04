@@ -9,7 +9,8 @@ their events to the same place. See [`.docs/plan/04-agent-runtime.md`](.docs/pla
 
 ## Getting it running
 
-You need Bun, Docker, and the `claude` and `codex` CLIs logged in.
+You need Bun, Docker, and the `claude` and `codex` CLIs logged in. The `pi` CLI is optional
+and needs an API key rather than a login; see [agent homes](.docs/agent-homes.md).
 
 ```bash
 bun install
@@ -23,7 +24,7 @@ the run path creates or seeds it — that is deliberate, and the reasoning is in
 [`.docs/agent-homes.md`](.docs/agent-homes.md).
 
 ```bash
-bun run agent-home:login                              # creates both, says what each still needs
+bun run agent-home:login                              # creates all three, says what each still needs
 CLAUDE_CONFIG_DIR=~/.claude-task-management claude    # then /login
 CODEX_HOME=~/.codex-task-management codex login
 bun run harness:check --live                          # proves a real turn can run

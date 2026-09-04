@@ -231,7 +231,11 @@ const providerOf = (input: {
 /** The registry, with both providers answering with the same scripted turn. */
 const registryLayer = (input: Parameters<typeof providerOf>[0]) => {
   const provider = providerOf(input);
-  const table: ProviderTable = { claude: provider, codex: provider };
+  const table: ProviderTable = {
+    claude: provider,
+    codex: provider,
+    pi: provider,
+  };
   return Layer.succeed(ProviderRegistry, makeProviderRegistry(table));
 };
 

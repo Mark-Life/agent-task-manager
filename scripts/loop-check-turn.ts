@@ -86,6 +86,7 @@ const artifactsDir = (options: RunOptions) =>
 const stubRegistry = makeProviderRegistry({
   claude: instrumented(stubProvider({ artifactsDir, id: "claude" })),
   codex: instrumented(stubProvider({ artifactsDir, id: "codex" })),
+  pi: instrumented(stubProvider({ artifactsDir, id: "pi" })),
 });
 
 const turnLayer = Layer.mergeAll(

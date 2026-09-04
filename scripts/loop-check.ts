@@ -279,7 +279,11 @@ const registryLayer = (mode: RegistryMode) => {
   };
   return Layer.succeed(
     ProviderRegistry,
-    makeProviderRegistry({ claude: make("claude"), codex: make("codex") })
+    makeProviderRegistry({
+      claude: make("claude"),
+      codex: make("codex"),
+      pi: make("pi"),
+    })
   );
 };
 

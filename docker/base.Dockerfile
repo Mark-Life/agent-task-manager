@@ -74,6 +74,13 @@ ARG CLAUDE_CODE_VERSION=2.1.220
 # the binary.
 ARG CODEX_VERSION=0.146.0
 
+# The Pi CLI. `packages/harness/src/pi.ts` spawns `pi` off PATH and parses the
+# `--mode json` event stream, which is versioned with the binary — so this arg
+# is what a Pi run actually executes and what the normalizer is written against.
+# Pinned rather than floating for the same reason as the other two: the event
+# names are somebody else's release notes.
+ARG PI_VERSION=0.84.3
+
 # The browser automation CLI the agent drives. Its own binary is downloaded by a
 # postinstall script from a GitHub release, so that layer needs the network and
 # the version is what pins it.
@@ -180,13 +187,16 @@ RUN set -eu; \
   install -m 0755 "/tmp/ripgrep-${RIPGREP_VERSION}-aarch64-unknown-linux-gnu/rg" /usr/local/bin/rg; \
   rm -rf "/tmp/ripgrep-${RIPGREP_VERSION}-aarch64-unknown-linux-gnu" /tmp/rg.tar.gz
 
-# Both agent CLIs, installed globally so they resolve on PATH for any user.
-# Each ships its real binary in a per-platform optional dependency, so npm
-# resolves the aarch64 build here and the postinstall only links it.
+# All three agent CLIs, installed globally so they resolve on PATH for any user.
+# Claude and Codex each ship their real binary in a per-platform optional
+# dependency, so npm resolves the aarch64 build here and the postinstall only
+# links it; Pi is plain JavaScript with a `pi` bin, so nothing is downloaded
+# for it at install time.
 RUN set -eu; \
   npm install -g --no-audit --no-fund \
   "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-  "@openai/codex@${CODEX_VERSION}"; \
+  "@openai/codex@${CODEX_VERSION}" \
+  "@earendil-works/pi-coding-agent@${PI_VERSION}"; \
   npm cache clean --force
 
 # Chromium, plus the two things apt will not pull in for it.
@@ -293,7 +303,7 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
 # What each pinned version actually was, readable with `docker image inspect`
 # and without starting a container.
 LABEL org.opencontainers.image.title="atm sandbox base" \
-  org.opencontainers.image.description="Sandbox image for agent-task-manager runs: bun, node, git, gh, ripgrep, python3, jq, bc, Claude Code, Codex, Chromium and agent-browser." \
+  org.opencontainers.image.description="Sandbox image for agent-task-manager runs: bun, node, git, gh, ripgrep, python3, jq, bc, Claude Code, Codex, Pi, Chromium and agent-browser." \
   com.atm.image.kind="base" \
   com.atm.version.node="${NODE_VERSION}" \
   com.atm.version.bun="${BUN_VERSION}" \
@@ -301,6 +311,7 @@ LABEL org.opencontainers.image.title="atm sandbox base" \
   com.atm.version.ripgrep="${RIPGREP_VERSION}" \
   com.atm.version.claude_code="${CLAUDE_CODE_VERSION}" \
   com.atm.version.codex="${CODEX_VERSION}" \
+  com.atm.version.pi="${PI_VERSION}" \
   com.atm.version.agent_browser="${AGENT_BROWSER_VERSION}" \
   com.atm.user="${AGENT_UID}:${AGENT_GID}"
 
@@ -328,6 +339,7 @@ RUN set -eu; \
   bc --version; \
   claude --version; \
   codex --version; \
+  pi --version; \
   chromium --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
   --dump-dom about:blank > /dev/null; \
   agent-browser --version

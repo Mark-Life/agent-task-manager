@@ -77,7 +77,7 @@ const telemetryStub = Layer.succeed(
 const registryLayer = (provider: AgentProvider) =>
   Layer.succeed(
     ProviderRegistry,
-    makeProviderRegistry({ claude: provider, codex: provider })
+    makeProviderRegistry({ claude: provider, codex: provider, pi: provider })
   );
 
 const specFor = (runDir: string): TurnSpec => ({

@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 
 /**
- * Bundles the manager's MCP server to one file on the host.
+ * Bundles the manager's board tools to two files on the host: the MCP server the
+ * vendors that speak MCP launch, and the Pi extension for the one that does not.
  *
  * The same arrangement as the container entrypoint, for the same reason: the
  * image is rebuilt on a slow schedule and this code changes with the API
@@ -19,14 +20,15 @@
  * entry in one step while every mount already made keeps the inode it started
  * with.
  *
- * `--target=bun`, not `--compile`, exactly as the entrypoint's bundle: the
- * plain bundle is small, builds in about a second, and is readable by a person
- * on the host when a turn's tools misbehave.
+ * Plain bundles rather than `--compile`, exactly as the entrypoint's: they are
+ * small, build in about a second each, and are readable by a person on the host
+ * when a turn's tools misbehave. The two differ only in target — bun for the
+ * process, node for the module Pi imports.
  *
  * Usage:
  *
- *   bun run agent-mcp:build            bundle it
- *   bun run agent-mcp:build --check    whether it is there and how old; builds nothing
+ *   bun run agent-mcp:build            bundle both
+ *   bun run agent-mcp:build --check    whether they are there and how old; builds nothing
  *
  * The output path comes from `@workspace/agent-tools` rather than from a
  * string here, because the turn mounts what this writes: a second spelling is a
@@ -44,6 +46,8 @@ import * as BunPath from "@effect/platform-bun/BunPath";
 import {
   agentMcpBundlePathOf,
   agentMcpPendingPathOf,
+  piExtensionBundlePathOf,
+  piExtensionPendingPathOf,
 } from "@workspace/agent-tools";
 import { Config, Effect, Layer, Option, Schema, Stream } from "effect";
 import { FileSystem } from "effect/FileSystem";
@@ -56,9 +60,19 @@ const BUN = "bun";
 /** Where on-disk state lives when `DATA_ROOT` is unset, as the telemetry ledger has it. */
 const DEFAULT_DATA_ROOT = ".data";
 
-/** The executable that becomes the bundle. */
+/** The executable that becomes the MCP bundle. */
 const ENTRY = new URL("../packages/agent-tools/src/main.ts", import.meta.url)
   .pathname;
+
+/**
+ * The module that becomes the Pi extension. Loaded by node inside the `pi`
+ * process rather than started by bun, which is why it is bundled for a
+ * different target below.
+ */
+const PI_ENTRY = new URL(
+  "../packages/agent-tools/src/pi-extension.ts",
+  import.meta.url
+).pathname;
 
 /** Where the server's own sources live, for the staleness question below. */
 const SOURCE_DIR = new URL("../packages/agent-tools/src/", import.meta.url)
@@ -95,13 +109,28 @@ export const isCheckOnly = (argv: readonly string[]) =>
  * megabyte minification saves is worth less than a frame that still names the
  * function it came from.
  */
-export const bundleArgv = (outFile: string): readonly string[] => [
+export const bundleArgv = (artefact: Artefact): readonly string[] => [
   "build",
-  ENTRY,
-  "--target=bun",
+  artefact.entry,
+  `--target=${artefact.target}`,
   "--outfile",
-  outFile,
+  artefact.pending,
 ];
+
+/** One thing this script builds: what goes in, where it lands, and for which runtime. */
+export interface Artefact {
+  readonly entry: string;
+  /** The mounted path, which is what a rename swaps into place. */
+  readonly outFile: string;
+  /** Written first, so a rebuild never truncates a file a live container is reading. */
+  readonly pending: string;
+  /**
+   * `bun` for the MCP server, which bun starts as a process; `node` for the Pi
+   * extension, which Pi imports inside its own node process. A bun-targeted
+   * bundle loaded by node reaches for `bun:` builtins that are not there.
+   */
+  readonly target: "bun" | "node";
+}
 
 /**
  * Bun's process spawner and the two services it needs. Named rather than taken
@@ -132,14 +161,27 @@ const dataRoot = Config.string("DATA_ROOT").pipe(
   Config.withDefault(DEFAULT_DATA_ROOT)
 );
 
-/** The bundle's path, and the path a build in progress is written to first. */
-const bundlePaths = Effect.map(dataRoot, (root) => ({
-  outFile: agentMcpBundlePathOf(root),
-  pending: agentMcpPendingPathOf(root),
-}));
-
-/** The bundle's path, under whatever data root this host is using. */
-const bundlePath = Effect.map(bundlePaths, (paths) => paths.outFile);
+/**
+ * Both artefacts, under whatever data root this host is using.
+ *
+ * They are built together and never separately: they are one tool table
+ * compiled twice, so a host holding a fresh MCP bundle and a stale Pi extension
+ * would be two providers disagreeing about what the board offers.
+ */
+const artefacts = Effect.map(dataRoot, (root): readonly Artefact[] => [
+  {
+    entry: ENTRY,
+    outFile: agentMcpBundlePathOf(root),
+    pending: agentMcpPendingPathOf(root),
+    target: "bun",
+  },
+  {
+    entry: PI_ENTRY,
+    outFile: piExtensionBundlePathOf(root),
+    pending: piExtensionPendingPathOf(root),
+    target: "node",
+  },
+]);
 
 /** Age in whole minutes, and in hours once it is old enough for that to read better. */
 export const describeAge = (ageMs: number) => {
@@ -163,10 +205,11 @@ const newestSourceMs = () =>
     .map((name) => statSync(join(SOURCE_DIR, name)).mtimeMs)
     .reduce((newest, at) => Math.max(newest, at), statSync(ENTRY).mtimeMs);
 
-/** One line saying whether the bundle is there, how old it is, and whether it is behind. */
-const checkBundle = Effect.fn("BuildManagerMcp.checkBundle")(function* () {
+/** One line saying whether a bundle is there, how old it is, and whether it is behind. */
+const checkBundle = Effect.fn("BuildManagerMcp.checkBundle")(function* (
+  outFile: string
+) {
   const fs = yield* FileSystem;
-  const outFile = yield* bundlePath;
   const info = yield* Effect.option(fs.stat(outFile));
   if (info._tag === "None") {
     yield* Effect.logInfo(`${outFile}  absent — never bundled on this host`);
@@ -194,10 +237,12 @@ const checkBundle = Effect.fn("BuildManagerMcp.checkBundle")(function* () {
  * mounted one untouched, which is the right way round — the host keeps serving
  * the bundle it had.
  */
-const buildBundle = Effect.fn("BuildManagerMcp.buildBundle")(function* () {
+const buildBundle = Effect.fn("BuildManagerMcp.buildBundle")(function* (
+  artefact: Artefact
+) {
   const fs = yield* FileSystem;
-  const { outFile, pending } = yield* bundlePaths;
-  yield* Effect.logInfo(`bundling ${ENTRY}`);
+  const { outFile, pending } = artefact;
+  yield* Effect.logInfo(`bundling ${artefact.entry}`);
   yield* fs
     .makeDirectory(dirname(outFile), { recursive: true })
     .pipe(
@@ -206,7 +251,7 @@ const buildBundle = Effect.fn("BuildManagerMcp.buildBundle")(function* () {
       )
     );
   const exitCode = yield* Effect.mapError(
-    Effect.scoped(runBundler(bundleArgv(pending))),
+    Effect.scoped(runBundler(bundleArgv(artefact))),
     (cause) => new BundlerUnavailable({ detail: String(cause) })
   );
   if (exitCode !== 0) {
@@ -221,13 +266,18 @@ const buildBundle = Effect.fn("BuildManagerMcp.buildBundle")(function* () {
 });
 
 const buildManagerMcp = Effect.gen(function* () {
+  const built = yield* artefacts;
   if (isCheckOnly(process.argv.slice(2))) {
-    yield* checkBundle();
+    for (const artefact of built) {
+      yield* checkBundle(artefact.outFile);
+    }
     return;
   }
-  const outFile = yield* buildBundle();
-  yield* checkBundle();
-  yield* Effect.logInfo(outFile);
+  for (const artefact of built) {
+    yield* buildBundle(artefact);
+    yield* checkBundle(artefact.outFile);
+    yield* Effect.logInfo(artefact.outFile);
+  }
 });
 
 if (import.meta.main) {

@@ -43,6 +43,7 @@ const BASE = {
   agentHomeDirs: {
     claude: join(tmpdir(), "quota-gate-absent-claude"),
     codex: join(tmpdir(), "quota-gate-absent-codex"),
+    pi: join(tmpdir(), "quota-gate-absent-pi"),
   },
   cooldownMs: 900_000,
   enabled: true,

@@ -201,9 +201,19 @@ const makeGate = (options: QuotaGateOptions) =>
         return () => Effect.succeed(UNAVAILABLE_USAGE);
       }
       const agentHomeDir = options.agentHomeDirs[provider];
-      return provider === "codex"
-        ? () => fetchCodexUsage({ agentHomeDir, fs, http })
-        : () => fetchClaudeUsage({ agentHomeDir, fs, http });
+      switch (provider) {
+        case "codex":
+          return () => fetchCodexUsage({ agentHomeDir, fs, http });
+        case "claude":
+          return () => fetchClaudeUsage({ agentHomeDir, fs, http });
+        default:
+          // Pi has no allowance endpoint — see `HAS_ALLOWANCE` in `./config`,
+          // which keeps it out of `GATED_PROVIDERS` so this arm is unreachable
+          // in production. It is here because `readerFor` is total over the
+          // union, and because reading a Claude credential out of Pi's home is
+          // what a fall-through would have done.
+          return () => Effect.succeed(UNAVAILABLE_USAGE);
+      }
     };
 
     const states = new Map<SessionProvider, ProviderState>();

@@ -28,7 +28,12 @@ export {
   agentMcpPendingPathOf,
   agentTokenPathOf,
   CONTAINER_AGENT_TOKEN_PATH,
+  PI_EXTENSION_BUNDLE_FILE,
+  piExtensionBundlePathOf,
+  piExtensionPendingPathOf,
 } from "./bundle";
+export type { ToolAnswer } from "./call";
+export { callAgentTool } from "./call";
 export type { GatewayClient } from "./client";
 export { makeGatewayClient } from "./client";
 export type { GatewayConfig, GatewayCredential } from "./config";
