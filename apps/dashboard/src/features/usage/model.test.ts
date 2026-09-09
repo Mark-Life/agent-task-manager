@@ -28,20 +28,27 @@ const windowOf = (input: {
 });
 
 const reportOf = (input: {
+  readonly attemptedAt?: DateTime.Utc | null;
   readonly enforced?: boolean;
   readonly note?: string | null;
   readonly pausedUntil?: DateTime.Utc | null;
   readonly provider: SessionProvider;
   readonly readAt?: DateTime.Utc | null;
+  readonly stale?: boolean;
   readonly state?: ProviderUsageState;
   readonly windows?: readonly UsageWindow[];
 }): ProviderUsageReport => ({
+  // The working case: the loop looked when it read, so the two dates are one
+  // instant and nothing is stale. Tests about a broken poll move this forward.
+  attemptedAt:
+    "attemptedAt" in input ? (input.attemptedAt ?? null) : minutesOn(-3),
   enforced: input.enforced ?? true,
   note: input.note ?? null,
   pausedUntil: input.pausedUntil ?? null,
   provider: input.provider,
   // An explicit null is "never read", which is not the same as leaving it out.
   readAt: "readAt" in input ? (input.readAt ?? null) : minutesOn(-3),
+  stale: input.stale ?? false,
   state: input.state ?? "ok",
   windows: input.windows ?? [],
 });
@@ -262,6 +269,105 @@ describe("usageView", () => {
     });
   });
 
+  /**
+   * The regression this whole shape exists for. One failed poll used to replace
+   * a provider's figures with "no signal" and re-date the reading to the failed
+   * attempt, so a healthy account read an hour ago looked like an account nobody
+   * had ever logged into.
+   */
+  test("figures outliving the last look keep their bars and carry their own age", () => {
+    const view = usageView(
+      snapshotOf([
+        reportOf({
+          attemptedAt: minutesOn(-1),
+          provider: "codex",
+          readAt: minutesOn(-60 * 24 * 3),
+          stale: true,
+          windows: [windowOf({ label: "5h", remainingPercent: 40 })],
+        }),
+      ]),
+      now
+    );
+
+    expect(view).toMatchObject({
+      providers: [
+        {
+          kind: "readable",
+          readText: "read 3d ago",
+          stale: true,
+          // The two dates, said apart: the figures are three days old and the
+          // loop looked a minute ago and got nothing.
+          stalenessText: "read 3d ago · checked 1m ago",
+          windows: [{ remainingText: "40%" }],
+        },
+      ],
+    });
+  });
+
+  test("a working poll says nothing about staleness, because there is nothing to say", () => {
+    const view = usageView(
+      snapshotOf([
+        reportOf({
+          provider: "claude",
+          windows: [windowOf({ label: "5h", remainingPercent: 70 })],
+        }),
+      ]),
+      now
+    );
+
+    expect(view).toMatchObject({
+      providers: [
+        { attemptText: "checked 3m ago", stale: false, stalenessText: null },
+      ],
+    });
+  });
+
+  test("the heading dates the oldest figures on it, not the document over them", () => {
+    const view = usageView(
+      {
+        providers: [
+          reportOf({
+            attemptedAt: minutesOn(-1),
+            provider: "claude",
+            readAt: minutesOn(-60 * 24 * 3),
+            stale: true,
+            windows: [windowOf({ label: "5h", remainingPercent: 40 })],
+          }),
+          reportOf({
+            provider: "codex",
+            windows: [windowOf({ label: "5h", remainingPercent: 80 })],
+          }),
+        ],
+        // Rewritten by the sweep a moment ago, which used to be the only age
+        // the heading showed — over figures three days old.
+        publishedAt: now,
+      },
+      now
+    );
+
+    expect(view).toMatchObject({
+      kind: "published",
+      publishedText: "just now",
+      readingText: "read 3d ago",
+    });
+  });
+
+  test("nothing read on any provider leaves the heading with no age at all", () => {
+    const view = usageView(
+      snapshotOf([
+        reportOf({
+          note: "usage reads are switched off",
+          provider: "claude",
+          readAt: null,
+          state: "unavailable",
+        }),
+      ]),
+      now
+    );
+
+    expect(view).toMatchObject({ kind: "published", readingText: null });
+  });
+
   test("a provider that has never been read has no age to show", () => {
     const view = usageView(
       snapshotOf([
@@ -297,7 +403,26 @@ describe("usageSummary", () => {
     );
 
     expect(usageSummary(view)).toBe(
-      "Provider usage: Claude 5h 62% left, 7d 91% left; Codex could not be read"
+      "Provider usage: Claude 5h 62% left, 7d 91% left; Codex has not been read"
+    );
+  });
+
+  test("figures nobody has confirmed since carry their age into the spoken line", () => {
+    const view = usageView(
+      snapshotOf([
+        reportOf({
+          attemptedAt: minutesOn(-1),
+          provider: "claude",
+          readAt: minutesOn(-60 * 24 * 3),
+          stale: true,
+          windows: [windowOf({ label: "5h", remainingPercent: 40 })],
+        }),
+      ]),
+      now
+    );
+
+    expect(usageSummary(view)).toBe(
+      "Provider usage: Claude 5h 40% left, read 3d ago"
     );
   });
 

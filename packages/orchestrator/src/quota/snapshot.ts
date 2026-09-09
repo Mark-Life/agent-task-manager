@@ -19,6 +19,12 @@
  * off the response, and the label is derived from it, so a provider that
  * shortens a window relabels the figure instead of leaving a hardcoded "5h"
  * describing something else.
+ *
+ * **Old figures beat no figures.** What arrives here is the last reading that
+ * carried a signal, alongside the moment of the last *attempt* — see
+ * `./readings` for why those are two facts. A provider whose read has started
+ * failing publishes what it last said, dated, and marked stale; the blank is
+ * kept for a provider nothing has ever been read from.
  */
 
 import { join } from "node:path";
@@ -98,6 +104,17 @@ const publishedWindow = (input: {
 
 /** What the gate knows about one provider at the moment of publishing. */
 export interface ProviderReading {
+  /**
+   * Whether the last look produced a reading. False before the first look, and
+   * false where the figures below were loaded from disk and nothing has
+   * confirmed them since.
+   */
+  readonly attemptCarriedSignal: boolean;
+  /**
+   * When the gate last went and looked, whatever came back. Null before the
+   * first attempt.
+   */
+  readonly attemptedAtMs: number | null;
   /** Whether a drained reading on this provider would actually hold a dispatch back. */
   readonly enforced: boolean;
   /** When the reactive pause lifts, where one is in force. */
@@ -105,12 +122,32 @@ export interface ProviderReading {
   /** The reason on the pause record, where one is in force. */
   readonly pauseReason: string | null;
   readonly provider: SessionProvider;
-  /** When the cached usage below was read. Null before the first read. */
+  /**
+   * When the usage below was read. Null before the first read that carried a
+   * signal — which is the only state with nothing to publish.
+   */
   readonly readAtMs: number | null;
   /** Whether the poller is switched on at all — the one honest reason for a blank. */
   readonly reading: boolean;
+  /** The last reading that carried a signal, not the last attempt. */
   readonly usage: ProviderUsage;
 }
+
+/**
+ * Whether there are figures that nothing has confirmed since.
+ *
+ * Off the outcome of the last look and not off the two dates. Comparing them
+ * looks tidier and is wrong in the one case that matters most: a process that
+ * restarts, loads yesterday's figures and fails its first read has a look and a
+ * reading that can land on the same millisecond — under a test clock they
+ * always do — and a date comparison then calls those figures fresh.
+ *
+ * A provider that has never been read is not stale, it is blank. Neither is a
+ * paused one: it is not polled at all, so its last look is still the look that
+ * produced its figures.
+ */
+const isStale = (input: ProviderReading) =>
+  input.readAtMs !== null && !input.attemptCarriedSignal;
 
 /**
  * Why a provider is in the state it is, in a sentence.
@@ -123,22 +160,38 @@ const noteOf = (input: ProviderReading, state: ProviderUsageState) => {
   if (state === "paused") {
     return input.pauseReason;
   }
-  if (state === "limit_reached") {
-    return "the provider reports its limit reached";
+  // Ahead of everything below, including the figures. A provider whose reads
+  // are off may still be publishing what it said before they were turned off,
+  // and "the last read produced no signal" would be an alarming way to describe
+  // a switch somebody threw on purpose.
+  if (!input.reading) {
+    return "usage reads are switched off";
   }
   if (state === "unavailable") {
-    return input.reading
-      ? "the last read produced no signal — runs dispatch without it"
-      : "usage reads are switched off";
+    return "nothing has been read on this provider yet";
+  }
+  if (isStale(input)) {
+    // The figures are still worth showing and still dated; what this says is
+    // that nothing has confirmed them since, which is the fact a percentage
+    // cannot carry.
+    return "the last read produced no signal — these figures are the last that did";
+  }
+  if (state === "limit_reached") {
+    return "the provider reports its limit reached";
   }
   return null;
 };
 
 /**
  * Where a provider stands, in the order the gate itself decides things: a live
- * pause is a confirmed drain and outranks a cached reading, a reading we could
- * not take is *unavailable* rather than empty, and only then do the numbers
- * speak.
+ * pause is a confirmed drain and outranks a reading, a provider nothing has ever
+ * been read from is *unavailable* rather than empty, and only then do the
+ * numbers speak.
+ *
+ * `usage` here is the last reading that carried a signal, so an unreadable
+ * attempt does not land in this function at all — it moves the attempt stamp
+ * and leaves the state the figures earned. That is the whole difference between
+ * a panel that forgets and one that stale-dates.
  */
 const stateOf = (input: ProviderReading): ProviderUsageState => {
   if (input.pausedUntilMs !== null) {
@@ -165,6 +218,10 @@ export const providerReport = (input: ProviderReading): ProviderUsageReport => {
     );
   }
   return {
+    attemptedAt:
+      input.attemptedAtMs === null
+        ? null
+        : DateTime.makeUnsafe(input.attemptedAtMs),
     enforced: input.enforced,
     note: noteOf(input, state),
     pausedUntil:
@@ -174,6 +231,7 @@ export const providerReport = (input: ProviderReading): ProviderUsageReport => {
     provider: input.provider,
     readAt:
       input.readAtMs === null ? null : DateTime.makeUnsafe(input.readAtMs),
+    stale: isStale(input),
     state,
     windows,
   };

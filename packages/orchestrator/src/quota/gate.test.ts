@@ -8,7 +8,7 @@ import { Effect, type Layer, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { TestClock } from "effect/testing";
 import { QuotaGate, type QuotaGateOptions } from "./gate";
-import type { ProviderUsage } from "./types";
+import { type ProviderUsage, UNAVAILABLE_USAGE } from "./types";
 
 const directories: string[] = [];
 
@@ -658,6 +658,171 @@ describe("QuotaGate.refresh", () => {
         );
         expect(codex?.state).toBe("paused");
         expect(codex?.pausedUntil).not.toBeNull();
+      })
+    );
+  });
+});
+
+/**
+ * What the panel is fed, as distinct from what a dispatch is decided on.
+ *
+ * The two came apart on purpose: a read that has stopped working must not erase
+ * the figures a person is reading, and must not hold a dispatch back on figures
+ * nobody has confirmed since. Both halves are asserted here, because getting
+ * either one alone is a plausible-looking half-fix.
+ */
+describe("QuotaGate last good reading", () => {
+  /** A reader that answers once and is unreadable ever after. */
+  const failsAfterFirst = (first: ProviderUsage) => {
+    let calls = 0;
+    return () => {
+      calls += 1;
+      return Effect.succeed(calls === 1 ? first : UNAVAILABLE_USAGE);
+    };
+  };
+
+  test("a failed poll leaves the figures standing, dated when they were read", async () => {
+    await run(
+      gateLayer({
+        readers: {
+          claude: fixedReader(usage()),
+          codex: failsAfterFirst(
+            usage({
+              primary: {
+                resetsAtMs: 1000,
+                utilizationPercent: 60,
+                windowSeconds: 18_000,
+              },
+            })
+          ),
+        },
+      }),
+      Effect.gen(function* () {
+        const gate = yield* QuotaGate;
+        yield* gate.refresh();
+        // Past the poll interval, so the next sweep really does go and look.
+        yield* TestClock.adjust(BASE.pollIntervalMs + 1);
+        yield* gate.refresh();
+
+        const codex = (yield* gate.snapshot).providers.find(
+          (entry) => entry.provider === "codex"
+        );
+        expect(codex?.state).toBe("ok");
+        expect(codex?.stale).toBe(true);
+        expect(codex?.windows[0]?.remainingPercent).toBe(40);
+        // The figures keep the date they were taken; the failed look has its own.
+        expect(codex?.readAt).not.toBeNull();
+        expect(codex?.attemptedAt).not.toBeNull();
+      })
+    );
+  });
+
+  test("the stale figures are published but do not gate: an unreadable provider still dispatches", async () => {
+    await run(
+      gateLayer({
+        readers: {
+          claude: fixedReader(usage()),
+          // Drained when it worked. If the gate decided on the stored reading
+          // rather than on the failed attempt, this pool would stay shut for as
+          // long as the read stays broken.
+          codex: failsAfterFirst(usage({ limitReached: true })),
+        },
+        thresholdPercent: 80,
+      }),
+      Effect.gen(function* () {
+        const gate = yield* QuotaGate;
+        expect(
+          (yield* gate.admit({ inflight: 0, provider: "codex" })).defer
+        ).toBe(true);
+        yield* TestClock.adjust(BASE.pollIntervalMs + 1);
+        expect(
+          (yield* gate.admit({ inflight: 0, provider: "codex" })).defer
+        ).toBe(false);
+      })
+    );
+  });
+
+  test("the last good reading survives a restart, so a fresh loop is not a blank panel", async () => {
+    const directory = stateDir();
+    const readable = {
+      readers: {
+        claude: fixedReader(usage()),
+        codex: fixedReader(
+          usage({
+            primary: {
+              resetsAtMs: 1000,
+              utilizationPercent: 60,
+              windowSeconds: 18_000,
+            },
+          })
+        ),
+      },
+      stateDir: directory,
+    };
+
+    await run(
+      QuotaGate.layer({ ...BASE, ...readable }),
+      Effect.gen(function* () {
+        const gate = yield* QuotaGate;
+        yield* gate.refresh();
+      })
+    );
+
+    // The new process cannot read either provider. Before the store, its first
+    // sweep overwrote the published document with two empty reports.
+    await run(
+      QuotaGate.layer({
+        ...BASE,
+        readers: {
+          claude: fixedReader(UNAVAILABLE_USAGE),
+          codex: fixedReader(UNAVAILABLE_USAGE),
+        },
+        stateDir: directory,
+      }),
+      Effect.gen(function* () {
+        const gate = yield* QuotaGate;
+        yield* gate.refresh();
+        const codex = (yield* gate.snapshot).providers.find(
+          (entry) => entry.provider === "codex"
+        );
+        expect(codex?.windows[0]?.remainingPercent).toBe(40);
+        expect(codex?.stale).toBe(true);
+        expect(codex?.state).toBe("ok");
+      })
+    );
+  });
+
+  test("a store that will not decode reads as never read, not as a window at NaN", async () => {
+    const directory = stateDir();
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem;
+        yield* fs.makeDirectory(directory, { recursive: true });
+        yield* fs.writeFileString(
+          join(directory, "readings.json"),
+          '{"codex":{"atMs":"yesterday"}}'
+        );
+      }).pipe(Effect.provide(BunFileSystem.layer))
+    );
+
+    await run(
+      QuotaGate.layer({
+        ...BASE,
+        readers: {
+          claude: fixedReader(UNAVAILABLE_USAGE),
+          codex: fixedReader(UNAVAILABLE_USAGE),
+        },
+        stateDir: directory,
+      }),
+      Effect.gen(function* () {
+        const gate = yield* QuotaGate;
+        yield* gate.refresh();
+        const codex = (yield* gate.snapshot).providers.find(
+          (entry) => entry.provider === "codex"
+        );
+        expect(codex?.state).toBe("unavailable");
+        expect(codex?.readAt).toBeNull();
+        expect(codex?.stale).toBe(false);
       })
     );
   });
