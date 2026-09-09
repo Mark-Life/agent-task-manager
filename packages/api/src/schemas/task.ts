@@ -1,7 +1,7 @@
 /**
- * A task on the wire, and the three shapes that are about where it sits rather
- * than what it says: the detail view, one board column, and the next-session
- * selection.
+ * A task on the wire, and the four shapes that are about where it sits rather
+ * than what it says: the detail view, a board card, one board column, and the
+ * next-session selection.
  *
  * Everything derives from `@workspace/domain`. The one restatement is
  * {@link TaskDetail}, which mirrors the store's board view — a value the store
@@ -40,12 +40,33 @@ export const TaskDetail = Schema.Struct({
 export interface TaskDetail extends Schema.Schema.Type<typeof TaskDetail> {}
 
 /**
+ * A card on the board: the task, and the one fact about it that is not on its
+ * row — the run working on it right now.
+ *
+ * Flat rather than `{ liveRunId, task }` because the board draws cards and not
+ * pairs, and because the field answers the same question {@link TaskDetail}
+ * answers with the same name and the same null: a card in `in_progress` with no
+ * live run is waiting for a slot or has stalled, which is the difference the
+ * spinner is.
+ *
+ * It is on the board's own read for one reason: without it a dashboard has to
+ * ask `/tasks/:taskId` once per card in progress to find out, on a timer, which
+ * was this gateway's second-largest source of requests.
+ */
+export const BoardCard = Schema.Struct({
+  ...DomainTask.fields,
+  liveRunId: Schema.NullOr(RunId),
+}).annotate({ identifier: "BoardCard" });
+
+export interface BoardCard extends Schema.Schema.Type<typeof BoardCard> {}
+
+/**
  * One column of the board: its status and its cards in the order they are
  * rendered, which is also the order the dispatcher takes from `in_progress`.
  */
 export const BoardColumn = Schema.Struct({
   status: TaskStatus,
-  tasks: Schema.Array(Task),
+  tasks: Schema.Array(BoardCard),
 }).annotate({ identifier: "BoardColumn" });
 
 export interface BoardColumn extends Schema.Schema.Type<typeof BoardColumn> {}

@@ -1098,6 +1098,185 @@
         "summary": "The board, column by column"
       }
     },
+    "/tasks/board/stream": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "tasks.boardStream",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "allOf": [
+                {
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                  "format": "uuid"
+                }
+              ]
+            },
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "readToken": []
+          },
+          {
+            "sessionCookie": []
+          },
+          {
+            "userApiKey": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "event": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "string",
+                      "contentMediaType": "application/json"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "event",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                },
+                "x-effect-stream": {
+                  "encoding": "sse",
+                  "causeSchema": {
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "_tag": {
+                              "type": "string",
+                              "enum": [
+                                "Fail"
+                              ]
+                            },
+                            "error": {
+                              "not": {}
+                            }
+                          },
+                          "required": [
+                            "_tag",
+                            "error"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "_tag": {
+                              "type": "string",
+                              "enum": [
+                                "Die"
+                              ]
+                            },
+                            "defect": {}
+                          },
+                          "required": [
+                            "_tag",
+                            "defect"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "_tag": {
+                              "type": "string",
+                              "enum": [
+                                "Interrupt"
+                              ]
+                            },
+                            "fiberId": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "_tag",
+                            "fiberId"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "errorSchema": {
+                    "not": {}
+                  },
+                  "failureEvent": "effect/httpapi/stream/failure"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedJsonEncoding"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForbiddenJsonEncoding"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "TooManyRequests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TooManyRequestsJsonEncoding"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Stream the board as it changes"
+      }
+    },
     "/tasks/{taskId}": {
       "get": {
         "tags": [
@@ -6706,6 +6885,9 @@
         ],
         "additionalProperties": false
       },
+      "Objects_": {
+        "type": "object"
+      },
       "Task": {
         "type": "object",
         "properties": {
@@ -6756,7 +6938,7 @@
             ]
           },
           "metadata": {
-            "type": "object"
+            "$ref": "#/components/schemas/Objects_"
           },
           "nextSessionId": {
             "anyOf": [
@@ -6910,6 +7092,227 @@
         ],
         "additionalProperties": false
       },
+      "BoardCard": {
+        "type": "object",
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "acceptance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "brief": {
+            "type": "string"
+          },
+          "dispatchTraceparent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "allOf": [
+              {
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                "format": "uuid"
+              }
+            ]
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/Objects_"
+          },
+          "nextSessionId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "nextSessionNew": {
+            "type": "boolean"
+          },
+          "parentTaskId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parkedUntil": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "projectId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "Infinity",
+                  "-Infinity",
+                  "NaN"
+                ]
+              }
+            ]
+          },
+          "repoUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sandboxImage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ideas",
+              "backlog",
+              "in_progress",
+              "review",
+              "done"
+            ]
+          },
+          "statusChangedAt": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "allOf": [
+              {
+                "minLength": 1
+              }
+            ]
+          },
+          "liveRunId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "allOf": [
+                  {
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|[fF]{8}-[fF]{4}-[fF]{4}-[fF]{4}-[fF]{12})$",
+                    "format": "uuid"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "createdAt",
+          "workspaceId",
+          "updatedAt",
+          "acceptance",
+          "brief",
+          "dispatchTraceparent",
+          "id",
+          "metadata",
+          "nextSessionId",
+          "nextSessionNew",
+          "parentTaskId",
+          "parkedUntil",
+          "projectId",
+          "prUrl",
+          "rank",
+          "repoUrl",
+          "sandboxImage",
+          "status",
+          "statusChangedAt",
+          "title",
+          "liveRunId"
+        ],
+        "additionalProperties": false
+      },
       "BoardColumn": {
         "type": "object",
         "properties": {
@@ -6926,7 +7329,7 @@
           "tasks": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Task"
+              "$ref": "#/components/schemas/BoardCard"
             }
           }
         },
@@ -7611,7 +8014,8 @@
             "type": "string",
             "enum": [
               "claude",
-              "codex"
+              "codex",
+              "pi"
             ]
           },
           "providerSessionId": {
@@ -8412,7 +8816,8 @@
             "type": "string",
             "enum": [
               "claude",
-              "codex"
+              "codex",
+              "pi"
             ]
           },
           "requests": {
@@ -8648,7 +9053,8 @@
             "type": "string",
             "enum": [
               "claude",
-              "codex"
+              "codex",
+              "pi"
             ]
           },
           "role": {
@@ -8860,7 +9266,8 @@
                     "type": "string",
                     "enum": [
                       "claude",
-                      "codex"
+                      "codex",
+                      "pi"
                     ]
                   },
                   "sandboxImage": {
@@ -10483,7 +10890,8 @@
             "type": "string",
             "enum": [
               "claude",
-              "codex"
+              "codex",
+              "pi"
             ]
           },
           "status": {
@@ -10534,7 +10942,8 @@
             "type": "string",
             "enum": [
               "claude",
-              "codex"
+              "codex",
+              "pi"
             ]
           },
           "title": {
@@ -10909,7 +11318,8 @@
             "type": "string",
             "enum": [
               "claude",
-              "codex"
+              "codex",
+              "pi"
             ]
           },
           "readAt": {

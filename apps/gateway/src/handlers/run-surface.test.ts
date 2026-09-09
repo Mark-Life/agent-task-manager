@@ -54,6 +54,8 @@ import { ScopeHistory } from "@workspace/sandbox";
 import { Context, DateTime, Effect, Exit, Layer, Schema, Scope } from "effect";
 import { HttpRouter, HttpServer } from "effect/unstable/http";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { BoardNotices } from "../board-sse";
+import { httpServerOptions } from "../layers";
 import { RunEventNotices } from "../sse";
 import { handlersLayer } from ".";
 
@@ -135,6 +137,7 @@ const gatewayLayer = (workspace: WorkspaceId) => {
   );
   const services = Layer.mergeAll(
     access,
+    BoardNotices.layer,
     RunEventNotices.layer,
     ScopeHistory.editsLayer
   ).pipe(Layer.provideMerge(Layer.merge(CurrentActor.layer(actor), store)));
@@ -145,7 +148,7 @@ const gatewayLayer = (workspace: WorkspaceId) => {
     Layer.provide(services)
   );
   return HttpRouter.serve(api).pipe(
-    Layer.provideMerge(BunHttpServer.layer({ port: EPHEMERAL_PORT })),
+    Layer.provideMerge(BunHttpServer.layer(httpServerOptions(EPHEMERAL_PORT))),
     Layer.provide(BunServices.layer)
   );
 };

@@ -42,6 +42,7 @@ import { Config, Layer } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { accessLayer } from "./auth/access";
+import { BoardNotices } from "./board-sse";
 import { docsLayer } from "./docs";
 import { handlersLayer } from "./handlers";
 import { gatewayActor, SERVICE_NAME } from "./identity";
@@ -50,6 +51,36 @@ import { RunEventNotices } from "./sse";
 
 /** The port the server binds when `GATEWAY_PORT` says nothing. */
 const DEFAULT_PORT = 3100;
+
+/**
+ * How long a connection may sit silent before Bun closes it, in seconds.
+ *
+ * Bun's default is ten, which is fine for request/response and wrong for
+ * everything this gateway streams: a board that nobody is touching and a run
+ * that is thinking both hold a connection with no bytes on it, and at ten
+ * seconds the server hangs up on them. The symptom is a stream that works while
+ * something is happening and dies the moment it goes quiet — which is exactly
+ * the case nobody tests, and which the dashboard used to paper over by polling.
+ *
+ * 255 is the largest value Bun accepts. It is a ceiling rather than a target:
+ * every stream here re-reads its whole state on connect, so a client that is
+ * hung up on reconnects and misses nothing — this only decides how often that
+ * happens on an idle board, and four minutes is rare enough to be invisible in
+ * the ledger and short enough that a genuinely dead socket is still collected.
+ */
+const IDLE_TIMEOUT_SECONDS = 255;
+
+/**
+ * What the HTTP server is built with, in one place so a test binds a server
+ * with the same properties as the one an operator runs. The idle timeout is the
+ * reason this is shared rather than inlined: a test harness that left it at
+ * Bun's default would pass on every stream that says something quickly and
+ * prove nothing about the ones that go quiet.
+ */
+export const httpServerOptions = (port: number) => ({
+  idleTimeout: IDLE_TIMEOUT_SECONDS,
+  port,
+});
 
 /** What to bind. Read here rather than in the entrypoint: it is a property of the server layer. */
 export const gatewayPortConfig = Config.port("GATEWAY_PORT").pipe(
@@ -72,9 +103,10 @@ const observabilityLayer = Layer.mergeAll(
 const store = storeLayer({ applicationName: SERVICE_NAME });
 
 /**
- * What a handler runs on: the repositories, the one `LISTEN` every open event
- * stream shares, the credential resolution every operation is gated by, and the
- * actor a write made by this process itself is attributed to.
+ * What a handler runs on: the repositories, the two `LISTEN`s every open event
+ * stream shares — one for a run's timeline, one for the board — the credential
+ * resolution every operation is gated by, and the actor a write made by this
+ * process itself is attributed to.
  *
  * The actor here is the fallback, not the usual case — nearly every write is
  * made as the request's principal and overrides it. What it covers is the
@@ -88,6 +120,7 @@ const store = storeLayer({ applicationName: SERVICE_NAME });
  */
 const requestServicesLayer = Layer.mergeAll(
   accessLayer,
+  BoardNotices.layer,
   RunEventNotices.layer,
   // The file routes commit a person's edit into the scope they changed, and
   // every such commit names the person in the call. The edits-only layer, so
@@ -125,6 +158,6 @@ const routesLayer = (port: number) =>
  */
 export const appLayer = (port: number) =>
   HttpRouter.serve(routesLayer(port)).pipe(
-    Layer.provide(BunHttpServer.layer({ port })),
+    Layer.provide(BunHttpServer.layer(httpServerOptions(port))),
     Layer.provideMerge(observabilityLayer)
   );

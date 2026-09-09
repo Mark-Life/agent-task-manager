@@ -1,5 +1,5 @@
 import type { QueryClient } from "@tanstack/react-query";
-import type { BoardColumn, Task } from "@workspace/api";
+import type { BoardCard, BoardColumn } from "@workspace/api";
 import { rankBetween, type TaskId, type TaskStatus } from "@workspace/domain";
 import { keys } from "@/api/keys";
 
@@ -32,7 +32,10 @@ export interface BoardMove {
 }
 
 /** Where in a column a drop lands, from the rank it was dropped below. */
-const indexFor = (tasks: readonly Task[], after: number | null | undefined) => {
+const indexFor = (
+  tasks: readonly BoardCard[],
+  after: number | null | undefined
+) => {
   if (after === null) {
     return 0;
   }
@@ -50,8 +53,8 @@ const indexFor = (tasks: readonly Task[], after: number | null | undefined) => {
  * stale rank would jump back to its old slot the moment anything re-sorted.
  */
 const insertAt = (
-  tasks: readonly Task[],
-  task: Task,
+  tasks: readonly BoardCard[],
+  task: BoardCard,
   after: number | null | undefined
 ) => {
   const index = indexFor(tasks, after);

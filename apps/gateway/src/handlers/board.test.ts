@@ -39,9 +39,11 @@ import {
   TaskWriteAccess,
 } from "@workspace/api";
 import {
+  AgentSessionRepo,
   AuditLogRepo,
   CurrentActor,
   ProjectRepo,
+  RunRepo,
   storeLayer,
   TaskRepo,
   withActor,
@@ -62,6 +64,7 @@ import { ScopeHistory } from "@workspace/sandbox";
 import { Effect, Layer, ManagedRuntime, Schema } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { BoardNotices } from "../board-sse";
 import { RunEventNotices } from "../sse";
 import { handlersLayer } from "./index";
 
@@ -74,6 +77,11 @@ const ORIGIN = "http://gateway.test";
 /** The person every request in this file is made by. */
 const human = Actor.cases.human.make({
   userId: UserId.make("gateway-board-test-human"),
+});
+
+/** Who opens a run. A session and a run are the loop's rows, not a person's. */
+const orchestrator = Actor.cases.orchestrator.make({
+  loopInstance: APPLICATION_NAME,
 });
 
 /** The manager, acting for that same person in some conversation. */
@@ -173,8 +181,9 @@ const accessLayer = Layer.mergeAll(
 const storeForHandlers = storeLayer({ applicationName: APPLICATION_NAME });
 
 /**
- * Everything a group is built over: the repositories, the notice multicast the
- * run group holds even where nothing streams, and Bun's platform services.
+ * Everything a group is built over: the repositories, the two notice multicasts
+ * the run and task groups hold even where nothing streams, and Bun's platform
+ * services.
  *
  * One `Layer.provide` is enough because every group takes its repositories
  * while its layer is being built — see `./at-build` for why a handler must not
@@ -183,6 +192,7 @@ const storeForHandlers = storeLayer({ applicationName: APPLICATION_NAME });
 const services = Layer.mergeAll(
   storeForHandlers,
   BunServices.layer,
+  BoardNotices.layer.pipe(Layer.provide(storeForHandlers)),
   RunEventNotices.layer.pipe(Layer.provide(storeForHandlers)),
   ScopeHistory.editsLayer
 );
@@ -280,6 +290,32 @@ const fileTask = async (input: {
   }
   return await decoded(Task, raw);
 };
+
+/**
+ * A live run on a card, opened through the repositories rather than through the
+ * API, because there is no endpoint that starts one: a run is the
+ * orchestrator's to open, and what this file is about is what the board says
+ * about it afterwards.
+ */
+const startRun = (taskId: TaskId) =>
+  runtime.runPromise(
+    Effect.gen(function* () {
+      const sessions = yield* AgentSessionRepo;
+      const runs = yield* RunRepo;
+      const session = yield* sessions.open({
+        provider: "claude",
+        subject: { id: taskId, kind: "task" },
+        workspaceId,
+      });
+      return yield* runs.create({
+        agentSessionId: session.id,
+        provider: "claude",
+        subject: { id: taskId, kind: "task" },
+        trigger: "status_change",
+        workspaceId,
+      });
+    }).pipe(withActor(orchestrator))
+  );
 
 /** The audit trail of one task, newest first. */
 const auditOf = (taskId: TaskId) =>
@@ -480,6 +516,39 @@ describe("tasks", () => {
     expect(titles.ideas).toEqual(["another idea"]);
     expect(titles.backlog).toEqual(["an idea"]);
     expect(titles.done).toEqual([]);
+  });
+
+  /**
+   * The card carries the run working on it, so a board is one request.
+   *
+   * It used to be one more request per card in progress, on a timer, purely to
+   * learn this one field — which made the number of requests a dashboard makes
+   * a function of how many workers the operator was willing to run. The null on
+   * the other card is the same fact and is not missing data: a card in the
+   * column with nothing on it is waiting for a slot or has stalled, which is
+   * what the board draws differently.
+   */
+  test("says which card has a run working on it", async () => {
+    const project = await fileProject("board test live runs");
+    const working = await fileTask({ projectId: project.id, title: "working" });
+    const waiting = await fileTask({ projectId: project.id, title: "waiting" });
+    await call("POST", `/tasks/${working.id}/status`, { to: "in_progress" });
+    await call("POST", `/tasks/${waiting.id}/status`, { to: "in_progress" });
+    const run = await startRun(working.id);
+
+    const board = await bodyOf(
+      await call("GET", `/tasks/board?projectId=${project.id}`),
+      Schema.Array(BoardColumn)
+    );
+    const inProgress = board.find(
+      (column) => column.status === "in_progress"
+    )?.tasks;
+    const runIds = Object.fromEntries(
+      (inProgress ?? []).map((task) => [task.title, task.liveRunId])
+    );
+
+    expect(runIds.working).toBe(run.id);
+    expect(runIds.waiting).toBeNull();
   });
 
   test("pins the session the next run uses, and puts it back", async () => {

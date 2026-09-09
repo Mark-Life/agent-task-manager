@@ -6,7 +6,7 @@
  * client pages back through what already happened, notes the cursor the last
  * page returned, opens the stream from there, and misses nothing in the gap.
  *
- * Three properties are what make that true, and each costs something.
+ * Two properties are what make that true, and each costs something.
  *
  * **The cursor is the whole protocol.** A notification carries ids and never a
  * payload — `NOTIFY` has a hard 8000-byte limit and a run event's blob is
@@ -21,13 +21,9 @@
  * beside the channel for exactly that failure, and because the drain is
  * cursor-based, the tick is a repair rather than a duplicate.
  *
- * **One listener for the process, not one per subscriber.** `sql.listen`
- * shares a single dedicated connection through an `RcRef`, but its finalizer
- * issues `UNLISTEN` for the whole channel — so a second subscriber leaving
- * would stop notifications for every other one still watching. Multicasting one
- * listen is what avoids that, and it is also the answer to a browser tab that
- * disappears: a dropped subscriber releases a queue, and the connection is
- * released when the last of them does.
+ * The listener under all of it — one `LISTEN` for the process, reconnecting
+ * forever, shared by every subscriber — is `./notices`, and the board's stream
+ * is built on the same thing.
  *
  * A generic OpenAPI consumer sees `text/event-stream` and the event schema, and
  * nothing in the document tells it to hold the connection open. Streaming to an
@@ -35,7 +31,6 @@
  * consequence of the spec.
  */
 
-import { PgClient } from "@effect/sql-pg";
 import { RunEventRepo, RunRepo } from "@workspace/db";
 import type { RunEvent } from "@workspace/domain";
 import {
@@ -46,17 +41,8 @@ import {
   TaskId,
   WorkspaceId,
 } from "@workspace/domain";
-import {
-  Context,
-  Effect,
-  Layer,
-  Option,
-  Predicate,
-  Ref,
-  Schedule,
-  Schema,
-  Stream,
-} from "effect";
+import { Context, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import { noticeStream } from "./notices";
 
 /**
  * The channel `notify_run_event` publishes on, spelled exactly as the
@@ -89,102 +75,14 @@ export const RunEventNotice = Schema.Struct({
 export interface RunEventNotice
   extends Schema.Schema.Type<typeof RunEventNotice> {}
 
-const decodeNotice = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(RunEventNotice)
+const make = Effect.map(
+  noticeStream({ channel: RUN_EVENT_CHANNEL, notice: RunEventNotice }),
+  (notices) => RunEventNotices.of({ notices })
 );
-
-/** The first reconnect delay after the listening connection drops. */
-const RECONNECT_BASE_MS = 1000;
-
-/**
- * The reconnect ceiling. Half a minute, because every subscriber is covered by
- * its own tick meanwhile — retrying harder buys no latency back and hammers a
- * database that is probably the thing that is down.
- */
-const RECONNECT_MAX_MS = 30_000;
-
-/**
- * Reconnect backoff: doubling from a second, capped, and jittered so several
- * gateways restarted by the same outage do not reconnect in lockstep. Infinite
- * by construction — there is no attempt count at which giving up on the channel
- * is right, because the alternative is a process that only ever polls.
- */
-const reconnectSchedule = Schedule.min([
-  Schedule.exponential(RECONNECT_BASE_MS),
-  Schedule.spaced(RECONNECT_MAX_MS),
-]).pipe(Schedule.jittered);
-
-/**
- * How many notices the multicast holds for a subscriber that is mid-drain.
- * Sized for a chatty run rather than for a backlog: what a full buffer drops is
- * a nudge, and the next one re-reads everything after the cursor anyway.
- */
-const NOTICE_BUFFER = 256;
-
-/**
- * Turns one payload into a notice, or into nothing.
- *
- * Dropped rather than broadcast, which is the opposite of what the dispatch
- * trigger does with an unreadable payload: there, any notice means sweep; here,
- * a notice that cannot be attributed to a run would wake every open stream in
- * the process. The tick covers the loss.
- */
-const noticeOf = (payload: string) =>
-  decodeNotice(payload).pipe(
-    Effect.catch((cause) =>
-      Effect.as(
-        Effect.logWarning("run event notice did not decode", {
-          channel: RUN_EVENT_CHANNEL,
-          reason: String(cause),
-        }),
-        undefined
-      )
-    )
-  );
-
-const make = Effect.gen(function* () {
-  const sql = yield* PgClient.PgClient;
-
-  const notices = yield* sql.listen(RUN_EVENT_CHANNEL).pipe(
-    Stream.mapEffect(noticeOf),
-    Stream.filter(Predicate.isNotUndefined),
-    Stream.tapError((cause) =>
-      Effect.logWarning("run event listener dropped — reconnecting", {
-        channel: RUN_EVENT_CHANNEL,
-        reason: String(cause),
-      })
-    ),
-    Stream.retry(reconnectSchedule),
-    // Unreachable while the schedule above is infinite, and typed anyway: a
-    // listener that somehow ends must not end every open stream with it, so the
-    // failure stops here and the subscribers fall back to their ticks.
-    Stream.catchCause((cause) =>
-      Stream.drain(
-        Stream.fromEffect(
-          Effect.logError("run event listener gave up", {
-            channel: RUN_EVENT_CHANNEL,
-            reason: String(cause),
-          })
-        )
-      )
-    ),
-    Stream.share({ capacity: NOTICE_BUFFER, strategy: "dropping" })
-  );
-
-  return RunEventNotices.of({ notices });
-});
 
 /**
  * One `LISTEN atm_run_event` for the whole process, multicast to every open
- * stream.
- *
- * The connection is acquired when the first subscriber arrives and released
- * after the last one leaves, so an idle gateway holds nothing and a hundred
- * dashboard tabs hold one connection between them.
- *
- * Build it over the same layer that provides the store: it needs the `PgClient`
- * the pool is behind, and a second pool would be a second gateway as far as
- * `pg_stat_activity` is concerned.
+ * stream. See `./notices` for what that buys and what it costs.
  */
 export class RunEventNotices extends Context.Service<
   RunEventNotices,

@@ -13,8 +13,8 @@ import {
   useSensors,
 } from "@dnd-kit/core";
 import { Alert02Icon } from "@hugeicons/core-free-icons";
-import { useQueries, useQuery } from "@tanstack/react-query";
-import type { BoardColumn, Task, TaskDetail } from "@workspace/api";
+import { useQuery } from "@tanstack/react-query";
+import type { BoardColumn } from "@workspace/api";
 import {
   type ProjectId,
   TASK_STATUSES,
@@ -27,7 +27,7 @@ import { type ReactNode, useCallback, useMemo, useState } from "react";
 import { projectsQuery } from "@/api/projects";
 import {
   boardQuery,
-  taskQuery,
+  useBoardStream,
   usePlaceTask,
   useTransitionTask,
 } from "@/api/tasks";
@@ -63,20 +63,6 @@ const TOUCH_HOLD_MS = 250;
  * happens to start on a card, which is most of the column.
  */
 const TOUCH_TOLERANCE = 6;
-
-/**
- * How often the board re-reads itself while nobody is dragging on it, and how
- * often each card in progress is asked whether a run is still on it.
- *
- * One interval for both, because the second read is derived from the first: a
- * card cannot show a live run before the board has said the card is in
- * progress, so asking about the run twice as often as about the column only
- * buys rows in the gateway's ledger. This is that ledger's largest single
- * source — one request per in-progress card per tick — and it is bounded by how
- * many worker slots the operator is willing to spend, not by the size of the
- * board.
- */
-const BOARD_POLL_MS = 10_000;
 
 /** One reference for "no columns yet", so nothing downstream re-derives on every render. */
 const NO_COLUMNS: readonly BoardColumn[] = [];
@@ -134,38 +120,21 @@ const filterColumns = (
   }));
 };
 
-const liveIdsOf = (
-  results: readonly { readonly data?: TaskDetail | undefined }[]
-) =>
+/**
+ * Which cards have a run working on them right now.
+ *
+ * Read off the board itself. It used to be one request per card in progress on
+ * a ten-second timer, purely to learn this one field, which made what a
+ * dashboard costs a function of how many workers the operator was willing to
+ * run; the board's own read carries it now, so the answer arrives with the
+ * column the card is in and cannot disagree with it.
+ */
+const liveIdsOf = (columns: readonly BoardColumn[]) =>
   new Set(
-    results.flatMap((result) =>
-      result.data === undefined || result.data.liveRunId === null
-        ? []
-        : [result.data.task.id]
+    columns.flatMap((column) =>
+      column.tasks.flatMap((task) => (task.liveRunId === null ? [] : [task.id]))
     )
   );
-
-/**
- * Which of these tasks has a run working on it right now.
- *
- * The board's own read carries cards and not runs, so the answer costs one
- * small read per card in progress — the only column where it is ever anything
- * but "none", and a column bounded by how many slots the operator is willing to
- * spend. They run on the board's own interval rather than a faster one of their
- * own — see {@link BOARD_POLL_MS}. The reads land on the task's own cache key,
- * so opening one of these cards finds its detail already there.
- */
-const useLiveRuns = (tasks: readonly Task[]) => {
-  const queries = useMemo(
-    () =>
-      tasks.map((task) => ({
-        ...taskQuery(task.id),
-        refetchInterval: BOARD_POLL_MS,
-      })),
-    [tasks]
-  );
-  return useQueries({ combine: liveIdsOf, queries });
-};
 
 /**
  * The five columns, side by side, scrolling sideways rather than shrinking to
@@ -225,10 +194,11 @@ export const Board = ({
   const [overStatus, setOverStatus] = useState<TaskStatus | null>(null);
   /** The column a draft would file into, or null while no draft is open. */
   const [drafting, setDrafting] = useState<TaskStatus | null>(null);
-  const board = useQuery({
-    ...boardQuery(projectId),
-    refetchInterval: draggingId === null ? BOARD_POLL_MS : false,
-  });
+  // One read when the screen opens, and after that the gateway says when
+  // something moved — see `useBoardStream`. The stream writes into this query's
+  // own cache, so everything below reads one board however it arrived.
+  const board = useQuery(boardQuery(projectId));
+  useBoardStream({ paused: draggingId !== null, projectId });
   const projects = useQuery(projectsQuery());
   const { mutate: transitionTask } = useTransitionTask();
   const { mutate: placeTask } = usePlaceTask();
@@ -241,12 +211,7 @@ export const Board = ({
     () => filterColumns(columns, query),
     [columns, query]
   );
-  const inProgress = useMemo(
-    () =>
-      columns.find((column) => column.status === "in_progress")?.tasks ?? [],
-    [columns]
-  );
-  const liveTaskIds = useLiveRuns(inProgress);
+  const liveTaskIds = useMemo(() => liveIdsOf(columns), [columns]);
   const projectNames = useMemo(
     () =>
       new Map(
