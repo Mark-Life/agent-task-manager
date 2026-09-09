@@ -60,6 +60,7 @@ import {
   type TaskRef,
   taskEdits,
 } from "./task-edit";
+import { taskPrState } from "./task-pr";
 import { endOfColumn, rankAfter } from "./task-rank";
 
 /** Reads addressed by id match one row; the limit says so to the planner. */
@@ -160,6 +161,7 @@ const make = Effect.gen(function* () {
 
   const board = makeBoard(db);
   const { clearNextSession, selectNextSession, update } = taskEdits(revise);
+  const { prCache, recordPrState } = taskPrState(db, write);
 
   const create = Effect.fn("TaskRepo.create")(function* (input: TaskCreate) {
     yield* Effect.annotateCurrentSpan({ workspaceId: input.workspaceId });
@@ -198,7 +200,13 @@ const make = Effect.gen(function* () {
             metadata: input.metadata ?? ({} satisfies TaskMetadata),
             parentTaskId: input.parentTaskId ?? null,
             parkedUntil: null,
+            // A pull request's state is read from GitHub, never supplied by
+            // whoever files the card — a task created with a `prUrl` already on
+            // it starts with no state and gets one from the first refresh.
+            prEtag: null,
             projectId: input.projectId ?? null,
+            prState: null,
+            prStateAt: null,
             prUrl: input.prUrl,
             rank,
             repoUrl: input.repoUrl,
@@ -591,6 +599,8 @@ const make = Effect.gen(function* () {
     create,
     delete: remove,
     place,
+    prCache,
+    recordPrState,
     repoUrls,
     selectNextSession,
     transition,

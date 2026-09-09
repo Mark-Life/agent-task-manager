@@ -48,6 +48,19 @@ html {
   --sidebar-accent-foreground: oklch(0.218 0.008 223.9);
   --sidebar-border: oklch(0.925 0.005 214.3);
   --sidebar-ring: oklch(0.723 0.014 214.4);
+
+  /* The four pull request states, in GitHub's own colours converted from the
+   * Primer hexes a person already reads on that site: muted for a draft,
+   * success green for one open, done purple for one merged, danger red for one
+   * closed unmerged. Borrowed rather than re-picked from this palette on
+   * purpose — the whole point of the icon is that it needs no legend, and it
+   * only needs none if it is the colour the reader already knows. Not derived
+   * from --primary-base for the same reason: recolouring the app must not
+   * recolour these. */
+  --pr-draft: oklch(0.4951 0.0215 250.78);
+  --pr-open: oklch(0.5244 0.1401 148.04);
+  --pr-merged: oklch(0.5631 0.2069 294.97);
+  --pr-closed: oklch(0.5517 0.2051 24.53);
 }
 
 .dark {
@@ -84,6 +97,14 @@ html {
   --sidebar-accent-foreground: oklch(0.987 0.002 197.1);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.56 0.021 213.5);
+
+  /* Primer's dark-mode values, not the light ones lightened: GitHub raises the
+   * lightness and drops the chroma for a dark background, and the colours above
+   * on this background are the ones that fail a contrast check. */
+  --pr-draft: oklch(0.6769 0.0155 254.64);
+  --pr-open: oklch(0.6951 0.1809 145.62);
+  --pr-merged: oklch(0.6606 0.1935 298.14);
+  --pr-closed: oklch(0.6651 0.2046 26.96);
 }
 
 @theme inline {
@@ -124,6 +145,10 @@ html {
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-pr-draft: var(--pr-draft);
+  --color-pr-open: var(--pr-open);
+  --color-pr-merged: var(--pr-merged);
+  --color-pr-closed: var(--pr-closed);
   --font-sans: var(--font-sans);
   --font-heading: var(--font-heading);
   --radius-2xl: calc(var(--radius) * 1.8);

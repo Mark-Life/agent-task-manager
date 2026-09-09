@@ -45,6 +45,7 @@ import { accessLayer } from "./auth/access";
 import { docsLayer } from "./docs";
 import { handlersLayer } from "./handlers";
 import { gatewayActor, SERVICE_NAME } from "./identity";
+import { PrStates } from "./pr-state";
 import { requestEventLayer } from "./request-event";
 import { RunEventNotices } from "./sse";
 
@@ -89,6 +90,10 @@ const store = storeLayer({ applicationName: SERVICE_NAME });
 const requestServicesLayer = Layer.mergeAll(
   accessLayer,
   RunEventNotices.layer,
+  // The refresh a board read queues. It writes task rows as the gateway itself,
+  // which is what the actor below covers: nobody asked for the write, it is the
+  // consequence of somebody looking at the column.
+  PrStates.layer,
   // The file routes commit a person's edit into the scope they changed, and
   // every such commit names the person in the call. The edits-only layer, so
   // this process does not spend a GitHub request at boot on the run identity it

@@ -25,6 +25,8 @@ const row: typeof Task.Encoded = {
   parentTaskId: null,
   parkedUntil: null,
   projectId: null,
+  prState: null,
+  prStateAt: null,
   prUrl: null,
   rank: 0,
   repoUrl: null,

@@ -52,6 +52,8 @@ const task: Task = {
   parentTaskId: null,
   parkedUntil: null,
   projectId: null,
+  prState: null,
+  prStateAt: null,
   prUrl: null,
   rank: 0,
   repoUrl: "https://github.com/acme/widgets",

@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { TaskStatus } from "./enums";
 import { AgentSessionId, ProjectId, TaskId } from "./ids";
 import { recordFields, Timestamp } from "./primitives";
+import { PrState } from "./pull-request";
 
 /**
  * Anything an agent wants to record that no column exists for. Free to write
@@ -106,6 +107,24 @@ export const Task = Schema.Struct({
    */
   parkedUntil: Schema.NullOr(Timestamp),
   projectId: Schema.NullOr(ProjectId),
+  /**
+   * What {@link prUrl}'s pull request was doing when it was last asked, or null
+   * for a card with no pull request and for one whose state has never been read.
+   *
+   * Cached on the row rather than fetched per render: a board is thirty cards
+   * and a page load that asked GitHub for each of them would be thirty requests
+   * before anything drew. See {@link prStateAt} for how old the answer is
+   * allowed to get.
+   */
+  prState: Schema.NullOr(PrState),
+  /**
+   * When {@link prState} was last read from GitHub. Null whenever the state is.
+   *
+   * Carried to the client as well as used by the refresh, because "as of a
+   * minute ago" and "as of last Tuesday" are different claims and the card is
+   * making one of them.
+   */
+  prStateAt: Schema.NullOr(Timestamp),
   prUrl: Schema.NullOr(Schema.String),
   /** Position in its column, ascending. See {@link rankBetween}. */
   rank: Schema.Number,

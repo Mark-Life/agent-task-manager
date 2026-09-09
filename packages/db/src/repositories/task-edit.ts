@@ -138,6 +138,24 @@ export const reviseWith =
 type Revise = ReturnType<typeof reviseWith>;
 
 /**
+ * The cached pull request state to clear alongside a patch, which is all of it
+ * whenever the patch names `prUrl`.
+ *
+ * The state, its stamp and its ETag describe one pull request, and the moment
+ * the column points somewhere else they describe the wrong one — a card
+ * retargeted from a merged request to a fresh one would otherwise keep drawing
+ * the purple icon until the refresh caught up, and would never catch up at all,
+ * because merged is where the refresh stops. Cleared on any patch that mentions
+ * the field rather than only on one that changes it: writing the same URL back
+ * costs one lookup, and comparing would mean reading the row before deciding
+ * what to write.
+ */
+const clearedPrCache = (fields: TaskPatch) =>
+  fields.prUrl === undefined
+    ? {}
+    : { prEtag: null, prState: null, prStateAt: null };
+
+/**
  * The three operations built on it. They are handed the bound `revise` rather
  * than the handle, so there is one place a task's row is locked and diffed and
  * this module cannot open a second one.
@@ -154,7 +172,7 @@ export const taskEdits = (revise: Revise) => {
     const values = yield* encodeWrite({
       entity: ENTITY,
       schema: TaskUpdate,
-      value: options.fields,
+      value: { ...options.fields, ...clearedPrCache(options.fields) },
     });
 
     return yield* revise("TaskRepo.update")({ ...options, values });

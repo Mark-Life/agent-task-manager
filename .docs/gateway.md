@@ -74,6 +74,15 @@ duplicate notice free, a dropped notice recoverable, and replay from an arbitrar
 same code path as the live tail. A slow tick runs beside the channel for the notification
 delivered to nobody.
 
+**Reading the board refreshes the pull request states behind it.** A card with a `pr_url` carries
+what that pull request is doing, cached on the task row, and `GET /tasks/board` and
+`GET /tasks/:taskId` queue whatever they just showed somebody for a conditional re-read against
+GitHub. Queued, not awaited: a board renders from this database and a GitHub that is down costs a
+card its freshness and nothing else. The floor is two minutes per card, nothing is asked about a
+card nobody is looking at, and a merged or closed pull request leaves the loop for good.
+`.docs/pull-request-state.md` is the whole argument, including why it is conditional REST rather
+than batched GraphQL or webhooks.
+
 **Artifacts are metadata in Postgres and bytes on disk.** `list` is a query, `read` is a stream
 straight off local disk, and every path is resolved against the task's own folder and refused —
 twice, once before `realPath` and once after — unless it stays inside. Promotion copies into the
