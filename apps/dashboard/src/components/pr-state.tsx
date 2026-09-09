@@ -14,7 +14,8 @@ import { cn } from "@workspace/ui/lib/utils";
  * The shape and the colour are the message, and both are borrowed rather than
  * invented: a person who has ever looked at a pull request already knows the
  * purple merge arrow and the red closed one, so the icon needs no legend and
- * the words are only there for the reader who wants them or cannot see colour.
+ * the number is what the words beside it are spent on. A reader who cannot see
+ * colour gets the state from the tooltip, which names it in full.
  *
  * One component for both places it appears — the card in the column and the
  * open task — because they are the same claim about the same row, and two of
@@ -77,31 +78,25 @@ export const prStateTitle = (input: {
     : `${named}, ${PR_STATE_LABEL[input.prState]}`;
 };
 
-/** The short form beside the icon on a card: the state, or `PR` when there is none. */
-export const prStateLabel = (prState: PrState | null) =>
-  prState === null ? "PR" : PR_STATE_LABEL[prState];
-
 /**
- * The longer form for the open task, where there is room for the number.
+ * The words beside the icon: the pull request's number.
  *
- * `#75 merged` rather than `Pull request #75, merged`: the icon beside it has
- * already said which kind of thing this is, and the full sentence is on the
- * tooltip for whoever wants it. A link this cannot read the number out of keeps
- * the words instead, since `#` on its own says nothing.
+ * The state is not repeated here. The icon and its colour already carry draft,
+ * open, merged and closed, and a second copy in words spends the one place on
+ * the row that could say something new — `#75` is what a person types into a
+ * search, says out loud, and looks for in a branch name. The state stays in the
+ * tooltip for whoever wants it spelled out.
+ *
+ * `fallback` is what a link the number cannot be read out of shows instead,
+ * since `#` on its own says nothing: the card has room for `PR` and the open
+ * task for `Pull request`.
  */
-export const prStateNumbered = (input: {
-  readonly prState: PrState | null;
+export const prNumberLabel = (input: {
+  readonly fallback: string;
   readonly prUrl: string;
 }) => {
   const number = prNumberOf(input.prUrl);
-  if (number === null) {
-    return input.prState === null
-      ? "Pull request"
-      : `Pull request, ${PR_STATE_LABEL[input.prState]}`;
-  }
-  return input.prState === null
-    ? `Pull request #${number}`
-    : `#${number} ${PR_STATE_LABEL[input.prState]}`;
+  return number === null ? input.fallback : `#${number}`;
 };
 
 /**

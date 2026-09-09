@@ -13,7 +13,11 @@ import { Spinner } from "@workspace/ui/components/spinner";
 import { cn } from "@workspace/ui/lib/utils";
 import { DateTime } from "effect";
 import { type MouseEvent as ReactMouseEvent, useCallback } from "react";
-import { PrStateIcon, prStateLabel, prStateTitle } from "@/components/pr-state";
+import {
+  PrStateIcon,
+  prNumberLabel,
+  prStateTitle,
+} from "@/components/pr-state";
 import { formatAbsolute } from "@/lib/format";
 
 /** What a card knows about itself, plus the two things only the board can tell it. */
@@ -125,8 +129,8 @@ export const TaskCardFace = ({
           {task.prUrl === null ? null : (
             // The state is on the icon rather than beside it, because a column
             // is scanned and not read: the shape and the colour are what carry
-            // draft, open, merged and closed from across the board, and the
-            // word is there for the reader who wants it or cannot see colour.
+            // draft, open, merged and closed from across the board, so the
+            // words go to the number and the state to the tooltip.
             <a
               className="inline-flex items-center gap-1 hover:text-foreground"
               href={task.prUrl}
@@ -136,7 +140,7 @@ export const TaskCardFace = ({
               title={prStateTitle({ prState: task.prState, prUrl: task.prUrl })}
             >
               <PrStateIcon className="size-3" prState={task.prState} />
-              {prStateLabel(task.prState)}
+              {prNumberLabel({ fallback: "PR", prUrl: task.prUrl })}
             </a>
           )}
         </CardContent>

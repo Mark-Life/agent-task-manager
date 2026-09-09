@@ -9,7 +9,7 @@ import { usePatchTask } from "@/api/tasks";
 import { CopyButton } from "@/components/copy-button";
 import {
   PrStateIcon,
-  prStateNumbered,
+  prNumberLabel,
   prStateTitle,
 } from "@/components/pr-state";
 import { InlineText } from "@/features/task/inline";
@@ -148,7 +148,7 @@ export const TaskHeader = ({ detail, onClose }: TaskHeaderProps) => {
             {/* The same icon the card in the column draws, in the same colour.
                 Two components would eventually disagree about which green. */}
             <PrStateIcon prState={task.prState} />
-            {prStateNumbered({ prState: task.prState, prUrl: task.prUrl })}
+            {prNumberLabel({ fallback: "Pull request", prUrl: task.prUrl })}
           </Button>
         )}
       </div>
