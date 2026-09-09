@@ -179,6 +179,7 @@ const fingerprint = (spec: HardeningSpec) =>
     spec.noNewPrivileges,
     spec.pidsLimit,
     spec.readOnlyRootfs,
+    spec.shmSizeMb,
     spec.tmpfs
       .map((mount) => `${mount.path}:${mount.sizeMb}:${mount.mode}`)
       .join("+"),

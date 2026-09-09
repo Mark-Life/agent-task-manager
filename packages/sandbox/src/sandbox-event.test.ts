@@ -312,6 +312,11 @@ describe("the hardening projection", () => {
     expect(hardeningProfileOf({ ...defaultHardening, tmpfs: [] })).toBe(
       "custom"
     );
+    // Shared memory is memory: a container given docker's 64 MB back is not
+    // running the confinement every other run got, and the row has to say so.
+    expect(hardeningProfileOf({ ...defaultHardening, shmSizeMb: 64 })).toBe(
+      "custom"
+    );
   });
 
   test("reads root off the uid half, including the empty user", () => {

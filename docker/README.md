@@ -172,13 +172,60 @@ Nothing is fetched from Chrome for Testing: `agent-browser install` downloads a
 Chrome into the user's home, which here is a per-run agent home that is thrown
 away, so it would be a several-hundred-megabyte download every run.
 `AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium` is what stops it trying.
-`AGENT_BROWSER_ARGS=--no-sandbox,--disable-dev-shm-usage` is set for the same
-reason: both flags are consequences of the confinement in `hardening.ts` rather
-than preferences — `--cap-drop=ALL` with `no-new-privileges` removes what
-Chromium's own sandbox needs, and docker's default 64 MB `/dev/shm` crashes a
-renderer on any page of weight. Both failures are hangs rather than clean
-errors, which is why they are set in the image and not left to a caller.
+`AGENT_BROWSER_ARGS=--no-sandbox` is set for the same reason: it is a
+consequence of the confinement in `hardening.ts` rather than a preference,
+because `--cap-drop=ALL` with `no-new-privileges` removes what Chromium's own
+sandbox needs, and the failure is a renderer that dies at startup rather than a
+clean error. It used to carry `--disable-dev-shm-usage` beside it, for docker's
+default 64 MB `/dev/shm` — too small for a renderer on any page of weight, so
+the flag kept the shared memory in a file under `/tmp` instead. `hardening.ts`
+now passes `--shm-size` at the same 512 MB `/tmp` was lending it, so the
+segment is big enough and the workaround is gone.
+
+This environment is half the change, and the loop's `--shm-size` is the other
+half: **rebuild the image and restart the loop as one step.** The image alone,
+under a loop that does not size `/dev/shm`, is a Chromium on docker's 64 MB with
+the workaround now removed; the loop alone, over an older image, is a run told
+by its prompt about an allowlist that is not there, which is exactly the hang
+this is meant to end. `deploy/README.md`'s upgrade block gives the order.
+
+`AGENT_BROWSER_ALLOWED_DOMAINS="localhost,*.localhost,127.0.0.1,0.0.0.0,[::1],host.docker.internal"`
+is the other default, and it buys time rather than confinement. A page that
+pulls fonts, analytics or a video embed reaches hosts this network stack does
+not answer for; the requests hang instead of refusing, the renderer blocks
+behind them, and every CDP command afterwards burns its full 30-second timeout —
+which reads as a broken browser, not as a blocked request. Blocked, the same
+page opens in under two seconds. It lives in the image so that a hand-started
+container and `bun run sandbox:check` behave the way a real run does.
+
+The filter compares a URL's hostname and nothing else, so ports never enter into
+it and one entry covers a dev server on any port — which is also why the list is
+this long, because the spellings of loopback are separate hostnames. `0.0.0.0`
+is what a dev server started with `--host` prints. A dev server binding `::1` is
+ordinary here, so the IPv6 loopback is on the list — bracketed, and only
+bracketed, because a hostname keeps the brackets. A bare `::1` entry would match
+nothing. `host.docker.internal` is the one entry that is not this machine: it is
+where `ORCHESTRATOR_GATEWAY_URL` points a container, so a page under check that
+calls the board is not aborted with nothing on the page to say why.
+
+Two escapes, and a run that needs the public web wants the first. Both begin
+with `agent-browser close`, for one reason worth stating once: the allowlist is
+read when the browser launches and the daemon keeps whatever it launched with,
+so anything handed to a later command — a flag, an unset variable — reaches a
+browser that has already made up its mind.
+
+- `agent-browser close`, then open again with `--allowed-domains example.com`.
+  The flag replaces this list rather than adding to it, so a check that also
+  wants its own dev server names `localhost` on it too.
+- `agent-browser close && env -u AGENT_BROWSER_ALLOWED_DOMAINS agent-browser
+  open file:///tmp/p.html`, for the one case `--allowed-domains` cannot cover: a
+  `file://` URL has no hostname to match and is refused outright while any
+  allowlist is set. Serving the file over loopback instead keeps the guard on,
+  needs no escape at all, and is the better habit.
 
 The build's last step renders `about:blank` rather than running
 `chromium --version`, because a missing library, a font stack with no fonts and
-a too-small `/dev/shm` all leave `--version` answering perfectly.
+a too-small `/dev/shm` all leave `--version` answering perfectly. It keeps
+`--disable-dev-shm-usage` for itself: buildkit ignores `docker build
+--shm-size`, so the build host always has the 64 MB default and the flag is
+free there.

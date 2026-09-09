@@ -112,6 +112,37 @@ export const DEFAULT_PIDS_LIMIT = 512;
 export const DEFAULT_TMPFS_MB = 512;
 
 /**
+ * Size of the container's `/dev/shm`, in megabytes.
+ *
+ * Docker's default is 64 MB, and 64 MB is where a headless Chromium's renderer
+ * runs out on the first page with weight to it. The usual workaround is
+ * `--disable-dev-shm-usage`, which asks the renderer to keep its shared memory
+ * in a regular file under `/tmp` instead: the same bytes, one filesystem
+ * further away, and a failure mode that arrives as a hung renderer rather than
+ * an error anybody can read. Sizing `/dev/shm` here is that fix made once, in
+ * the argv, for every process in the image rather than for the one that
+ * happened to have a flag.
+ *
+ * Fixed rather than an environment variable. Memory and cpu are the two numbers
+ * a host's size decides, which is why an operator can set them; shared memory
+ * is a property of the single browser this image carries, the same on every
+ * host, and a third knob with no host-dependent right answer is a knob that
+ * gets set wrong. 512 is not new headroom either — it is what the renderer was
+ * already allowed to take, since the `/tmp` it was being diverted into is
+ * capped at {@link DEFAULT_TMPFS_MB}.
+ *
+ * It is not free, and the arithmetic belongs in the open: a tmpfs is memory,
+ * and both this and `/tmp` are charged to the container's own cgroup, so a run
+ * that managed to fill both spends 1024 MB of its {@link DEFAULT_MEMORY_MB}
+ * ceiling before the agent allocates anything. The two stay separate because
+ * they fail differently — `/tmp` is capped so that a runaway download stops at
+ * a limit instead of filling the host's disk, and it holds files a run writes
+ * on purpose. If this ever has to scale with the box, derive it from
+ * `memoryMb` inside {@link hardeningFor} rather than adding a variable.
+ */
+export const DEFAULT_SHM_MB = 512;
+
+/**
  * The user a container runs as, `uid:gid`.
  *
  * Numeric rather than a name, because a name has to exist in every image's
@@ -195,6 +226,11 @@ export interface HardeningSpec {
   readonly noNewPrivileges: boolean;
   readonly pidsLimit: number;
   readonly readOnlyRootfs: boolean;
+  /**
+   * Size of `/dev/shm`. Memory-backed, so it is spent out of
+   * {@link HardeningSpec.memoryMb} rather than granted beside it.
+   */
+  readonly shmSizeMb: number;
   readonly tmpfs: readonly TmpfsMount[];
   /** `uid:gid`. Never root, and never empty. */
   readonly user: string;
@@ -211,6 +247,7 @@ export const defaultHardening: HardeningSpec = {
   noNewPrivileges: true,
   pidsLimit: DEFAULT_PIDS_LIMIT,
   readOnlyRootfs: DEFAULT_READ_ONLY_ROOTFS,
+  shmSizeMb: DEFAULT_SHM_MB,
   tmpfs: DEFAULT_TMPFS,
   user: DEFAULT_USER,
 };
@@ -258,6 +295,10 @@ export const hardeningArgs = (spec: HardeningSpec): readonly string[] => {
     `--pids-limit=${spec.pidsLimit}`,
     `--memory=${spec.memoryMb}m`,
     `--memory-swap=${spec.memorySwapMb}m`,
+    // Next to the other two because it is the same kind of decision: `/dev/shm`
+    // is memory, charged to the ceiling above, and left at docker's 64 MB it is
+    // the browser hanging rather than anything the argv admits to.
+    `--shm-size=${spec.shmSizeMb}m`,
     `--cpus=${spec.cpus}`,
     // Stated rather than left to the daemon's default, so the one decision this
     // file makes in the open is visible in the argv a post-mortem reads.

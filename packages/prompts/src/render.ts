@@ -92,6 +92,13 @@ export interface PlacementSectionInput {
  * the text below: the run has already read those files by the time it reads
  * this, and an agent does not need to be told why.
  *
+ * The one thing said here that is not a path is the state of the checkout: it
+ * arrives with no dependencies installed, and a run that assumes otherwise
+ * spends its first commands finding out from a script that cannot start. That
+ * is a property of the directory being handed over rather than a policy, which
+ * is why it sits on the bullet naming the directory instead of in
+ * `artifactRulesOf` with the rules about what goes where.
+ *
  * Listed from the working directory outwards, which is the order the run meets
  * them and the order it will read anything left in them.
  */
@@ -108,7 +115,7 @@ export const placementSection = ({
   const lines = [
     repoUrl === null
       ? `- \`${placement.workspaceDir}\` is an empty scratch directory, yours to write, released when this run ends. This run has no repo.`
-      : `- \`${repoUrl}\` is cloned at \`${placement.workspaceDir}\`${placement.branch === null ? "" : `, on branch \`${placement.branch}\``}. Push that branch and open a pull request when the work is ready.`,
+      : `- \`${repoUrl}\` is cloned at \`${placement.workspaceDir}\`${placement.branch === null ? "" : `, on branch \`${placement.branch}\``}. It is a fresh clone and nothing has been installed or built in it — run the repository's own install before any script that needs dependencies. Push that branch and open a pull request when the work is ready.`,
     ...(hasOwnDirectory
       ? [
           `- \`${placement.artifactsDir}\` is this task's directory, yours to write, and what you leave there outlives the container.`,
