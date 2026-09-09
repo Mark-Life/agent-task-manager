@@ -25,9 +25,12 @@
  * separate cache, separate pause record — which is most of the value of running
  * two harnesses.
  *
- * The pause record is a small file rather than memory, so a loop restarting
- * inside a drain does not immediately re-probe with a burst of runs. Everything
- * else is in memory and re-derives from the live signals.
+ * Two things are files rather than memory. The pause record, so a loop
+ * restarting inside a drain does not immediately re-probe with a burst of runs.
+ * And the last good reading per provider — see `./readings` — so a restart, or a
+ * poll that stops working, leaves the panel showing dated figures rather than
+ * "no signal". Neither is consulted for a decision: what gates a dispatch is the
+ * live pause and the latest attempt, both of which re-derive from live signals.
  *
  * The cooldown is always the conservative one, never a reset the signal carried.
  * Both reactive sources report their reset best-effort and frequently omit it,
@@ -57,6 +60,11 @@ import {
   quotaReadFailures,
   quotaUtilization,
 } from "./metrics";
+import {
+  readStoredReadings,
+  storedReadingOf,
+  writeStoredReadings,
+} from "./readings";
 import { type ProviderReading, publishUsage, usageSnapshot } from "./snapshot";
 import {
   ADMIT,
@@ -94,22 +102,43 @@ interface PauseRecord {
 /** The pause file's contents: provider to record, absent meaning not paused. */
 type PauseMap = Record<string, PauseRecord>;
 
+/**
+ * A pause record only while it is still holding. An expired one is a record of
+ * a drain that ended, and reading it as live would idle a provider that has
+ * already come back.
+ */
+const inForce = (record: PauseRecord | null, nowMs: number) =>
+  record !== null && nowMs < record.until ? record : null;
+
 /** A live read of one provider's allowance. Always succeeds — see the readers. */
 export type UsageReader = () => Effect.Effect<ProviderUsage>;
 
-/** One cached read, with the moment it was taken. */
+/** One read, with the moment it was taken. */
 interface CachedUsage {
   readonly atMs: number;
   readonly usage: ProviderUsage;
 }
 
-/** Everything the gate keeps per provider. Isolated, so one drain gates one provider. */
+/**
+ * Everything the gate keeps per provider. Isolated, so one drain gates one
+ * provider.
+ *
+ * Two reads are remembered and they answer different questions. `attempt` is the
+ * last look, whatever it produced, and it is what a decision is made on and what
+ * the poll interval is measured from — an unreadable provider has to keep
+ * dispatching and must not be re-probed once per task. `reading` is the last
+ * look that carried a signal, it never goes backwards, and it is what gets
+ * published; it is also the only one written to disk, in `./readings`.
+ */
 interface ProviderState {
   /** Tasks already told about the current pause episode, so the loud surface says it once. */
   readonly announced: Ref.Ref<ReadonlySet<string>>;
-  readonly cache: Ref.Ref<CachedUsage | null>;
+  /** The last attempt and what it said. Null before the first one. */
+  readonly attempt: Ref.Ref<CachedUsage | null>;
   /** Present only where the provider says it in prose rather than in a field. */
   readonly detectText: ((message: string) => boolean) | null;
+  /** The last attempt that carried a signal. Null until one does. */
+  readonly reading: Ref.Ref<CachedUsage | null>;
   readonly readUsage: UsageReader;
 }
 
@@ -216,17 +245,60 @@ const makeGate = (options: QuotaGateOptions) =>
       }
     };
 
+    // The good readings from before this process existed. Loaded once, here,
+    // rather than on demand: a panel that showed nothing until the first sweep
+    // completed would blank the board on every restart, which is the failure
+    // this store exists to end.
+    const stored = yield* readStoredReadings({
+      fs,
+      stateDir: options.stateDir,
+    });
+
     const states = new Map<SessionProvider, ProviderState>();
     for (const provider of options.providers) {
       states.set(provider, {
         announced: yield* Ref.make<ReadonlySet<string>>(new Set()),
-        cache: yield* Ref.make<CachedUsage | null>(null),
-        // Only Codex needs the prose matcher: Claude's reading arrives as a
-        // field on the usage event and goes through `noteRateLimit`.
+        // Deliberately not seeded from the store. A reading restored from disk
+        // is old by definition, and seeding the attempt cache with it would
+        // both suppress the first poll and let a stale drain hold a dispatch
+        // back — see the note at the top of `./readings`.
+        attempt: yield* Ref.make<CachedUsage | null>(null),
+        // Only Codex gets the prose matcher, on the grounds that Claude's
+        // reading arrives as a field on the usage event and goes through
+        // `noteRateLimit` instead.
+        //
+        // That second half is not true today: `noteRateLimit` is called from
+        // nowhere but this package's tests, so Claude currently has no reactive
+        // floor at all. Wiring it is the first recommendation in
+        // `.docs/provider-usage-sources.md`; adding the text matcher here is
+        // not the fix, because the structured field is the better signal and it
+        // is already being carried out of every run.
         detectText: provider === "codex" ? detectUsageLimitText : null,
+        reading: yield* Ref.make<CachedUsage | null>(
+          storedReadingOf(stored, provider)
+        ),
         readUsage: readerFor(provider),
       });
     }
+
+    /**
+     * Writes every provider's last good reading down, so the next process
+     * starts with the figures this one has rather than with a blank panel.
+     *
+     * Whole-map on each advance rather than a merge, because this process owns
+     * the file for its lifetime and the alternative — read, merge, write — is a
+     * race between two providers refreshing in the same sweep for no gain.
+     */
+    const persistReadings = Effect.gen(function* () {
+      const readings: Record<string, CachedUsage> = {};
+      for (const [provider, state] of states) {
+        const reading = yield* Ref.get(state.reading);
+        if (reading !== null) {
+          readings[provider] = reading;
+        }
+      }
+      yield* writeStoredReadings({ fs, readings, stateDir: options.stateDir });
+    });
 
     /** The governed state for a provider, or null when the gate is off. */
     const stateOf = (provider: SessionProvider) =>
@@ -256,16 +328,42 @@ const makeGate = (options: QuotaGateOptions) =>
 
     /** The record only while it is still in force. */
     const activePause = (provider: SessionProvider, nowMs: number) =>
-      pauseOf(provider).pipe(
-        Effect.map((record) =>
-          record !== null && nowMs < record.until ? record : null
-        )
-      );
+      pauseOf(provider).pipe(Effect.map((record) => inForce(record, nowMs)));
+
+    /**
+     * One provider as the document describes it: the figures it last gave, the
+     * moment it last gave them, the moment anyone last looked, and the pause
+     * over the top.
+     *
+     * The two reads come from the two Refs and are deliberately not merged. A
+     * failed poll moves the attempt and leaves the figures, which is what
+     * stale-dates them instead of erasing them.
+     */
+    const readingOf = (input: {
+      readonly pause: PauseRecord | null;
+      readonly provider: SessionProvider;
+      readonly state: ProviderState;
+    }) =>
+      Effect.gen(function* () {
+        const good = yield* Ref.get(input.state.reading);
+        const attempt = yield* Ref.get(input.state.attempt);
+        return {
+          attemptCarriedSignal: attempt?.usage.available ?? false,
+          attemptedAtMs: attempt?.atMs ?? null,
+          enforced: options.enabled && options.proactive,
+          pausedUntilMs: input.pause === null ? null : input.pause.until,
+          pauseReason: input.pause === null ? null : input.pause.reason,
+          provider: input.provider,
+          readAtMs: good?.atMs ?? null,
+          reading: options.enabled && options.read,
+          usage: good?.usage ?? UNAVAILABLE_USAGE,
+        } satisfies ProviderReading;
+      });
 
     /**
      * Everything the gate currently believes, as the published document.
      *
-     * Off the cache and the pause file, never off a live read: this is called
+     * Off the caches and the pause file, never off a live read: this is called
      * after a refresh and after a pause changes, and a read here would put an
      * HTTP request behind a write nobody asked for.
      */
@@ -273,20 +371,17 @@ const makeGate = (options: QuotaGateOptions) =>
       const nowMs = yield* Clock.currentTimeMillis;
       const pauses = yield* readPauses;
       const readings: ProviderReading[] = [];
-      for (const provider of options.providers) {
-        const state = states.get(provider);
-        const cached = state === undefined ? null : yield* Ref.get(state.cache);
-        const record = pauses[provider] ?? null;
-        const active = record !== null && nowMs < record.until ? record : null;
-        readings.push({
-          enforced: options.enabled && options.proactive,
-          pausedUntilMs: active?.until ?? null,
-          pauseReason: active?.reason ?? null,
-          provider,
-          readAtMs: cached?.atMs ?? null,
-          reading: options.enabled && options.read,
-          usage: cached?.usage ?? UNAVAILABLE_USAGE,
-        });
+      // Over the states rather than over `options.providers`: the map was built
+      // from that list, so every entry has one and nothing has to be defended
+      // against a provider that is not there.
+      for (const [provider, state] of states) {
+        readings.push(
+          yield* readingOf({
+            pause: inForce(pauses[provider] ?? null, nowMs),
+            provider,
+            state,
+          })
+        );
       }
       return usageSnapshot({ nowMs, readings });
     });
@@ -349,6 +444,11 @@ const makeGate = (options: QuotaGateOptions) =>
      * an unavailable read fires here rather than per task, because the cache is
      * what keeps it to one line per interval — and it distinguishes the switch
      * being off from the read having failed, since only one of those is a fault.
+     *
+     * What this answers is always the last *attempt*, including an unreadable
+     * one. The gate fails open on those, and handing it the last good reading
+     * instead would turn a stale drain into a pool held shut for as long as the
+     * read stays broken. The good reading is kept beside it, for the panel.
      */
     const cachedUsage = (
       provider: SessionProvider,
@@ -356,14 +456,16 @@ const makeGate = (options: QuotaGateOptions) =>
       nowMs: number
     ) =>
       Effect.gen(function* () {
-        const cached = yield* Ref.get(state.cache);
+        const cached = yield* Ref.get(state.attempt);
         if (cached !== null && nowMs - cached.atMs < options.pollIntervalMs) {
           return cached.usage;
         }
         const usage = yield* state.readUsage();
-        yield* Ref.set(state.cache, { atMs: nowMs, usage });
+        yield* Ref.set(state.attempt, { atMs: nowMs, usage });
         yield* recordUtilization(provider, usage);
         if (usage.available) {
+          yield* Ref.set(state.reading, { atMs: nowMs, usage });
+          yield* persistReadings;
           return usage;
         }
         yield* quotaReadFailures
@@ -592,7 +694,7 @@ const makeGate = (options: QuotaGateOptions) =>
       }
       const nowMs = yield* Clock.currentTimeMillis;
       const pause = yield* activePause(request.provider, nowMs);
-      const cached = yield* Ref.get(state.cache);
+      const cached = yield* Ref.get(state.attempt);
       return evaluate({
         inflight: request.inflight,
         pause,

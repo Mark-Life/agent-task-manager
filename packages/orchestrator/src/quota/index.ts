@@ -9,10 +9,14 @@
  * outside this process — by the gateway, off the data root — and a shape a test
  * cannot reach is a shape that drifts.
  *
- * The pause file, the cooldown ladder and the per-provider cache stay inside: a
- * caller that could write a pause record could pause a healthy provider without
- * a signal behind it, which is the one thing this module exists to be careful
- * about.
+ * The last-good reading store is exported for the same reason as the snapshot
+ * builders: it is a file two processes' lifetimes apart from each other, and a
+ * shape a test cannot reach is a shape that drifts.
+ *
+ * The pause file, the cooldown ladder and the per-provider attempt cache stay
+ * inside: a caller that could write a pause record could pause a healthy
+ * provider without a signal behind it, which is the one thing this module exists
+ * to be careful about.
  */
 
 export {
@@ -49,6 +53,14 @@ export {
   type RateLimitNotice,
   type UsageReader,
 } from "./gate";
+export {
+  readingsPathOf,
+  readStoredReadings,
+  type StoredReading,
+  type StoredReadings,
+  storedReadingOf,
+  writeStoredReadings,
+} from "./readings";
 export {
   type ProviderReading,
   providerReport,

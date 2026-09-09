@@ -17,6 +17,8 @@ find is indistinguishable from a leak.
 | `events` | the wide event ledger, one file per service | itself, at 64 MiB a file, keeping one previous generation |
 | `bin` | `turn.js` and `agent-mcp.js`, one file each | `bun run entrypoint:build` / `agent-mcp:build`, which rename over them |
 | `quota/usage.json` | the last quota reading, which the gateway serves | itself, rewritten per poll |
+| `quota/readings.json` | the last reading that carried a signal, per provider, so a restart or a broken poll does not blank the panel | itself, rewritten whenever a read succeeds |
+| `quota/pause.json` | which providers a drained run has stood down, and until when | the gate, when a provider reads healthy again |
 
 Backups are **not** in here. `atm-backup.timer` writes to `<DATA_ROOT>-backups`, deliberately
 beside it, so the `rm -rf` that takes the data root does not take its backups with it —

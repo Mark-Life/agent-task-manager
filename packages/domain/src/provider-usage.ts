@@ -18,12 +18,20 @@
  * actually hold a run back**, since a system that is only watching and a system
  * that is enforcing look identical in a number.
  *
+ * "When it was read" is two dates and not one. `readAt` is when the figures
+ * below were taken; `attemptedAt` is when the loop last went and looked. They
+ * are the same instant while the reads are working and they come apart the
+ * moment one fails, which is exactly when a reader needs to be able to tell
+ * them apart: figures from Tuesday, checked a minute ago and still failing, is a
+ * different situation from figures from a minute ago, and one number cannot say
+ * both.
+ *
  * `state` is a closed set rather than a pair of booleans, because the state that
  * matters most — "we could not tell" — is not "0% used" and not "drained", and a
  * flag bag lets a reader render it as either.
  */
 
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { SessionProvider } from "./enums";
 
 /** Directory under the data root the quota gate keeps its state in. */
@@ -81,11 +89,17 @@ export interface UsageWindow extends Schema.Schema.Type<typeof UsageWindow> {}
 /**
  * Where a provider stands.
  *
- * `unavailable` is the one worth being careful about: it means the read
- * produced no signal — no credentials on the host, an expired token, a body
- * whose shape moved — and the gate is dispatching blind. It is deliberately not
- * the same value as `ok`, because the two look identical on a dashboard that
- * only renders percentages and they are opposite facts.
+ * `unavailable` is the one worth being careful about: it means there are no
+ * figures at all — nothing has ever been read on this provider, because there
+ * are no credentials on the host, or because the reads are switched off. It is
+ * deliberately not the same value as `ok`, because the two look identical on a
+ * dashboard that only renders percentages and they are opposite facts.
+ *
+ * A read that *used* to work and has stopped is not this state. The last
+ * figures stand, the state is whatever they said, and {@link
+ * ProviderUsageReport.stale} marks that nothing has confirmed them since. A
+ * provider erased from the panel by one bad poll is a worse answer than an
+ * honestly dated old one.
  */
 export const PROVIDER_USAGE_STATES = [
   "ok",
@@ -100,6 +114,20 @@ export type ProviderUsageState = typeof ProviderUsageState.Type;
 /** One provider's tank, as the last read left it. */
 export const ProviderUsageReport = Schema.Struct({
   /**
+   * When the loop last went and looked, whatever came back. Null where it has
+   * not looked at all — a provider whose reads are switched off, or a loop that
+   * has not finished its first sweep.
+   *
+   * Defaulted on the way in, like {@link ProviderUsageReport.stale} below,
+   * because this document outlives the processes at either end of it: after an
+   * upgrade the first thing the gateway reads is a file the previous loop
+   * wrote, and a schema that refused it would blank the panel and log drift for
+   * as long as it took the next sweep to run.
+   */
+  attemptedAt: Schema.NullOr(Schema.DateTimeUtcFromString).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null))
+  ),
+  /**
    * Whether this provider's numbers may actually hold a dispatch back. False is
    * the watching-only state, and a reading nobody acts on is worth saying out
    * loud rather than implying.
@@ -110,10 +138,24 @@ export const ProviderUsageReport = Schema.Struct({
   /** When a reactive pause lifts, where one is in force. */
   pausedUntil: Schema.NullOr(Schema.DateTimeUtcFromString),
   provider: SessionProvider,
-  /** When the figures below were read. Null where nothing has been read yet. */
+  /**
+   * When the figures below were taken — the last read that carried a signal,
+   * not the last one attempted. Null where nothing has ever been read, which is
+   * the only case with no figures at all.
+   */
   readAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  /**
+   * The figures are older than the last attempt: something has been read here
+   * before, and the most recent look produced nothing. The numbers still stand
+   * and `readAt` says how old they are. False while the reads are working, and
+   * false for a paused provider, which is not polled and whose figures are as
+   * fresh as the last time anyone looked.
+   */
+  stale: Schema.Boolean.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(false))
+  ),
   state: ProviderUsageState,
-  /** Empty where the read produced no signal — never a zeroed window, which reads as full. */
+  /** Empty where nothing has ever been read — never a zeroed window, which reads as full. */
   windows: Schema.Array(UsageWindow),
 }).annotate({ identifier: "ProviderUsageReport" });
 

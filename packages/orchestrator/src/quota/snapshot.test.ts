@@ -15,12 +15,18 @@ import {
 } from "./snapshot";
 import { UNAVAILABLE_USAGE } from "./types";
 
+const READ_AT_MS = 1_700_000_000_000;
+
 const reading = (over: Partial<ProviderReading> = {}): ProviderReading => ({
+  // The working case: the look and the reading are the same instant, and the
+  // look carried what it read.
+  attemptCarriedSignal: true,
+  attemptedAtMs: READ_AT_MS,
   enforced: true,
   pausedUntilMs: null,
   pauseReason: null,
   provider: "claude",
-  readAtMs: 1_700_000_000_000,
+  readAtMs: READ_AT_MS,
   reading: true,
   usage: {
     available: true,
@@ -80,17 +86,84 @@ describe("providerReport", () => {
     expect(report.windows[0]?.windowSeconds).toBeNull();
   });
 
-  test("an unreadable signal is its own state, not a full tank", () => {
-    const report = providerReport(reading({ usage: UNAVAILABLE_USAGE }));
+  test("a provider nothing has been read from is its own state, not a full tank", () => {
+    const report = providerReport(
+      reading({
+        attemptCarriedSignal: false,
+        readAtMs: null,
+        usage: UNAVAILABLE_USAGE,
+      })
+    );
     expect(report.state).toBe("unavailable");
     // Empty rather than zeroed: a 0% window renders as a full tank.
     expect(report.windows).toHaveLength(0);
-    expect(report.note).toContain("no signal");
+    expect(report.note).toBe("nothing has been read on this provider yet");
+    expect(report.stale).toBe(false);
+  });
+
+  /**
+   * The regression. A failed poll used to overwrite the cache with the
+   * unreadable shape, which erased the figures and re-dated the reading to the
+   * attempt that produced nothing — so a provider read fine yesterday published
+   * as one nobody had ever looked at.
+   */
+  test("a read that has stopped working keeps the last figures and dates them", () => {
+    const report = providerReport(
+      reading({
+        attemptCarriedSignal: false,
+        attemptedAtMs: READ_AT_MS + 259_200_000,
+      })
+    );
+
+    expect(report.state).toBe("ok");
+    expect(report.stale).toBe(true);
+    expect(report.windows).toHaveLength(2);
+    expect(report.windows[0]?.remainingPercent).toBe(60);
+    // The figures are dated when they were taken; the attempt is its own date.
+    expect(
+      report.readAt === null ? null : DateTime.toEpochMillis(report.readAt)
+    ).toBe(READ_AT_MS);
+    expect(
+      report.attemptedAt === null
+        ? null
+        : DateTime.toEpochMillis(report.attemptedAt)
+    ).toBe(READ_AT_MS + 259_200_000);
+    expect(report.note).toContain("the last that did");
+  });
+
+  test("a provider the loop has not looked at yet is blank without being stale", () => {
+    const report = providerReport(
+      reading({
+        attemptCarriedSignal: false,
+        attemptedAtMs: null,
+        readAtMs: null,
+        usage: UNAVAILABLE_USAGE,
+      })
+    );
+    expect(report.attemptedAt).toBeNull();
+    expect(report.stale).toBe(false);
+    expect(report.state).toBe("unavailable");
+  });
+
+  test("a paused provider is not stale, because nothing looked past its figures", () => {
+    const report = providerReport(
+      reading({
+        pausedUntilMs: READ_AT_MS + 600_000,
+        pauseReason: "a run failed on a usage limit",
+      })
+    );
+    expect(report.stale).toBe(false);
+    expect(report.state).toBe("paused");
   });
 
   test("reads switched off say so, rather than reading as a failure", () => {
     const report = providerReport(
-      reading({ reading: false, usage: UNAVAILABLE_USAGE })
+      reading({
+        attemptCarriedSignal: false,
+        readAtMs: null,
+        reading: false,
+        usage: UNAVAILABLE_USAGE,
+      })
     );
     expect(report.state).toBe("unavailable");
     expect(report.note).toBe("usage reads are switched off");
@@ -183,7 +256,12 @@ describe("publishUsage", () => {
             nowMs: 1_700_000_000_000,
             readings: [
               reading(),
-              reading({ provider: "codex", usage: UNAVAILABLE_USAGE }),
+              reading({
+                attemptCarriedSignal: false,
+                provider: "codex",
+                readAtMs: null,
+                usage: UNAVAILABLE_USAGE,
+              }),
             ],
           }),
           stateDir,

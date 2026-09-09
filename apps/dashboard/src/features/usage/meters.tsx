@@ -144,7 +144,14 @@ const WindowRow = ({
   </div>
 );
 
-/** One provider in the open sidebar. */
+/**
+ * One provider in the open sidebar.
+ *
+ * Figures nothing has confirmed since they were taken are dimmed rather than
+ * withheld. They are still the best answer there is — that is the whole reason
+ * the loop keeps them — but a reader scanning the panel has to be able to see at
+ * a glance which rows are live, and the age beside the name says how old.
+ */
 const ProviderRows = ({ view }: { readonly view: ProviderView }) => (
   <div className="flex flex-col gap-1">
     <div className="flex items-baseline gap-1.5">
@@ -158,9 +165,21 @@ const ProviderRows = ({ view }: { readonly view: ProviderView }) => (
       ) : null}
     </div>
     {view.kind === "readable" ? (
-      view.windows.map((window) => (
-        <WindowRow key={window.kind} provider={view.name} window={window} />
-      ))
+      <>
+        <div
+          className={cn("flex flex-col gap-1", view.stale && "opacity-60")}
+          data-stale={view.stale ? "true" : undefined}
+        >
+          {view.windows.map((window) => (
+            <WindowRow key={window.kind} provider={view.name} window={window} />
+          ))}
+        </div>
+        {view.stalenessText === null ? null : (
+          <p className={cn("text-muted-foreground", FINE_PRINT)}>
+            {view.stalenessText}
+          </p>
+        )}
+      </>
     ) : (
       <p className={cn("text-muted-foreground", FINE_PRINT)}>{view.reason}</p>
     )}
@@ -170,10 +189,13 @@ const ProviderRows = ({ view }: { readonly view: ProviderView }) => (
 /**
  * The reading with its bars, which is what the open sidebar and the sheet show.
  *
- * The heading carries the document's own age on the right. A percentage with no
- * age behind it looks live when it is not, and the one time this panel matters
- * most — the loop is down, somebody is looking for why — is exactly the time the
- * figures stop moving while still being figures.
+ * The heading carries the age of the *figures* on the right — the oldest of
+ * them — and not the age of the document. The loop rewrites that document every
+ * sweep whether or not anything was read, so "just now" up here used to sit over
+ * numbers taken days earlier, or over none at all. When the loop is down and
+ * somebody is looking for why, the age of the reading is the answer and the age
+ * of the file is a distraction; the file's own timestamp is on the hover, where
+ * a reader who wants to know whether the loop is alive can still find it.
  */
 const UsageReading = ({ view }: { readonly view: UsageView }) => (
   <div className="flex flex-col gap-2">
@@ -186,11 +208,16 @@ const UsageReading = ({ view }: { readonly view: UsageView }) => (
       >
         Usage
       </span>
-      {view.kind === "published" && view.publishedText !== null ? (
+      {view.kind === "published" && view.readingText !== null ? (
         <span
           className={cn("ml-auto truncate text-muted-foreground", FINE_PRINT)}
+          title={
+            view.publishedText === null
+              ? undefined
+              : `published ${view.publishedText}`
+          }
         >
-          {view.publishedText}
+          {view.readingText}
         </span>
       ) : null}
     </div>
@@ -235,8 +262,19 @@ const UsageDigest = ({ view }: { readonly view: UsageView }) => {
           ) : (
             <span className="opacity-80">{provider.reason}</span>
           )}
-          {provider.readText === null ? null : (
-            <span className="opacity-60">{provider.readText}</span>
+          {/*
+            Both dates, here and nowhere else. The panel has room for one and
+            picks the age of the figures; this is where "taken then, looked at
+            since" can be said in full, which is the difference between a reading
+            that stopped and a loop that stopped.
+          */}
+          {provider.readText === null &&
+          provider.attemptText === null ? null : (
+            <span className="opacity-60">
+              {[provider.readText, provider.attemptText]
+                .filter((part) => part !== null)
+                .join(" · ")}
+            </span>
           )}
         </div>
       ))}
@@ -254,6 +292,10 @@ const RailBars = ({ view }: { readonly view: UsageView }) => {
       {view.providers.map((provider) =>
         provider.kind === "readable" ? (
           <UsageBar
+            // Dimmed on the rail for the same reason as in the open panel: two
+            // hairlines and no words, so the only thing that can say these
+            // figures are old is how they are drawn. The tooltip says how old.
+            className={provider.stale ? "opacity-60" : undefined}
             key={provider.provider}
             label={null}
             window={provider.worst}
