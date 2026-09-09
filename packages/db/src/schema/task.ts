@@ -1,6 +1,7 @@
 import type {
   AgentSessionId,
   ProjectId,
+  PrState,
   TaskId,
   TaskMetadata,
   TaskStatus,
@@ -64,7 +65,19 @@ export const task = pgTable(
     // Set when repeated failure trips the retry threshold; the dispatcher skips
     // a parked task, so a failing task stops re-dispatching instead of looping.
     parkedUntil: tstz("parked_until"),
+    // The `ETag` GitHub returned with `pr_state`, sent back as `If-None-Match`
+    // on the next read. A `304` answered to a correctly authorized conditional
+    // request does not count against the primary rate limit, which is what
+    // makes refreshing a board of unchanged pull requests free. Storage, not
+    // domain: `decodeTask` drops it, so it reaches nothing above this package.
+    prEtag: text("pr_etag"),
     projectId: uuid("project_id").$type<ProjectId>(),
+    // What the pull request was doing when it was last read, and when that was.
+    // Two columns rather than one nullable struct because the second is what
+    // the refresh reads to decide whether to ask again, and a timestamp is what
+    // an index and a comparison both want.
+    prState: text("pr_state").$type<PrState>(),
+    prStateAt: tstz("pr_state_at"),
     prUrl: text("pr_url"),
     // Position in its column, ascending, and therefore position in the dispatch
     // queue. Fractional so that dropping a card between two others is one row

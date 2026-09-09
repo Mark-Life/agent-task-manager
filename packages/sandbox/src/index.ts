@@ -268,6 +268,17 @@ export {
   slugOf,
   WORKER_SEGMENT,
 } from "./mounts";
+// What that pull request is doing now, asked conditionally so an unchanged one
+// costs nothing. Exported because the gateway refreshes it behind a board read;
+// the same reasoning as below applies, one question later.
+export {
+  type PrStateAnswer,
+  type PrStateLookup,
+  type PrStateRead,
+  type PrStateUnavailable,
+  type PrStateUnchanged,
+  readPrState,
+} from "./pr-state";
 // The pull request a run's branch has. Exported because the orchestrator's
 // terminal path writes it onto the task, and because asking GitHub is how that
 // field stays a fact rather than a thing an agent remembered to report.

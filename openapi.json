@@ -6819,6 +6819,32 @@
               }
             ]
           },
+          "prState": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "draft",
+                  "open",
+                  "merged",
+                  "closed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prStateAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "prUrl": {
             "anyOf": [
               {
@@ -6900,6 +6926,8 @@
           "parentTaskId",
           "parkedUntil",
           "projectId",
+          "prState",
+          "prStateAt",
           "prUrl",
           "rank",
           "repoUrl",
@@ -7611,7 +7639,8 @@
             "type": "string",
             "enum": [
               "claude",
-              "codex"
+              "codex",
+              "pi"
             ]
           },
           "providerSessionId": {
@@ -8412,7 +8441,8 @@
             "type": "string",
             "enum": [
               "claude",
-              "codex"
+              "codex",
+              "pi"
             ]
           },
           "requests": {
@@ -8648,7 +8678,8 @@
             "type": "string",
             "enum": [
               "claude",
-              "codex"
+              "codex",
+              "pi"
             ]
           },
           "role": {
@@ -8860,7 +8891,8 @@
                     "type": "string",
                     "enum": [
                       "claude",
-                      "codex"
+                      "codex",
+                      "pi"
                     ]
                   },
                   "sandboxImage": {
@@ -10483,7 +10515,8 @@
             "type": "string",
             "enum": [
               "claude",
-              "codex"
+              "codex",
+              "pi"
             ]
           },
           "status": {
@@ -10534,7 +10567,8 @@
             "type": "string",
             "enum": [
               "claude",
-              "codex"
+              "codex",
+              "pi"
             ]
           },
           "title": {
@@ -10909,7 +10943,8 @@
             "type": "string",
             "enum": [
               "claude",
-              "codex"
+              "codex",
+              "pi"
             ]
           },
           "readAt": {

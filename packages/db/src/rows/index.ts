@@ -99,7 +99,13 @@ export {
   RunCommandUpdate,
 } from "./run-command";
 export { decodeRunEvent, RunEventInsert, RunEventRow } from "./run-event";
-export { decodeTask, TaskInsert, TaskRow, TaskUpdate } from "./task";
+export {
+  decodeTask,
+  decodeTaskRow,
+  TaskInsert,
+  TaskRow,
+  TaskUpdate,
+} from "./task";
 export {
   decodeTaskMessage,
   TaskMessageInsert,

@@ -1,4 +1,4 @@
-import { Cancel01Icon, LinkSquare02Icon } from "@hugeicons/core-free-icons";
+import { Cancel01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { TaskDetail } from "@workspace/api";
 import { Badge } from "@workspace/ui/components/badge";
@@ -7,6 +7,11 @@ import { Spinner } from "@workspace/ui/components/spinner";
 import { useCallback } from "react";
 import { usePatchTask } from "@/api/tasks";
 import { CopyButton } from "@/components/copy-button";
+import {
+  PrStateIcon,
+  prStateNumbered,
+  prStateTitle,
+} from "@/components/pr-state";
 import { InlineText } from "@/features/task/inline";
 import { StatusSelect } from "@/features/task/status-select";
 import { failureText } from "@/lib/failure";
@@ -127,14 +132,23 @@ export const TaskHeader = ({ detail, onClose }: TaskHeaderProps) => {
                 href={task.prUrl}
                 rel="noreferrer"
                 target="_blank"
-                title={task.prUrl}
+                // The URL was the title here and the state is the better
+                // answer: somebody hovering this is asking what happened to the
+                // pull request, not where it lives — the link already says
+                // that, and the browser shows it in the status bar anyway.
+                title={prStateTitle({
+                  prState: task.prState,
+                  prUrl: task.prUrl,
+                })}
               />
             }
             size="sm"
             variant="outline"
           >
-            <HugeiconsIcon icon={LinkSquare02Icon} strokeWidth={2} />
-            Pull request
+            {/* The same icon the card in the column draws, in the same colour.
+                Two components would eventually disagree about which green. */}
+            <PrStateIcon prState={task.prState} />
+            {prStateNumbered({ prState: task.prState, prUrl: task.prUrl })}
           </Button>
         )}
       </div>

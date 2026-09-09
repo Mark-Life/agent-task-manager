@@ -123,5 +123,9 @@ export {
   type TaskMessageWatermark,
   type ThreadRef,
 } from "./repositories/task-message";
+export type {
+  PrStateRecord,
+  TaskPrCache,
+} from "./repositories/task-pr";
 export { WorkspaceRepo } from "./repositories/workspace";
 export { chatStoreLayer, repositoriesLayer, storeLayer } from "./store";
