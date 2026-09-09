@@ -54,6 +54,8 @@ import { ScopeHistory } from "@workspace/sandbox";
 import { Context, DateTime, Effect, Exit, Layer, Schema, Scope } from "effect";
 import { HttpRouter, HttpServer } from "effect/unstable/http";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { BoardNotices } from "../board-sse";
+import { httpServerOptions } from "../layers";
 import { PrStates } from "../pr-state";
 import { RunEventNotices } from "../sse";
 import { handlersLayer } from ".";
@@ -136,6 +138,7 @@ const gatewayLayer = (workspace: WorkspaceId) => {
   );
   const services = Layer.mergeAll(
     access,
+    BoardNotices.layer,
     RunEventNotices.layer,
     // Real, as in `./board.test.ts`: with no `ATM_GITHUB_TOKEN` on the suite's
     // environment the refresh a board read queues answers "unavailable" without
@@ -150,7 +153,7 @@ const gatewayLayer = (workspace: WorkspaceId) => {
     Layer.provide(services)
   );
   return HttpRouter.serve(api).pipe(
-    Layer.provideMerge(BunHttpServer.layer({ port: EPHEMERAL_PORT })),
+    Layer.provideMerge(BunHttpServer.layer(httpServerOptions(EPHEMERAL_PORT))),
     Layer.provide(BunServices.layer)
   );
 };

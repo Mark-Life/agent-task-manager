@@ -1,5 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import type { BoardColumn } from "@workspace/api";
 import type { ProjectId, TaskId, TaskStatus } from "@workspace/domain";
+import { useEffect, useRef } from "react";
 import {
   applyBoardMove,
   type BoardMove,
@@ -11,6 +13,7 @@ import {
 import { keys } from "@/api/keys";
 import { apiMutation, apiQuery } from "@/api/query";
 import type { ApiClientShape } from "@/api/runtime";
+import { useApiStream } from "@/api/stream";
 
 type TaskClient = ApiClientShape["tasks"];
 
@@ -59,6 +62,60 @@ export const boardQuery = (projectId: ProjectId | null = null) =>
   apiQuery(keys.board(projectId), (client) =>
     client.tasks.board({ query: projectId === null ? {} : { projectId } })
   );
+
+/**
+ * The board again whenever it changes, written into the cache the read above
+ * filled.
+ *
+ * This is what replaced the poll. The board used to re-read itself every ten
+ * seconds whether or not anything had moved, and every card in progress was a
+ * second read on the same interval; between them they were the largest source
+ * of rows in the gateway's ledger and they described a screen being open rather
+ * than any work being done. Now the first read is the only request a board
+ * makes, and a card somebody else moves arrives in about the time it takes the
+ * database to say so.
+ *
+ * Held while a card is in the air, and released when it lands. A drag is drawn
+ * optimistically, so a snapshot arriving mid-gesture would put the card back
+ * where the server still thinks it is and take it out from under the pointer.
+ * The last one held is applied on the drop, which is also when the move's own
+ * write settles the board — so nothing that arrived during the gesture is lost.
+ */
+export const useBoardStream = (options: {
+  /** True while a card is being dragged: snapshots wait rather than land. */
+  readonly paused: boolean;
+  readonly projectId: ProjectId | null;
+}) => {
+  const { paused, projectId } = options;
+  const queryClient = useQueryClient();
+  const held = useRef<readonly BoardColumn[] | null>(null);
+
+  useEffect(() => {
+    if (!paused && held.current !== null) {
+      queryClient.setQueryData(keys.board(projectId), held.current);
+      held.current = null;
+    }
+  }, [paused, projectId, queryClient]);
+
+  useApiStream({
+    enabled: true,
+    // A board has no terminus: it ends when the tab does, so an end is a
+    // connection that dropped.
+    endless: true,
+    onValue: (columns: readonly BoardColumn[]) => {
+      if (paused) {
+        held.current = columns;
+        return;
+      }
+      queryClient.setQueryData(keys.board(projectId), columns);
+    },
+    open: (client) =>
+      client.tasks.boardStream({
+        query: projectId === null ? {} : { projectId },
+      }),
+    subscription: `board:${projectId ?? "all"}`,
+  });
+};
 
 /**
  * The flat list, filtered. Not a different source from the board — the server

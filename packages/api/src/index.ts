@@ -102,6 +102,7 @@ export {
   SkillUpdateApply,
 } from "./schemas/skill";
 export {
+  BoardCard,
   BoardColumn,
   NextSession,
   Task,

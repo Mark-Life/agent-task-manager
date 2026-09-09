@@ -25,8 +25,8 @@
  * repository exposes today.
  */
 
-import { Api, Principal } from "@workspace/api";
-import { RunCommandRepo, TaskRepo, withActor } from "@workspace/db";
+import { Api, type BoardColumn, Principal } from "@workspace/api";
+import { RunCommandRepo, RunRepo, TaskRepo, withActor } from "@workspace/db";
 import {
   type Actor,
   movesFreely,
@@ -40,7 +40,9 @@ import {
 } from "@workspace/domain";
 import { Effect } from "effect";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
+import { type BoardNotices, boardStream } from "../board-sse";
 import { PrStates } from "../pr-state";
+import { atBuild } from "./at-build";
 import {
   storeDefects,
   toIllegalDeletion,
@@ -108,7 +110,12 @@ export const tasksHandlers = HttpApiBuilder.group(Api, "tasks", (handlers) =>
   Effect.gen(function* () {
     const tasks = yield* TaskRepo;
     const commands = yield* RunCommandRepo;
+    const runs = yield* RunRepo;
     const prStates = yield* PrStates;
+    // The board's notice multicast, taken once: one `LISTEN` for the process,
+    // shared by every open board, is what keeps a hundred dashboard tabs from
+    // being a hundred connections.
+    const on = yield* atBuild<BoardNotices>();
 
     /**
      * Asks the orchestrator to kill the container working on this task.
@@ -152,6 +159,49 @@ export const tasksHandlers = HttpApiBuilder.group(Api, "tasks", (handlers) =>
         )
       );
 
+    /**
+     * The run working on each task right now, by task.
+     *
+     * One read for the whole board rather than one per card. A dashboard used
+     * to ask `/tasks/:taskId` once per in-progress card on a timer to learn
+     * this, which made the number of requests a function of how many workers
+     * the operator was willing to run; live runs are bounded by the same thing,
+     * so reading all of them at once is bounded by it too and costs one query.
+     *
+     * Every live run, not the in-progress column's: a card dragged out of that
+     * column keeps its container until the orchestrator acts on the stop, and
+     * drawing it as though nothing were running would be a lie for as long as
+     * that takes.
+     */
+    const liveRunIds = (workspaceId: WorkspaceId) =>
+      Effect.map(
+        runs.listLive({ workspaceId }).pipe(Effect.catchTags(storeDefects)),
+        (live) =>
+          new Map(
+            live.flatMap((run) =>
+              run.taskId === null ? [] : [[run.taskId, run.id] as const]
+            )
+          )
+      );
+
+    /** The board: every column, and the run on each card that has one. */
+    const readBoard = (
+      query: ColumnQuery
+    ): Effect.Effect<readonly BoardColumn[]> =>
+      Effect.gen(function* () {
+        const columns = yield* readColumns(query).pipe(
+          Effect.catchTags(storeDefects)
+        );
+        const live = yield* liveRunIds(query.workspaceId);
+        return columns.map((column) => ({
+          ...column,
+          tasks: column.tasks.map((task) => ({
+            ...task,
+            liveRunId: live.get(task.id) ?? null,
+          })),
+        }));
+      });
+
     return handlers.handleAll({
       // Looking at the board is what asks GitHub whether the pull requests on
       // it have moved. The columns are answered from the cached state either
@@ -161,15 +211,29 @@ export const tasksHandlers = HttpApiBuilder.group(Api, "tasks", (handlers) =>
       board: ({ query }) =>
         Effect.gen(function* () {
           const { workspaceId } = yield* Principal;
-          const columns = yield* readColumns({ ...query, workspaceId }).pipe(
-            Effect.catchTags(storeDefects)
-          );
+          const columns = yield* readBoard({ ...query, workspaceId });
           yield* prStates.observe({
             tasks: columns.flatMap((column) => column.tasks),
             workspaceId,
           });
           return columns;
         }),
+
+      // The same board, and then nothing until it changes. The workspace is
+      // read here and closed over for the life of the connection, which is the
+      // scope the credential that opened it had — `../board-sse` re-reads
+      // through this handler's own function rather than being handed rows off
+      // a channel, so a subscriber sees exactly what a request would answer.
+      boardStream: ({ query }) =>
+        on(
+          Effect.gen(function* () {
+            const { workspaceId } = yield* Principal;
+            return yield* boardStream({
+              board: readBoard({ ...query, workspaceId }),
+              workspaceId,
+            });
+          })
+        ),
 
       create: ({ payload }) =>
         Effect.gen(function* () {

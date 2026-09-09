@@ -86,11 +86,18 @@ describe("the contract", () => {
     expect(weaker.map(({ method, path }) => `${method} ${path}`)).toEqual([]);
   });
 
+  // The board is the one thing under `/tasks` that is not one task's: it is
+  // every column at once, so it and its live form sit beside the cards rather
+  // than under one of them.
   test("nests everything a task owns under its id", () => {
     const stray = Object.keys(makeOpenApiSpec().paths).filter(
       (path) =>
         path.startsWith("/tasks/") &&
-        !(path === "/tasks/board" || path.startsWith("/tasks/{taskId}"))
+        !(
+          path === "/tasks/board" ||
+          path.startsWith("/tasks/board/") ||
+          path.startsWith("/tasks/{taskId}")
+        )
     );
     expect(stray).toEqual([]);
   });

@@ -78,6 +78,19 @@ const events = HttpApiEndpoint.get(
  * nothing in the document tells it to hold the connection open — streaming to an
  * external agent is a deliberate integration, not a free consequence of the
  * spec.
+ *
+ * `toCodecJson` around the event is what makes the stream decodable, and it is
+ * not decoration. An SSE frame's `data` is JSON text, and `StreamSse` reads it
+ * with `fromJsonString`, which parses the string and hands the result to the
+ * event's *encoded* side — and a run event's encoded side has `Date` on it,
+ * because `Timestamp` is `DateTimeUtcFromDate`. JSON has no Date. So the server
+ * wrote an ISO string, every client asked its schema for a `Date` object, and
+ * every event failed to decode with "Expected a valid Date": the transport was
+ * built, shipped, and unusable, and the dashboard polled the paged endpoint
+ * instead. The buffered endpoints never had the fault because a JSON body is
+ * encoded through this same wrapper by the response codec. The wire bytes are
+ * identical either way — `JSON.stringify` had already been rendering that Date
+ * as the ISO string this decodes.
  */
 const stream = HttpApiEndpoint.get(
   "stream",
@@ -86,7 +99,7 @@ const stream = HttpApiEndpoint.get(
     error: NotFound,
     params: { runId: RunId, taskId: TaskId },
     query: RunEventCursor,
-    success: HttpApiSchema.StreamSse({ data: RunEvent }),
+    success: HttpApiSchema.StreamSse({ data: Schema.toCodecJson(RunEvent) }),
   }
 )
   .middleware(ReadAccess)

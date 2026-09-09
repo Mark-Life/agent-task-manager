@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { BoardColumn, Task } from "@workspace/api";
+import type { BoardCard, BoardColumn } from "@workspace/api";
 import {
   RANK_STEP,
   TASK_STATUSES,
@@ -16,12 +16,15 @@ const when = DateTime.makeUnsafe("2026-08-02T10:00:00.000Z");
 const idOf = (n: number) =>
   TaskId.make(`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`);
 
-const taskOf = (n: number, status: TaskStatus, rank: number): Task => ({
+const taskOf = (n: number, status: TaskStatus, rank: number): BoardCard => ({
   acceptance: null,
   brief: "",
   createdAt: when,
   dispatchTraceparent: null,
   id: idOf(n),
+  // Nothing in either file is about a run: what a card carries beside its own
+  // row is the board read's business, and these are about where a card sits.
+  liveRunId: null,
   metadata: {},
   nextSessionId: null,
   nextSessionNew: false,
@@ -41,7 +44,7 @@ const taskOf = (n: number, status: TaskStatus, rank: number): Task => ({
   workspaceId: WorkspaceId.make("workspace"),
 });
 
-const boardOf = (tasks: readonly Task[]): readonly BoardColumn[] =>
+const boardOf = (tasks: readonly BoardCard[]): readonly BoardColumn[] =>
   TASK_STATUSES.map((status) => ({
     status,
     tasks: tasks.filter((task) => task.status === status),

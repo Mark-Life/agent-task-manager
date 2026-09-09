@@ -18,6 +18,7 @@ import { Schema } from "effect";
 import {
   HttpApiEndpoint,
   HttpApiGroup,
+  HttpApiSchema,
   OpenApi,
 } from "effect/unstable/httpapi";
 import {
@@ -65,6 +66,35 @@ const board = HttpApiEndpoint.get("board", "/tasks/board", {
 })
   .middleware(ReadAccess)
   .annotate(OpenApi.Summary, "The board, column by column");
+
+/**
+ * The board again, and again, for as long as the connection is held: one whole
+ * board each time anything on it moves, and nothing in between.
+ *
+ * The same value {@link board} answers with, so a reader has one shape to
+ * understand and a screen has one thing to draw — what differs is that this one
+ * arrives when a card moves rather than when somebody asks. A snapshot is only
+ * sent when it differs from the last one sent, so an open dashboard on a quiet
+ * board costs one connection and no traffic at all.
+ *
+ * Whole board rather than the card that changed, because a card's *place* is
+ * the thing the board draws: a move takes it out of one column and puts it at a
+ * rank in another, and re-deriving that from a card and a rank on the client is
+ * a second implementation of the ordering the server already did.
+ *
+ * A generic OpenAPI consumer sees `text/event-stream` and the column schema,
+ * and nothing in the document tells it to hold the connection open — as with
+ * the run stream, following a board is a deliberate integration rather than a
+ * free consequence of the spec.
+ */
+const boardStream = HttpApiEndpoint.get("boardStream", "/tasks/board/stream", {
+  query: { projectId: Schema.optionalKey(ProjectId) },
+  success: HttpApiSchema.StreamSse({
+    data: Schema.toCodecJson(Schema.Array(BoardColumn)),
+  }),
+})
+  .middleware(ReadAccess)
+  .annotate(OpenApi.Summary, "Stream the board as it changes");
 
 /** One task, its project, and the run working on it right now if there is one. */
 const get = HttpApiEndpoint.get("get", "/tasks/:taskId", {
@@ -168,6 +198,7 @@ export class TasksGroup extends HttpApiGroup.make("tasks")
   .add(
     list,
     board,
+    boardStream,
     get,
     create,
     patch,

@@ -32,10 +32,11 @@ interface RunTimelineProps {
  * What a run did, in the order it did it.
  *
  * The events are paged forward by the sequence number the container wrote, and
- * a live run is polled rather than streamed: the contract's event stream cannot
- * be decoded by a derived client today. Polling stops on the terminal event the
- * list has actually rendered, so a finished attempt read out of history costs
- * one request per page and nothing after that.
+ * a live run's tail arrives over the contract's event stream — one held
+ * connection, appended to as the container writes, rather than the three-second
+ * poll this used to be. The stream closes on the terminal event, so a finished
+ * attempt read out of history costs one request per page and nothing after
+ * that.
  *
  * Two readings of the same list, and the paging is shared between them: the
  * events come from one query whichever is on screen, so switching does not
