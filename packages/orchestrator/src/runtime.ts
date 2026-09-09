@@ -421,7 +421,7 @@ const make = Effect.gen(function* () {
   /**
    * The deadline for one turn. A person is waiting on a manager turn, so it is
    * capped in minutes; a worker run is a whole piece of work and is capped in
-   * hours.
+   * days.
    */
   const timeoutFor = (attached: RunAttachment) =>
     attached.role === "manager" ? config.chatTimeoutMs : config.runTimeoutMs;
