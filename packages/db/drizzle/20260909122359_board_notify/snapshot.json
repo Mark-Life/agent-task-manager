@@ -1,6 +1,6 @@
 {
-  "id": "39c6e42f-6557-49e7-8b60-62d246d6bae2",
-  "prevIds": ["444ceb1d-71b0-4f73-a383-a60f7c251d2d"],
+  "id": "f7ba111a-e45e-49e4-903d-1d57c093c3fe",
+  "prevIds": ["81d5427e-91e3-4003-8215-a2a279a374f4"],
   "version": "8",
   "dialect": "postgres",
   "ddl": [
@@ -3453,6 +3453,45 @@
       "generated": null,
       "identity": null,
       "name": "project_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "task"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "pr_etag",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "task"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "pr_state",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "task"
+    },
+    {
+      "type": "timestamp with time zone",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "pr_state_at",
       "entityType": "columns",
       "schema": "public",
       "table": "task"
