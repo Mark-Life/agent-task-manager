@@ -75,9 +75,9 @@ turn as a plain host process for debugging a harness change without an image, an
 `kind: "local"` on the row so an unisolated run can never be mistaken for a contained one.
 
 **A run that goes quiet is closed, not waited on.** A stream that ends with no result is
-`lost`; one that never ends at all is torn down at `ORCHESTRATOR_RUN_TIMEOUT_MS` (a day by
-default, long enough for a run that is genuinely working through the night) and closed as
-`timeout`, so a wedged provider costs one slot for a day rather than one slot forever. The
+`lost`; one that never ends at all is torn down at `ORCHESTRATOR_RUN_TIMEOUT_MS` (a week by
+default, long enough for a run that is genuinely working a task for days) and closed as
+`timeout`, so a wedged provider costs one slot for a week rather than one slot forever. The
 run's board credential is minted for that same span plus five minutes, because a token that
 expires under a live run is a `401` per tool call that the agent narrates instead of failing
 on.
