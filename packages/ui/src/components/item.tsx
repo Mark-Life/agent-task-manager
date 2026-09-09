@@ -112,12 +112,24 @@ function ItemMedia({
   )
 }
 
+/**
+ * The text column, and the one place the row is allowed to get narrower than
+ * its own words.
+ *
+ * `min-w-0` is what makes the clamping below this point mean anything. A flex
+ * item's automatic minimum size is its content, so without it this column is
+ * never smaller than the longest unbroken run of text inside it — the title's
+ * `line-clamp-1`, the description's `line-clamp-2` and a caller's `truncate`
+ * all sit on a box that has already grown past the card, and the page scrolls
+ * sideways instead. Two call sites had each written this class out locally
+ * before it lived here.
+ */
 function ItemContent({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="item-content"
       className={cn(
-        "flex flex-1 flex-col gap-1 group-data-[size=xs]/item:gap-0.5 [&+[data-slot=item-content]]:flex-none",
+        "flex min-w-0 flex-1 flex-col gap-1 group-data-[size=xs]/item:gap-0.5 [&+[data-slot=item-content]]:flex-none",
         className
       )}
       {...props}
@@ -130,7 +142,17 @@ function ItemTitle({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="item-title"
       className={cn(
-        "line-clamp-1 flex w-fit items-center gap-2 text-xs/relaxed leading-snug font-medium underline-offset-4",
+        // `w-fit` is a max-content width, which a single long word takes
+        // literally and carries out of the card even though the clamp would
+        // have cut it. `max-w-full` gives the clamp something to clamp to and
+        // leaves every title that already fitted exactly where it was.
+        //
+        // Note that `line-clamp-1` here only supplies the `overflow: hidden`
+        // half of itself: `flex` wins the display property, so the clamp — and
+        // its ellipsis — never runs. A title that has to be cut *and* say so
+        // puts a `truncate` span inside, which is what `ItemTitle` being a flex
+        // row is for; `artifacts.tsx` and `projects.tsx` both do it.
+        "line-clamp-1 flex w-fit max-w-full items-center gap-2 text-xs/relaxed leading-snug font-medium underline-offset-4",
         className
       )}
       {...props}
@@ -143,7 +165,10 @@ function ItemDescription({ className, ...props }: React.ComponentProps<"p">) {
     <p
       data-slot="item-description"
       className={cn(
-        "line-clamp-2 text-left text-xs/relaxed font-normal text-muted-foreground [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
+        // `wrap-anywhere` for the callers that take the clamp off — a stack
+        // trace or a URL in an error message is one token with nowhere to
+        // break, and unclamped it would spill rather than be cut.
+        "line-clamp-2 wrap-anywhere text-left text-xs/relaxed font-normal text-muted-foreground [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
         className
       )}
       {...props}

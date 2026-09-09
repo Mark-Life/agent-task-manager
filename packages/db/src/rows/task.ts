@@ -1,6 +1,7 @@
 import {
   AgentSessionId,
   ProjectId,
+  PrState,
   TaskId,
   TaskMetadata,
   TaskStatus,
@@ -12,8 +13,9 @@ import {
   createSelectSchema,
   createUpdateSchema,
 } from "drizzle-orm/effect-schema";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { task } from "../schema/task";
+import { asEntity } from "./conformance";
 
 /**
  * `metadata` is the one place an agent writes a shape nobody declared, and it
@@ -32,13 +34,15 @@ const columns = {
   parentTaskId: () => TaskId,
   parkedUntil: () => Timestamp,
   projectId: () => ProjectId,
+  prState: () => PrState,
+  prStateAt: () => Timestamp,
   status: () => TaskStatus,
   statusChangedAt: () => Timestamp,
   title: () => Schema.NonEmptyString,
   workspaceId: () => WorkspaceId,
 };
 
-/** A `task` row as the database hands it back. */
+/** A `task` row as the database hands it back, cached pull request state included. */
 export const TaskRow = createSelectSchema(task, {
   ...columns,
   createdAt: () => Timestamp,
@@ -52,9 +56,24 @@ export const TaskInsert = createInsertSchema(task, columns);
 export const TaskUpdate = createUpdateSchema(task, columns);
 
 /**
+ * The whole row, `pr_etag` and all. Used by the one read that needs it — the
+ * pull request refresh, which sends the stored ETag back as `If-None-Match`.
+ */
+export const decodeTaskRow = Schema.decodeUnknownEffect(TaskRow);
+
+/**
  * Turns a raw row into the domain entity. The status is checked against the
  * literal union here and nowhere else on the read path, so a value the status
  * machine has never heard of is rejected at the boundary instead of reaching a
  * transition lookup that would silently find no legal moves.
+ *
+ * `pr_etag` is dropped, for the reason `project_env_file` drops its sealed
+ * blob: it is storage. The string is GitHub's opaque handle on one version of
+ * one response, it means nothing to a board or an agent, and a column shipped
+ * to every reader of a task is a column somebody eventually writes logic
+ * against.
  */
-export const decodeTask = Schema.decodeUnknownEffect(TaskRow);
+export const decodeTask = (row: unknown) =>
+  Effect.map(decodeTaskRow(row), ({ prEtag: _prEtag, ...rest }) =>
+    asEntity(rest)
+  );

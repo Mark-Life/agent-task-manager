@@ -76,11 +76,15 @@ const report = (input: {
 }) =>
   Effect.gen(function* () {
     const published = providerReport({
+      // This command takes the reading it prints, here and now, so the look and
+      // the figures are the same instant and nothing it prints is ever stale.
+      attemptCarriedSignal: input.usage.available,
+      attemptedAtMs: input.nowMs,
       enforced: true,
       pausedUntilMs: null,
       pauseReason: null,
       provider: input.provider,
-      readAtMs: input.nowMs,
+      readAtMs: input.usage.available ? input.nowMs : null,
       reading: true,
       usage: input.usage,
     });

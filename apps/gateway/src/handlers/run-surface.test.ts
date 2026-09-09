@@ -56,6 +56,7 @@ import { HttpRouter, HttpServer } from "effect/unstable/http";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { BoardNotices } from "../board-sse";
 import { httpServerOptions } from "../layers";
+import { PrStates } from "../pr-state";
 import { RunEventNotices } from "../sse";
 import { handlersLayer } from ".";
 
@@ -139,6 +140,10 @@ const gatewayLayer = (workspace: WorkspaceId) => {
     access,
     BoardNotices.layer,
     RunEventNotices.layer,
+    // Real, as in `./board.test.ts`: with no `ATM_GITHUB_TOKEN` on the suite's
+    // environment the refresh a board read queues answers "unavailable" without
+    // a socket, so it is the handler under test and never GitHub.
+    PrStates.layer,
     ScopeHistory.editsLayer
   ).pipe(Layer.provideMerge(Layer.merge(CurrentActor.layer(actor), store)));
   // Once, and once is enough: every group takes its repositories while its

@@ -83,6 +83,7 @@ import { HttpApiBuilder, HttpApiClient } from "effect/unstable/httpapi";
 import { BOARD_CHANNEL, BoardNotices } from "./board-sse";
 import { handlersLayer } from "./handlers";
 import { httpServerOptions } from "./layers";
+import { PrStates } from "./pr-state";
 import { RunEventNotices } from "./sse";
 
 /** Reported as `application_name`, which is how the listener is found below. */
@@ -177,6 +178,10 @@ const gatewayLayer = (workspace: WorkspaceId) => {
     access,
     BoardNotices.layer,
     RunEventNotices.layer,
+    // The board read queues a pull request refresh behind itself; with no
+    // `ATM_GITHUB_TOKEN` in the suite's environment every lookup answers
+    // "unavailable" without leaving the process.
+    PrStates.layer,
     ScopeHistory.editsLayer
   ).pipe(Layer.provideMerge(Layer.merge(CurrentActor.layer(actor), store)));
   const api = HttpApiBuilder.layer(Api).pipe(

@@ -14,13 +14,21 @@
  * answers: a confident drain defers, and an unreadable signal dispatches with an
  * alert. A gate that silently disables itself is worse than no gate, because the
  * operator believes it is on.
+ *
+ * These are schemas rather than bare interfaces because the last good reading is
+ * written to disk and read back after a restart — see `./readings`. A hand-kept
+ * second spelling of this shape would drift the moment a field is added here,
+ * and it would drift silently, into a panel showing figures nobody can explain.
  */
+
+import { Schema } from "effect";
 
 /** Which allowance window a signal is about. `reactive` is a drained run, not a read. */
 export const QUOTA_WINDOWS = ["primary", "secondary", "reactive"] as const;
 
 /** The rolling windows a provider reports, plus the one a failed run implies. */
-export type QuotaWindow = (typeof QUOTA_WINDOWS)[number];
+export const QuotaWindow = Schema.Literals(QUOTA_WINDOWS);
+export type QuotaWindow = typeof QuotaWindow.Type;
 
 /**
  * How full one window is. `utilizationPercent` is normalized to 0–100 by the
@@ -34,25 +42,30 @@ export type QuotaWindow = (typeof QUOTA_WINDOWS)[number];
  * silently: Codex names the length on every window it reports, and Claude names
  * it in the key. Null where a source states neither.
  */
-export interface WindowUsage {
-  readonly resetsAtMs: number | null;
-  readonly utilizationPercent: number;
-  readonly windowSeconds: number | null;
-}
+export const WindowUsage = Schema.Struct({
+  resetsAtMs: Schema.NullOr(Schema.Number),
+  utilizationPercent: Schema.Number,
+  windowSeconds: Schema.NullOr(Schema.Number),
+}).annotate({ identifier: "WindowUsage" });
+
+export interface WindowUsage extends Schema.Schema.Type<typeof WindowUsage> {}
 
 /** One read of a provider's allowance. */
-export interface ProviderUsage {
+export const ProviderUsage = Schema.Struct({
   /** False means the read produced no usable signal, which is not the same as drained. */
-  readonly available: boolean;
+  available: Schema.Boolean,
   /** The provider itself says it is out. The one hard signal. */
-  readonly limitReached: boolean;
+  limitReached: Schema.Boolean,
   /** The short rolling window, ~5h on both providers. Null when the source omits it. */
-  readonly primary: WindowUsage | null;
+  primary: Schema.NullOr(WindowUsage),
   /** Which window the provider named as reached, where it names one. */
-  readonly reachedWindow: QuotaWindow | null;
+  reachedWindow: Schema.NullOr(QuotaWindow),
   /** The long rolling window, ~7 days. Null when the source omits it. */
-  readonly secondary: WindowUsage | null;
-}
+  secondary: Schema.NullOr(WindowUsage),
+}).annotate({ identifier: "ProviderUsage" });
+
+export interface ProviderUsage
+  extends Schema.Schema.Type<typeof ProviderUsage> {}
 
 /**
  * The unreadable shape. Every failure path collapses to this, and so does a

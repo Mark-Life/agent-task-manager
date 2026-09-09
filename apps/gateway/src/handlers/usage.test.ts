@@ -84,6 +84,21 @@ describe("readPublishedUsage", () => {
     expect(snapshot.providers[0]?.windows[0]?.label).toBe("5h");
   });
 
+  /**
+   * The fixture above is deliberately an older document: it carries neither
+   * `attemptedAt` nor `stale`. This file outlives both processes that touch it,
+   * so the first read after an upgrade is always of a file the previous loop
+   * wrote — and a schema that refused it would blank the panel and log drift
+   * until the next sweep.
+   */
+  test("a document from before the two dates still reads, defaulted", async () => {
+    const root = dataRoot();
+    write(root, published);
+    const snapshot = await read(root);
+    expect(snapshot.providers[0]?.attemptedAt).toBeNull();
+    expect(snapshot.providers[0]?.stale).toBe(false);
+  });
+
   test("nothing published reads as nothing published, not as an error", async () => {
     const snapshot = await read(dataRoot());
     expect(snapshot.publishedAt).toBeNull();

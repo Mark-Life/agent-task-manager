@@ -61,8 +61,8 @@ const binding: AgentBinding = {
   taskId: TaskId.make("0199a000-0000-7000-8000-000000000003"),
 };
 
-/** The run cap this loop ships with: a day, because a worker run is a day's work. */
-const RUN_TIMEOUT_MS = 86_400_000;
+/** The run cap this loop ships with: a week, and what this test rolls across. */
+const RUN_TIMEOUT_MS = 604_800_000;
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;

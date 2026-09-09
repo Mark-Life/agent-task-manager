@@ -42,11 +42,13 @@ describe("UsageMeters", () => {
     const markup = markupFor({
       providers: [
         {
+          attemptedAt: DateTime.makeUnsafe("2026-08-07T12:00:00.000Z"),
           enforced: true,
-          note: "the last read produced no signal",
+          note: "nothing has been read on this provider yet",
           pausedUntil: null,
           provider: "claude",
           readAt: null,
+          stale: false,
           state: "unavailable",
           windows: [],
         },
@@ -55,18 +57,20 @@ describe("UsageMeters", () => {
     });
 
     expect(markup).not.toContain(BAR);
-    expect(markup).toContain("the last read produced no signal");
+    expect(markup).toContain("nothing has been read on this provider yet");
   });
 
   test("a real reading draws a bar per window, labelled as the provider labelled it", () => {
     const markup = markupFor({
       providers: [
         {
+          attemptedAt: DateTime.makeUnsafe("2026-08-07T12:00:00.000Z"),
           enforced: true,
           note: null,
           pausedUntil: null,
           provider: "codex",
           readAt: DateTime.makeUnsafe("2026-08-07T12:00:00.000Z"),
+          stale: false,
           state: "ok",
           windows: [
             {
@@ -95,5 +99,51 @@ describe("UsageMeters", () => {
     expect(markup).toContain(">5h<");
     expect(markup).toContain(">7d<");
     expect(markup).toContain(">62%<");
+  });
+
+  /**
+   * The other half of the rule at the top of this file. An account that *was*
+   * read and has stopped being readable must not be drawn as an account nobody
+   * has ever looked at: the figures are the last true thing anyone knows about
+   * it, and blanking them sends somebody looking for a login that is fine.
+   */
+  test("figures older than the last look are still drawn, marked and dated", () => {
+    const markup = markupFor({
+      providers: [
+        {
+          attemptedAt: DateTime.nowUnsafe(),
+          enforced: true,
+          note: "the last read produced no signal — these figures are the last that did",
+          pausedUntil: null,
+          provider: "codex",
+          readAt: DateTime.makeUnsafe(
+            DateTime.toEpochMillis(DateTime.nowUnsafe()) - 3 * 86_400_000
+          ),
+          stale: true,
+          state: "ok",
+          windows: [
+            {
+              kind: "primary",
+              label: "5h",
+              remainingPercent: 40,
+              resetsAt: null,
+              usedPercent: 60,
+              windowSeconds: 18_000,
+            },
+          ],
+        },
+      ],
+      publishedAt: DateTime.nowUnsafe(),
+    });
+
+    expect(markup).toContain(BAR);
+    expect(markup).toContain(">40%<");
+    // The age of the figures, and the marker that says they are being drawn as
+    // old rather than as current.
+    expect(markup).toContain("read 3d ago");
+    expect(markup).toContain('data-stale="true"');
+    // And the heading is the age of the reading, not of the document, which the
+    // loop rewrote a moment ago.
+    expect(markup).not.toContain(">just now<");
   });
 });

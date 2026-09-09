@@ -41,6 +41,7 @@ import {
 import { Effect } from "effect";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { type BoardNotices, boardStream } from "../board-sse";
+import { PrStates } from "../pr-state";
 import { atBuild } from "./at-build";
 import {
   storeDefects,
@@ -110,6 +111,7 @@ export const tasksHandlers = HttpApiBuilder.group(Api, "tasks", (handlers) =>
     const tasks = yield* TaskRepo;
     const commands = yield* RunCommandRepo;
     const runs = yield* RunRepo;
+    const prStates = yield* PrStates;
     // The board's notice multicast, taken once: one `LISTEN` for the process,
     // shared by every open board, is what keeps a hundred dashboard tabs from
     // being a hundred connections.
@@ -201,10 +203,20 @@ export const tasksHandlers = HttpApiBuilder.group(Api, "tasks", (handlers) =>
       });
 
     return handlers.handleAll({
+      // Looking at the board is what asks GitHub whether the pull requests on
+      // it have moved. The columns are answered from the cached state either
+      // way — the refresh is queued behind this read, not awaited inside it, so
+      // a board renders at this database's latency and a GitHub that is down
+      // costs a card its freshness and nothing else.
       board: ({ query }) =>
         Effect.gen(function* () {
           const { workspaceId } = yield* Principal;
-          return yield* readBoard({ ...query, workspaceId });
+          const columns = yield* readBoard({ ...query, workspaceId });
+          yield* prStates.observe({
+            tasks: columns.flatMap((column) => column.tasks),
+            workspaceId,
+          });
+          return columns;
         }),
 
       // The same board, and then nothing until it changes. The workspace is
@@ -264,12 +276,19 @@ export const tasksHandlers = HttpApiBuilder.group(Api, "tasks", (handlers) =>
       get: ({ params }) =>
         Effect.gen(function* () {
           const { workspaceId } = yield* Principal;
-          return yield* tasks.board({ id: params.taskId, workspaceId }).pipe(
-            Effect.catchTags({
-              ...storeDefects,
-              "Db.NotFound": toNotFound,
-            })
-          );
+          const view = yield* tasks
+            .board({ id: params.taskId, workspaceId })
+            .pipe(
+              Effect.catchTags({
+                ...storeDefects,
+                "Db.NotFound": toNotFound,
+              })
+            );
+          // The open card draws the same state chip as the column, and opening
+          // one is as much "somebody is looking at this" as scanning the board
+          // is. The floor per card is the same either way.
+          yield* prStates.observe({ tasks: [view.task], workspaceId });
+          return view;
         }),
 
       list: ({ query }) =>

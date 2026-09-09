@@ -38,6 +38,8 @@ const taskOf = (n: number, status: TaskStatus, rank: number): BoardCard => ({
   parentTaskId: null,
   parkedUntil: null,
   projectId: null,
+  prState: null,
+  prStateAt: null,
   prUrl: null,
   rank,
   repoUrl: null,

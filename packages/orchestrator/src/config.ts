@@ -102,16 +102,18 @@ const DEFAULT_MAX_ATTEMPTS = 5;
 const DEFAULT_PARK_MS = 86_400_000;
 
 /**
- * The wall-clock cap on one run. A day, because a worker run is a whole piece
+ * The wall-clock cap on one run. A week, because a worker run is a whole piece
  * of work rather than a turn: an agent that spawns sub-agents and iterates on a
- * task overnight is the thing this exists to run, and a cap that kills it at
+ * task for days is the thing this exists to run, and a cap that kills it at
  * hour one turns the ordinary long run into a failure the ladder then repeats.
+ * A day was the same argument stopping short of the runs people actually file.
  *
  * It is still a cap, and what it is a cap on is a wedged provider — a run with
- * none holds its slot forever. A day is what one wedge costs on a small pool,
- * which is why a stop is a row anyone can write and never waits for this.
+ * none holds its slot forever. A week is what one wedge costs, and on a
+ * single-slot pool one wedge is all the throughput for that whole week, which
+ * is why a stop is a row anyone can write and never waits for this.
  */
-const DEFAULT_RUN_TIMEOUT_MS = 86_400_000;
+const DEFAULT_RUN_TIMEOUT_MS = 604_800_000;
 
 /**
  * The wall-clock cap on one manager turn — a reply into a conversation, with a

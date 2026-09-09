@@ -45,6 +45,16 @@ import { ProjectEnvFiles } from "@/features/projects/env-files";
 import { ProjectFiles } from "@/features/projects/project-files";
 import { ProjectFormDialog } from "@/features/projects/project-form";
 
+/**
+ * The repository line: where the code is, and which branch a run starts from.
+ * One string rather than two nodes because it is also the tooltip, and a
+ * tooltip cannot be assembled out of children.
+ */
+const repoLineOf = (project: Project) =>
+  project.repoDefaultBranch === null
+    ? (project.repoUrl ?? "")
+    : `${project.repoUrl} · ${project.repoDefaultBranch}`;
+
 interface ProjectRowProps {
   readonly onEdit: (project: Project) => void;
   readonly project: Project;
@@ -79,17 +89,32 @@ const ProjectRow = ({ onEdit, project }: ProjectRowProps) => {
   return (
     <div className="flex flex-col gap-2">
       <Item variant="outline">
-        <ItemContent>
-          <ItemTitle>{project.name}</ItemTitle>
+        {/* Four buttons and a repository URL do not share a phone's width:
+          side by side they leave the URL about a hundred pixels, which is
+          "https://github.com/M…" and tells nobody anything. Below `sm` the
+          text takes the whole line and the buttons wrap under it — `Item` is
+          already a wrapping flex row, so this is the one class that says so.
+          At `sm` and above the row is unchanged. */}
+        <ItemContent className="max-sm:basis-full">
+          {/* Each of the three carries its own full value: a phone cuts all
+            three, and the edit dialog is otherwise the only place the rest of
+            a description is written down. */}
+          <ItemTitle className="w-full">
+            <span className="truncate" title={project.name}>
+              {project.name}
+            </span>
+          </ItemTitle>
           {project.description === null ? null : (
-            <ItemDescription>{project.description}</ItemDescription>
+            <ItemDescription title={project.description}>
+              {project.description}
+            </ItemDescription>
           )}
           {project.repoUrl === null ? null : (
-            <span className="truncate font-mono text-muted-foreground text-xs">
-              {project.repoUrl}
-              {project.repoDefaultBranch === null
-                ? ""
-                : ` · ${project.repoDefaultBranch}`}
+            <span
+              className="truncate font-mono text-muted-foreground text-xs"
+              title={repoLineOf(project)}
+            >
+              {repoLineOf(project)}
             </span>
           )}
         </ItemContent>

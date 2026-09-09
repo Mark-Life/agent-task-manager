@@ -65,6 +65,7 @@ import { Effect, Layer, ManagedRuntime, Schema } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { BoardNotices } from "../board-sse";
+import { PrStates } from "../pr-state";
 import { RunEventNotices } from "../sse";
 import { handlersLayer } from "./index";
 
@@ -194,6 +195,13 @@ const services = Layer.mergeAll(
   BunServices.layer,
   BoardNotices.layer.pipe(Layer.provide(storeForHandlers)),
   RunEventNotices.layer.pipe(Layer.provide(storeForHandlers)),
+  // The board read queues a pull request refresh behind itself. The real
+  // service is built here rather than stubbed: with no `ATM_GITHUB_TOKEN` in
+  // the suite's environment every lookup answers "unavailable" without leaving
+  // the process, so what these tests exercise is the handler and not GitHub.
+  PrStates.layer.pipe(
+    Layer.provide(Layer.merge(storeForHandlers, CurrentActor.layer(human)))
+  ),
   ScopeHistory.editsLayer
 );
 

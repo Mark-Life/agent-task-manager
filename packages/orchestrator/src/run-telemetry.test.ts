@@ -192,6 +192,8 @@ const task: Task = {
   parentTaskId: null,
   parkedUntil: null,
   projectId: null,
+  prState: null,
+  prStateAt: null,
   prUrl: null,
   rank: 0,
   repoUrl: REPO_URL,

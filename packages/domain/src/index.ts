@@ -14,6 +14,7 @@ export * from "./project";
 export * from "./project-env";
 export * from "./proposal";
 export * from "./provider-usage";
+export * from "./pull-request";
 export * from "./relative-path";
 export * from "./repo-url";
 export * from "./run";

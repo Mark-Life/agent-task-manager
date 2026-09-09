@@ -7001,6 +7001,32 @@
               }
             ]
           },
+          "prState": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "draft",
+                  "open",
+                  "merged",
+                  "closed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prStateAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "prUrl": {
             "anyOf": [
               {
@@ -7082,6 +7108,8 @@
           "parentTaskId",
           "parkedUntil",
           "projectId",
+          "prState",
+          "prStateAt",
           "prUrl",
           "rank",
           "repoUrl",

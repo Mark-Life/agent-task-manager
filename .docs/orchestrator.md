@@ -50,6 +50,24 @@ stopped: a live run is allowance already committed, and killing it wastes what i
 `bun run quota:check` prints the same reading from a terminal, and is the way to find out a host
 is unreadable before a blank dashboard does.
 
+**A read that stops working does not erase what it last said.** The gate keeps two things per
+provider and they answer different questions. The *attempt* is the last look, whatever it produced,
+and it is what a dispatch is decided on — an unreadable provider fails open, as above. The
+*reading* is the last look that carried a signal, it never goes backwards, and it is what gets
+published; it is written to `${DATA_ROOT}/quota/readings.json` beside the pause record, so a
+restart does not blank the panel either. The published document carries both dates — `readAt` for
+when the figures were taken and `attemptedAt` for when anyone last looked — plus a `stale` flag,
+and the panel draws old figures dimmed with their age (`read 3d ago`) rather than dropping to "no
+signal". The blank is now reserved for a provider nothing has ever been read from. Stale figures
+never gate: a three-day-old "97% spent" would hold a healthy pool shut for three days.
+
+**The numbers are polled, and they need not be.** Claude's SDK already emits a per-window
+percentage and reset on every run, and the gate throws it away — including, today, the boolean that
+was supposed to be its reactive floor, which is wired to nothing. Codex's `exec --json` carries no
+such reading at all in the pinned CLI. [`provider-usage-sources.md`](provider-usage-sources.md) is
+the audit: what each provider's run output carries against the pinned versions, and what replacing
+the account polls with it would cost.
+
 **Every ending lands the task in *review*, failures included.** A crashed run posts its error
 into the thread as a message, marks its session failed, and moves the card to the human gate;
 there is no failed column and no auto-retry. The backoff ladder and the park stamp
@@ -75,9 +93,9 @@ turn as a plain host process for debugging a harness change without an image, an
 `kind: "local"` on the row so an unisolated run can never be mistaken for a contained one.
 
 **A run that goes quiet is closed, not waited on.** A stream that ends with no result is
-`lost`; one that never ends at all is torn down at `ORCHESTRATOR_RUN_TIMEOUT_MS` (a day by
-default, long enough for a run that is genuinely working through the night) and closed as
-`timeout`, so a wedged provider costs one slot for a day rather than one slot forever. The
+`lost`; one that never ends at all is torn down at `ORCHESTRATOR_RUN_TIMEOUT_MS` (a week by
+default, long enough for a run that is genuinely working a task for days) and closed as
+`timeout`, so a wedged provider costs one slot for a week rather than one slot forever. The
 run's board credential is minted for that same span plus five minutes, because a token that
 expires under a live run is a `401` per tool call that the agent narrates instead of failing
 on.

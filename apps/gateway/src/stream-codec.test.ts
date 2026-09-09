@@ -159,6 +159,8 @@ const boardColumns = Schema.decodeSync(Schema.Array(BoardColumn))([
         parentTaskId: null,
         parkedUntil: null,
         projectId: newProjectId(),
+        prState: null,
+        prStateAt: null,
         prUrl: null,
         rank: 1024,
         repoUrl: null,

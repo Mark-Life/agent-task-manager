@@ -12,6 +12,13 @@
  * the loop is down, and a reader that mapped that to bars would draw two drained
  * tanks over an account nobody has looked at. So "could not be read" is a
  * variant here rather than a percentage, and there is no path from it to a bar.
+ *
+ * Its near neighbour is the second rule: **old figures are not no figures.** A
+ * provider whose poll has stopped working still has the last thing it said, and
+ * the honest rendering of that is the number with its age — `read 3d ago` — and
+ * not a blank. The reading carries two dates for exactly this, so the panel can
+ * say when the figures were taken *and* when the loop last looked, and never
+ * imply the first from the second.
  */
 
 import type { ProviderUsageSnapshot } from "@workspace/api";
@@ -80,10 +87,21 @@ export interface WindowView {
 export type ProviderView =
   | {
       readonly kind: "readable";
+      /** Age of the last look, e.g. `checked 2m ago`. Null before anything looked. */
+      readonly attemptText: string | null;
       readonly name: string;
       readonly provider: SessionProvider;
-      /** Age of the figures, e.g. `read 3m ago`. Null before anything was read. */
+      /** Age of the figures, e.g. `read 3d ago`. Null only on a reading with no date on it. */
       readonly readText: string | null;
+      /** The figures outlived the last look, so they are drawn as an old reading. */
+      readonly stale: boolean;
+      /**
+       * Both dates in one line — `read 3d ago · checked just now` — shown only
+       * where they differ. Null on a working poll, where the two are the same
+       * instant and saying it twice would train the eye to skip the row that
+       * matters.
+       */
+      readonly stalenessText: string | null;
       /** Paused, at its limit, or watched but not enforced. Null when simply fine. */
       readonly statusText: string | null;
       readonly windows: readonly WindowView[];
@@ -92,8 +110,10 @@ export type ProviderView =
     }
   | {
       readonly kind: "unreadable";
+      readonly attemptText: string | null;
       readonly name: string;
       readonly provider: SessionProvider;
+      /** Normally null — nothing was ever read — but set on a reading that named no window. */
       readonly readText: string | null;
       /** Why there is nothing to draw, in the reading's own words where it gave any. */
       readonly reason: string;
@@ -114,8 +134,22 @@ export type UsageView =
   | {
       readonly kind: "published";
       readonly providers: readonly ProviderView[];
-      /** Age of the document itself, so a stopped loop shows as a stale reading. */
+      /**
+       * Age of the document itself. The loop rewrites it every sweep whatever
+       * it found, so this says the loop is alive and says nothing at all about
+       * the figures — which is why it is no longer what the heading shows.
+       */
       readonly publishedText: string | null;
+      /**
+       * Age of the oldest figures on the panel, e.g. `read 3d ago`, or null
+       * where nothing has been read on any provider.
+       *
+       * The heading's number, and the oldest rather than the newest on purpose:
+       * a heading is one line for two providers, and the honest summary of "one
+       * fresh, one three days old" is three days old. A reader who wants the
+       * split has it per provider a few pixels below.
+       */
+      readonly readingText: string | null;
     };
 
 /** What a reader is told when the loop has published nothing at all. */
@@ -128,8 +162,8 @@ export const blankUsage = (message: string): UsageView => ({
   message,
 });
 
-/** What is said about a provider the loop looked at and got nothing from. */
-const NO_SIGNAL = "The last read produced no signal.";
+/** What is said about a provider nothing has ever been read from. */
+const NO_SIGNAL = "Nothing has been read on this provider yet.";
 
 /**
  * When a window rolls over, said the way it matters.
@@ -180,6 +214,15 @@ const readTextOf = (report: ProviderUsageReport, now: DateTime.Utc) =>
   report.readAt === null ? null : `read ${formatRelative(report.readAt, now)}`;
 
 /**
+ * When the loop last looked, which is a different fact from when the figures
+ * were taken and only interesting where the two differ.
+ */
+const attemptTextOf = (report: ProviderUsageReport, now: DateTime.Utc) =>
+  report.attemptedAt === null
+    ? null
+    : `checked ${formatRelative(report.attemptedAt, now)}`;
+
+/**
  * The lowest window, which is the one a decision turns on.
  *
  * Ties go to the earlier window in the reading, which is the provider's own
@@ -196,13 +239,17 @@ const providerView = (
   now: DateTime.Utc
 ): ProviderView => {
   const name = PROVIDER_NAMES[report.provider];
+  const attemptText = attemptTextOf(report, now);
   const readText = readTextOf(report, now);
 
-  // Both halves of the guard matter. `unavailable` is the read that produced
-  // nothing; an empty window list is a reading that decoded but described no
-  // window, which is the same absence arriving by a different route.
+  // Both halves of the guard matter. `unavailable` is a provider nothing has
+  // ever been read from; an empty window list is a reading that decoded but
+  // described no window, which is the same absence arriving by a different
+  // route. A read that has *stopped* working is neither — it has figures, and
+  // it falls through to the readable branch carrying their age.
   if (report.state === "unavailable" || report.windows.length === 0) {
     return {
+      attemptText,
       kind: "unreadable",
       name,
       provider: report.provider,
@@ -213,10 +260,15 @@ const providerView = (
 
   const windows = report.windows.map((window) => windowView(window, now));
   return {
+    attemptText,
     kind: "readable",
     name,
     provider: report.provider,
     readText,
+    stale: report.stale,
+    stalenessText: report.stale
+      ? [readText, attemptText].filter((part) => part !== null).join(" · ")
+      : null,
     statusText: statusTextOf(report, now),
     windows,
     worst: worstOf(windows),
@@ -226,6 +278,30 @@ const providerView = (
 /** Canonical order, so the two bars on the collapsed rail never swap places. */
 const providerOrder = (provider: SessionProvider) =>
   SESSION_PROVIDERS.indexOf(provider);
+
+/**
+ * The oldest set of figures on the panel, as the heading says it.
+ *
+ * Off the reports rather than off the views, because the comparison is between
+ * instants and the views carry only the words. Null where no provider has ever
+ * been read, which is the one case the heading has no age to show.
+ */
+const oldestReadingText = (
+  reports: readonly ProviderUsageReport[],
+  now: DateTime.Utc
+) => {
+  let oldest: DateTime.Utc | null = null;
+  for (const report of reports) {
+    if (
+      report.readAt !== null &&
+      (oldest === null ||
+        DateTime.toEpochMillis(report.readAt) < DateTime.toEpochMillis(oldest))
+    ) {
+      oldest = report.readAt;
+    }
+  }
+  return oldest === null ? null : `read ${formatRelative(oldest, now)}`;
+};
 
 /** The published reading as the sidebar needs it. */
 export const usageView = (
@@ -244,6 +320,7 @@ export const usageView = (
       snapshot.publishedAt === null
         ? null
         : formatRelative(snapshot.publishedAt, now),
+    readingText: oldestReadingText(snapshot.providers, now),
   };
 };
 
@@ -258,12 +335,19 @@ export const usageSummary = (view: UsageView) => {
   if (view.kind === "blank") {
     return `Provider usage: ${view.message}`;
   }
-  const parts = view.providers.map((provider) =>
-    provider.kind === "unreadable"
-      ? `${provider.name} could not be read`
-      : `${provider.name} ${provider.windows
-          .map((window) => `${window.label} ${window.remainingText} left`)
-          .join(", ")}`
-  );
+  const parts = view.providers.map((provider) => {
+    if (provider.kind === "unreadable") {
+      return `${provider.name} has not been read`;
+    }
+    const figures = provider.windows
+      .map((window) => `${window.label} ${window.remainingText} left`)
+      .join(", ");
+    // The age rides along only when the figures outlived the last look. On a
+    // working poll it is noise; on a broken one it is the whole message, and a
+    // screen reader hearing the percentages alone would hear them as current.
+    return provider.stale && provider.readText !== null
+      ? `${provider.name} ${figures}, ${provider.readText}`
+      : `${provider.name} ${figures}`;
+  });
   return `Provider usage: ${parts.join("; ")}`;
 };
