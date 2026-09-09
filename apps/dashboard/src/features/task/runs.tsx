@@ -135,7 +135,9 @@ const RunRow = ({ onSelect, run, selected }: RunRowProps) => {
             )}
           </div>
           {run.errorMessage === null ? null : (
-            <p className="whitespace-pre-wrap text-destructive text-xs">
+            // `wrap-anywhere`: a crash message carries the URL or the session
+            // id it crashed on, and one of those is wider than a phone.
+            <p className="wrap-anywhere whitespace-pre-wrap text-destructive text-xs">
               {run.errorClass === null ? null : `${run.errorClass}: `}
               {run.errorMessage}
             </p>

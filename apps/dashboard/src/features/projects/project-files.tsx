@@ -34,8 +34,8 @@ const ProjectFileRow = ({ file }: { readonly file: Artifact }) => (
     <ItemMedia variant="icon">
       <HugeiconsIcon icon={File01Icon} strokeWidth={2} />
     </ItemMedia>
-    <ItemContent className="min-w-0">
-      <ItemTitle className="w-full min-w-0">
+    <ItemContent>
+      <ItemTitle className="w-full">
         <span className="truncate font-mono" title={file.path}>
           {file.path}
         </span>
