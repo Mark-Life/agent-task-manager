@@ -284,21 +284,59 @@ ENV HOME=/home/${AGENT_USER} \
 # hundred megabytes fetched and thrown away every run, which is why Debian's
 # `chromium` is installed above instead.
 #
-# The two launch flags are both consequences of how this container is confined,
-# and both are silent hangs rather than clean errors when they are missing.
+# `--no-sandbox` is a consequence of how this container is confined, and a
+# silent hang rather than a clean error when it is missing: Chromium's own
+# sandbox needs either the setuid helper or unprivileged user namespaces, and
+# `--cap-drop=ALL` with `no-new-privileges:true` takes away both. The container
+# is the sandbox — that is the whole design — so Chromium's second one is
+# redundant here, and asking for it produces a renderer that dies at startup.
 #
-# `--no-sandbox`: Chromium's own sandbox needs either the setuid helper or
-# unprivileged user namespaces, and `--cap-drop=ALL` with
-# `no-new-privileges:true` takes away both. The container is the sandbox — that
-# is the whole design — so Chromium's second one is redundant here, and asking
-# for it produces a renderer that dies at startup.
+# It used to be joined by `--disable-dev-shm-usage`, which was the workaround
+# for docker's default 64 MB `/dev/shm`: it kept the renderer's shared memory
+# in a regular file under `/tmp` instead. A run's argv now sizes `/dev/shm`
+# properly — `--shm-size` in `hardening.ts`, at the same 512 MB the `/tmp`
+# tmpfs was lending it — so the shared memory can stay where the renderer
+# expects it and the flag has nothing left to work around.
 #
-# `--disable-dev-shm-usage`: Docker gives a container 64 MB of `/dev/shm` by
-# default and Chromium puts its renderer's shared memory there, so a page of
-# any weight crashes the tab. The flag moves it to a regular temporary file,
-# which lands in the run's `/tmp` tmpfs.
+# `AGENT_BROWSER_ALLOWED_DOMAINS` is the other one, and it is about time rather
+# than confinement. A page that pulls fonts, analytics or an embed reaches
+# hosts this network stack does not answer for; those requests hang instead of
+# refusing, the renderer blocks on them, and every CDP command after that burns
+# its full 30-second timeout. What the run then sees is a browser that appears
+# broken — `Runtime.evaluate` timing out on a page that rendered fine — and
+# hours have been spent debugging exactly that. Blocked, the same page opens in
+# under two seconds. The default here is this machine and the host behind it, in
+# the image rather than on the orchestrator's environment so that a hand-started
+# container and `bun run sandbox:check` behave the way a real run does.
+#
+# Every entry is an exact hostname, because that is what the filter compares —
+# ports never enter into it, so one entry covers a dev server on any port. Which
+# is also why the list is longer than it looks like it needs to be: the four
+# spellings of loopback are four different hostnames. `0.0.0.0` is on it because
+# that is what a dev server started with `--host` prints, and a run that pastes
+# the URL back gets a refusal it did not earn. The IPv6 loopback is bracketed
+# and only bracketed, because a hostname keeps the brackets an IPv6 literal is
+# written with and a bare `::1` would match nothing.
+# `host.docker.internal` is the odd one out and is not loopback: it is the
+# address this system tells a container to reach the gateway on
+# (`ORCHESTRATOR_GATEWAY_URL` in `deploy/loop.env.example`), so a page under
+# check that calls the board would otherwise have its requests aborted with
+# nothing in the page to say why.
+#
+# A run that genuinely needs the public web names the hosts it needs with
+# `--allowed-domains` on the command that opens the browser. Two things about
+# that flag, both of which produce a baffling refusal when they are missed: it
+# replaces this list rather than adding to it, so anything above that the run
+# still needs has to be repeated on it; and the filter is installed when the
+# browser context launches, so an already-open browser has to be closed first or
+# the flag is read and discarded. `file://` URLs are refused entirely while any
+# allowlist is set — they have no hostname to match — so a local HTML file is
+# served over loopback, or the browser is closed and reopened for that one
+# command under `env -u AGENT_BROWSER_ALLOWED_DOMAINS`, the close being what
+# makes the unset reach a launch.
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
-  AGENT_BROWSER_ARGS=--no-sandbox,--disable-dev-shm-usage
+  AGENT_BROWSER_ARGS=--no-sandbox \
+  AGENT_BROWSER_ALLOWED_DOMAINS="localhost,*.localhost,127.0.0.1,0.0.0.0,[::1],host.docker.internal"
 
 # What each pinned version actually was, readable with `docker image inspect`
 # and without starting a container.

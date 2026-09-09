@@ -86,7 +86,11 @@ what keeps project conventions out of a chat turn for free.
 
 **Hardening**: `--cap-drop=ALL`, `no-new-privileges`, non-root, `SANDBOX_MEMORY_MB` (2048 by
 default) with swap pinned equal, `SANDBOX_CPUS` (1.5), 512 pids, `/tmp` as a capped tmpfs,
-`--init`. Both limits are ceilings and not reservations — nothing is allocated up front, so
+`--shm-size` at a fixed 512 MB so a headless Chromium has real shared memory instead of
+docker's 64 MB, `--init`. Both tmpfs and `/dev/shm` are memory, charged to the same ceiling as
+everything else in the container, which is why the shm size is a constant rather than a third
+variable: it is a property of the browser this image carries, not of the host.
+Both limits are ceilings and not reservations — nothing is allocated up front, so
 the sum across the slots may exceed the box; what the memory number decides is that a runaway
 run is OOM-killed and retried rather than the kernel choosing a victim on the host, and an
 over-committed CPU quota only ever costs contention. Network is fully open, and that is a

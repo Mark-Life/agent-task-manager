@@ -156,6 +156,16 @@ Leave lifecycle facts out of it. That a run started, that a card moved, that a c
  * to be wrong sometimes: a committed file with no pull request behind it is a
  * legitimate reason to hold a second copy.
  *
+ * **The third bullet is a ceiling on effort rather than a placement rule.** A
+ * run that had already finished a three-line change rebuilt the whole tree in
+ * its old state, a minute and a half of build, purely to photograph a "before"
+ * for its pull request — then pushed a branch of image files to link at and
+ * deleted it again on finding that GitHub's proxy cannot read raw URLs out of a
+ * private repository. Neither route was ever open: nothing in this system hosts
+ * an image, and the upload skill a run reaches for wants credentials no
+ * container has. So the bullet says where the file goes and closes both routes
+ * where a run can see them, which is cheaper than a run discovering each one.
+ *
  * Which is why this is a function of the run rather than one constant. The
  * carve-out is entirely about a place other than the folder to put a document,
  * and a run with no repository has no such place. Telling it what belongs in a
@@ -254,7 +264,8 @@ const SCRATCH_RUN_ARTIFACTS =
 const REPO_RUN_ARTIFACTS = `The task directory is for output that has nowhere else to live: work you could not commit, notes for the next session or for a person rather than for review. Your checkout sits inside it and is not part of it — the checkout goes with the container, so anything you did not push is gone.
 
 - Committed, with a pull request open: the pull request is where your work lives. Do not write a second copy into the task directory. Two copies drift apart as soon as review touches either, and a reader who finds both cannot tell which is current.
-- Committed, but no pull request stands behind it, such as a branch that may never merge: keep it in the task directory too, and name the branch it is also on.`;
+- Committed, but no pull request stands behind it, such as a branch that may never merge: keep it in the task directory too, and name the branch it is also on.
+- A screenshot or a recording: leave the file in the task directory and say in the pull request what it shows. Nothing here can host an image a pull request would render, and a branch of image files is not a host — GitHub's proxy cannot read raw URLs out of a private repository. Never rebuild the tree in its old state to photograph a before: the diff is the before.`;
 
 /** Where this run's output belongs, and what happens to everything else. */
 export const artifactRulesOf = ({ hasProject, hasRepo }: ArtifactRulesInput) =>
@@ -317,8 +328,37 @@ If GitHub refuses one of those, stop and report it. Say which operation was refu
  * page, what to screenshot, how to render a component without a server — all of
  * that is repository-specific and belongs in a skill in the repository, where it
  * can be wrong without a release. What is here is the part the build makes true:
- * the binary is on PATH, and the flags a container this confined needs are
- * already on the environment.
+ * the binary is on PATH, and the one launch flag a container this confined needs
+ * is already on the environment.
+ *
+ * **The allowlist is part of "already on the environment", so it is stated
+ * beside the flag.** A page that pulls a font, an analytics beacon or a video
+ * embed hangs its renderer when those hosts cannot be reached, and every command
+ * after that spends its whole timeout waiting on the hang: one run lost fifteen
+ * minutes of wall clock to nineteen timed-out calls before working out that the
+ * page was stuck rather than the tool. So the image ships an allowlist, and this
+ * paragraph exists because a run that does not know about it reads a blocked
+ * request as a broken image and goes hunting for the bug in its own change.
+ *
+ * Two properties of the escape are stated because getting either wrong costs a
+ * run a confusing refusal. `--allowed-domains` *replaces* the image's list
+ * rather than adding to it, so a run that names a public host and forgets
+ * loopback loses its own dev server; and the list is read when the browser
+ * launches, so a flag handed to a daemon that is already up is silently
+ * ignored, which is why the close comes first.
+ *
+ * Said as "in a container", because that is where it is true. A
+ * `SANDBOX_MODE=local` run is a host process with nothing setting the variable,
+ * and a resource that genuinely fails there must not be handed an excuse by a
+ * guard that is not present.
+ *
+ * **And one ceiling, because an invitation to look has no end of its own.** The
+ * run that swapped two links on a home page spent fifteen of its thirty-five
+ * minutes measuring where each anchor landed after a scroll — a real property of
+ * the page, measured carefully, that nothing in the task turned on. What bounds
+ * a check is the task's own claim, and that is the only boundary this text can
+ * draw without knowing the repository: which claims in a given codebase are
+ * worth a picture is still a question for its skill.
  *
  * **Workers only, though every container has it.** A manager turn has no
  * checkout and no acceptance criteria to see for itself, so the paragraph would
@@ -327,9 +367,13 @@ If GitHub refuses one of those, stop and report it. Say which operation was refu
  */
 export const BROWSER_RULES = `## The browser in your container
 
-\`agent-browser\` is on your PATH and drives a real headless Chromium, already installed at \`/usr/bin/chromium\`. Nothing needs downloading, and the two launch flags this confinement requires are already on the environment.
+\`agent-browser\` is on your PATH and drives a real headless Chromium, already installed at \`/usr/bin/chromium\`. Nothing needs downloading, and \`--no-sandbox\`, the one launch flag this confinement requires, is already on the environment.
+
+In a container, requests off this machine are blocked by an allowlist on \`AGENT_BROWSER_ALLOWED_DOMAINS\`, so a font, an analytics script or an embed that never loads is the block and not your change. A task about a public page names the hosts it needs: \`agent-browser close\`, then open again with \`--allowed-domains\`. Close first, because the list is read when the browser launches and ignored while one is already running — and name every host on it, loopback included, because the flag replaces the default list rather than adding to it.
 
 Use it when the claim you are about to make is about something rendered: a layout, a colour, a control that has to be reachable at a given width, a page that has to load at all. Reading the components and reasoning about the result is a different and weaker claim, and "not verified in a browser" hands a person a check you were holding the tools to make.
+
+Check the claim the task makes, not the ones beside it. A page has more true things on it than the task asked about, and every one you stop to measure is time the person waiting for the change is paying for.
 
 If you could not look, say which claim went unchecked and why.`;
 

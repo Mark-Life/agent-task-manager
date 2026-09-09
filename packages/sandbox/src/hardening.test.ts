@@ -8,6 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_MEMORY_MB,
+  DEFAULT_SHM_MB,
   defaultHardening,
   hardeningArgs,
   tmpfsArg,
@@ -40,6 +41,10 @@ describe("hardeningArgs", () => {
     expect(args).toContain("--pids-limit=512");
     expect(args).toContain(`--memory=${DEFAULT_MEMORY_MB}m`);
     expect(args).toContain("--cpus=1.5");
+  });
+
+  test("gives the browser real shared memory instead of docker's 64 MB", () => {
+    expect(args).toContain(`--shm-size=${DEFAULT_SHM_MB}m`);
   });
 
   test("forbids swap by matching the swap ceiling to the memory ceiling", () => {

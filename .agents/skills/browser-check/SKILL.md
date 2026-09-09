@@ -20,7 +20,17 @@ gateway to look at a component.
    `QueryClientProvider` whose cache you pre-seeded:
    `client.setQueryData(keys.X(id), fixture)`. An infinite query takes
    `{ pages: [page], pageParams: [0] }`.
-3. Inline that CSS into the HTML, write the file, and `page.goto('file://…')`.
+3. Inline that CSS into the HTML, write the file, and open it with
+   `agent-browser close && env -u AGENT_BROWSER_ALLOWED_DOMAINS agent-browser
+   open file:///…`. The image's allowlist refuses a `file://` URL outright — it
+   has no hostname to match — and unsetting it costs nothing here, because a
+   page with its CSS inlined asks for nothing off this machine. **The close is
+   not optional.** The allowlist is read when the browser launches and the
+   daemon keeps what it launched with, so on the second and every later shot of
+   a run the unset lands on a browser that already has the list, and the open
+   fails on the `file://` URL as if `file://` were banned outright. Serving the
+   directory over loopback instead works too, needs no escape, and leaves the
+   guard on.
 
 `TaskBrief`, `TaskMessages` and `Transcript` have all been photographed this
 way, base-ui `Collapsible` and `Button` included.

@@ -10,7 +10,12 @@ account, a checkout in `/opt` nobody edits, secrets in `/etc`. The other is
 which is what to use while the system is still being built.
 
 Target: aarch64, 4 cores, 8 GB, Debian 12 or Ubuntu 24.04, Docker already
-installed and running.
+installed and running. That box is divided by two settings in `loop.env`, and
+they are the ones to reread whenever the host changes size: `SANDBOX_MEMORY_MB`
+(2048 by default, laptop-sized; one work slot on this target is usually 5120)
+and `SANDBOX_CPUS` (1.5, raise it on a box dedicated to one or two containers).
+Both are per container and both are ceilings rather than reservations, so it is
+the value times `ORCHESTRATOR_MAX_CONCURRENCY` that has to stay survivable.
 
 ## What goes where
 
@@ -421,6 +426,18 @@ Nothing here has a default that is right for a real host.
   reaches it**, which on a Linux host with the default bridge is the docker0
   address and never `localhost`. Unset, every turn runs with no board tools and
   the loop says so once at boot rather than failing.
+- **`SANDBOX_MEMORY_MB`** in `loop.env`, and `SANDBOX_CPUS` beside it if the box
+  is bigger than the laptop the defaults assume. 2048 is enough until a run
+  builds something: runs that build a Next app have been oom_killed at a 4096 MB
+  ceiling, which says the requirement is above 4096 and not what it is — a kill
+  measures the limit, never the appetite — and it arrives as a failed run rather
+  than as a memory error anybody reads. That is why one work slot on this box is
+  set to 5120: a margin over a number nobody has measured. The rule is the value
+  times
+  `ORCHESTRATOR_MAX_CONCURRENCY` against what the host can lose: a container
+  over its limit is killed, counted and retried, while a host over its memory
+  with no swap is the kernel picking a victim that may be Postgres. `/dev/shm`
+  is a fixed 512 MB inside that ceiling and is not a separate setting.
 - **A firewall**, and here it is load-bearing rather than a precaution. Postgres
   is on loopback, but **the gateway is not**: `BunHttpServer.layer({ port })` in
   `apps/gateway/src/layers.ts` is given no hostname, so Bun binds `0.0.0.0` and
@@ -476,13 +493,30 @@ cd /opt/agent-task-manager
 sudo git fetch && sudo git checkout <sha>
 sudo bun install --frozen-lockfile
 # migrations, if the diff has any
+sudo systemctl stop atm-loop      # only if the image is being rebuilt, below
+sudo -u atm bun run images:build  # likewise, and several minutes of it
 sudo systemctl restart atm-gateway atm-loop
 ```
 
-Restart order does not matter: they share no state but the database, and each
-recovers its own debris at boot. Rolling back is the same commands at the older
-sha — except for migrations, which are forward-only, so a rollback across one is
-a restore, not a checkout.
+Restart order between the two services does not matter: they share no state but
+the database, and each recovers its own debris at boot. Rolling back is the same
+commands at the older sha — except for migrations, which are forward-only, so a
+rollback across one is a restore, not a checkout.
+
+**The sandbox image is part of the checkout, and nothing rebuilds it for you.**
+`atm-backup.timer` is the only timer this repository installs; `atm.local/base`
+is rebuilt when a person runs `images:build` and at no other moment. So a diff
+touching `docker/` or `packages/sandbox` is deployed only halfway until that has
+run, and the two halves split badly. What a container is allowed to do lives in
+the image; the `docker run` argv that makes those settings survivable lives in
+the loop, and the worker prompt tells every run the pair is already in place.
+The browser is the case to have in mind: the image drops
+`--disable-dev-shm-usage` because the loop now passes `--shm-size`, and it
+carries the request allowlist that keeps a page from hanging its renderer. An
+old loop under the new image gives Chromium docker's 64 MB with the workaround
+gone; a new loop over the old image gives a run no allowlist and a prompt
+promising one. Hence the stop rather than a restart afterwards: with no runs in
+the gap, no container is ever handed one half.
 
 Stopping the loop is the slow half. It stops the containers it is holding and
 releases its leases; `TimeoutStopSec=60s` bounds that, and a `SIGKILL` through

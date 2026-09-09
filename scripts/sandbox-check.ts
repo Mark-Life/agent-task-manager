@@ -223,13 +223,21 @@ const AGENT_IMAGE_TOOLS = [
 /**
  * The one image claim `command -v` cannot make.
  *
- * Chromium is on PATH in an image whose renderer dies at startup, whose fonts
- * are missing, and whose `/dev/shm` is too small — and every one of those is a
- * hang or a blank screenshot in the middle of a run rather than an error. The
- * Dockerfile renders `about:blank` at build time for that reason; this renders
- * it again under the real confinement, which is the half a build cannot see:
- * `--cap-drop=ALL`, `no-new-privileges`, a 64 MB `/dev/shm` and a `noexec`
- * `/tmp` are applied by `hardening.ts`, not by the recipe.
+ * Chromium is on PATH in an image whose renderer dies at startup and in one
+ * whose fonts are missing, and both of those are a hang or a blank screenshot
+ * in the middle of a run rather than an error. The Dockerfile renders
+ * `about:blank` at build time for that reason; this renders it again under the
+ * real confinement, which is the half a build cannot see: `--cap-drop=ALL`,
+ * `no-new-privileges`, a non-root user and a capped `/tmp` are applied by
+ * `hardening.ts`, not by the recipe.
+ *
+ * What it proves is that a renderer starts, and not that `/dev/shm` is large
+ * enough for one to keep running. `about:blank` has no weight to it, so it is
+ * happy on docker's 64 MB — the size is a claim about the argv and is asserted
+ * where the argv is built, by `hardening.test.ts` against `DEFAULT_SHM_MB`.
+ * Giving this probe that job would mean rendering a page heavy enough to
+ * exhaust a segment, which is a page to build and keep true rather than a
+ * constant to compare.
  */
 const BROWSER_PROBE_KEY = "chromiumrenders";
 
@@ -427,7 +435,7 @@ const toolScript = () =>
       (tool) =>
         `printf 'tool:%s:[%s]\\n' '${tool}' "$(command -v ${tool} >/dev/null 2>&1 && echo yes || echo no)"`
     ),
-    `printf '${BROWSER_PROBE_KEY}:[%s]\\n' "$(chromium --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --dump-dom about:blank >/dev/null 2>&1 && echo yes || echo no)"`,
+    `printf '${BROWSER_PROBE_KEY}:[%s]\\n' "$(chromium --headless=new --no-sandbox --disable-gpu --dump-dom about:blank >/dev/null 2>&1 && echo yes || echo no)"`,
   ].join("\n");
 
 /**
@@ -846,7 +854,7 @@ const sandboxCheck = Effect.gen(function* () {
     });
     yield* check({
       detail:
-        "chromium is on PATH and could not render about:blank under the confinement — a missing library, no fonts, or /dev/shm too small",
+        "chromium is on PATH and could not render about:blank under the confinement — a missing library, no fonts, or a renderer the sandbox will not let start",
       ok: readField(output, BROWSER_PROBE_KEY) === "yes",
       step: "that image's chromium starts a renderer inside the sandbox, not just on the build host",
     });

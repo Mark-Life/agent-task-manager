@@ -30,7 +30,12 @@ import {
   WRITING_RULES,
 } from "./instructions";
 import type { PromptMode, RunPlacement } from "./render";
-import { artifactRulesOf, CREDENTIAL_RULES, SHARED_RULES } from "./rules";
+import {
+  artifactRulesOf,
+  BROWSER_RULES,
+  CREDENTIAL_RULES,
+  SHARED_RULES,
+} from "./rules";
 import { buildWorkerPrompt, messageLabelOf } from "./worker";
 
 const at = DateTime.makeUnsafe("2026-08-02T10:00:00.000Z");
@@ -159,6 +164,41 @@ describe("a fresh session's prompt", () => {
     expect(text).toContain("`https://github.com/acme/widgets` is cloned at");
     expect(text).toContain("on branch `atm/task-1`");
     expect(text).toContain("open a pull request");
+    // Nothing installs into the checkout before the run reaches it, so a run
+    // that assumes otherwise learns it from a script that will not start.
+    expect(text).toContain("nothing has been installed or built in it");
+  });
+
+  /**
+   * A run that reads a blocked font as a broken page hunts for a bug in its own
+   * change, and a run with no ceiling measures the whole page instead of the
+   * claim it was sent to check. One run lost most of its wall clock to both.
+   */
+  test("says what the browser may reach, and where to stop looking", () => {
+    expect(text).toContain(BROWSER_RULES);
+    expect(text).toContain("AGENT_BROWSER_ALLOWED_DOMAINS");
+    expect(text).toContain("--allowed-domains");
+    expect(text).toContain(
+      "Check the claim the task makes, not the ones beside it"
+    );
+  });
+
+  /**
+   * Both halves of the escape are load-bearing and both are pinned here,
+   * because a run that gets either wrong reads the refusal as a broken tool:
+   * `--allowed-domains` is consulted only at launch, and it overwrites the
+   * image's list instead of extending it. The flag count is pinned for the same
+   * reason — the image carried two and now carries one, and a prompt asserting
+   * the environment is already correct cannot be the thing that is wrong.
+   */
+  test("says the allowlist replaces, not widens, and counts the flag right", () => {
+    expect(text).toContain(
+      "`--no-sandbox`, the one launch flag this confinement requires"
+    );
+    expect(text).toContain("Close first");
+    expect(text).toContain(
+      "replaces the default list rather than adding to it"
+    );
   });
 
   /**
@@ -294,6 +334,17 @@ describe("a fresh session's prompt", () => {
     expect(text).toContain("anything you did not push is gone");
   });
 
+  /**
+   * A run rebuilt its tree in the old state to photograph a "before", then
+   * pushed a branch of images to link at — and neither route was ever open,
+   * because nothing here hosts an image and GitHub's proxy cannot read raw URLs
+   * out of a private repository.
+   */
+  test("keeps a screenshot in the task directory rather than on a branch", () => {
+    expect(text).toContain("A screenshot or a recording");
+    expect(text).toContain("the diff is the before");
+  });
+
   test("keeps the pull request out of it for a run that has no repository", () => {
     // The carve-out is about a better home for a document. A run with no
     // repository has no such home, so it gets the plain rule and is not sent
@@ -308,6 +359,7 @@ describe("a fresh session's prompt", () => {
     expect(scratch).not.toContain(
       "Do not write a second copy into the task directory"
     );
+    expect(scratch).not.toContain("A screenshot or a recording");
   });
 
   /**
@@ -394,6 +446,9 @@ describe("a fresh session's prompt", () => {
     );
     expect(scratch).not.toContain("pull request");
     expect(scratch).not.toContain("## Project");
+    // The install note is a fact about a checkout. This run has none, so the
+    // sentence would be describing a directory that is not there.
+    expect(scratch).not.toContain("nothing has been installed or built in it");
     // And no credential section: nothing to push, and a token it will not reach
     // for is one more paragraph between the run and its task.
     expect(scratch).not.toContain("The GitHub credential you hold");
