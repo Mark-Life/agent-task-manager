@@ -36,9 +36,11 @@ const TIERS = [200_000, 258_400, 1_000_000] as const;
  */
 const WINDOWS: Readonly<Record<string, number>> = {
   "claude-fable-5": 1_000_000,
+  "claude-fable-5-1": 1_000_000,
   "claude-haiku-3-5": 200_000,
   "claude-haiku-4-5": 200_000,
   "claude-mythos-5": 1_000_000,
+  "claude-mythos-5-1": 1_000_000,
   "claude-opus-4": 200_000,
   "claude-opus-4-1": 200_000,
   "claude-opus-4-5": 200_000,
@@ -46,6 +48,7 @@ const WINDOWS: Readonly<Record<string, number>> = {
   "claude-opus-4-7": 1_000_000,
   "claude-opus-4-8": 1_000_000,
   "claude-opus-5": 1_000_000,
+  "claude-opus-5-5": 1_000_000,
   "claude-sonnet-4": 200_000,
   "claude-sonnet-4-5": 200_000,
   "claude-sonnet-4-6": 1_000_000,

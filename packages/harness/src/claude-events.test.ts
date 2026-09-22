@@ -179,6 +179,32 @@ describe("assistant blocks", () => {
       },
     ]);
   });
+
+  // The union is closed at the `satisfies` in claude-events.ts, so an SDK that
+  // adds a literal is a build error rather than a silent `Unknown`. What the
+  // compiler cannot check is that each one landed on the class a person would
+  // expect, and these two arrived with 0.3.280.
+  test("classifies the credential failures a turn can end on", () => {
+    const failed = (error: string) =>
+      normalize(
+        makeCursor(),
+        message({ error, message: { content: [] }, type: "assistant" })
+      )[0];
+
+    expect(failed("verification_required")).toEqual({
+      errorClass: "Unauthenticated",
+      errorMessage: "assistant message failed: verification_required",
+      kind: "error",
+    });
+    expect(failed("cloud_credential_error")).toMatchObject({
+      errorClass: "Unauthenticated",
+    });
+    // Unchanged around them, so the new rows did not displace anything.
+    expect(failed("billing_error")).toMatchObject({
+      errorClass: "QuotaExhausted",
+    });
+    expect(failed("overloaded")).toMatchObject({ errorClass: "RateLimited" });
+  });
 });
 
 describe("tool results", () => {

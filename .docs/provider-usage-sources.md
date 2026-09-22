@@ -15,7 +15,7 @@ would and would not buy.
 
 | | pinned | how it was checked |
 | --- | --- | --- |
-| Claude | `@anthropic-ai/claude-agent-sdk` **0.3.252** | `sdk.d.ts` in the installed package |
+| Claude | `@anthropic-ai/claude-agent-sdk` **0.3.280** | `sdk.d.ts` in the installed package |
 | Codex | `@openai/codex` / `@openai/codex-sdk` **0.146.0** | `codex exec --help`, `codex --version`, the SDK's `index.d.ts`, and the serde field tables in the vendored `codex` binary |
 
 Both are the catalog pins in the root `package.json`, which is what the image builds and what the
@@ -24,7 +24,7 @@ harnesses run.
 ## Claude carries a real reading, and we throw most of it away
 
 The SDK emits `rate_limit_event` whenever the subscription reading changes.
-`SDKRateLimitInfo` (sdk.d.ts:4750) carries:
+`SDKRateLimitInfo` (sdk.d.ts:5423) carries:
 
 - `status`: `allowed` | `allowed_warning` | `rejected`
 - `utilization`: percent of the window used, 0–100
@@ -60,7 +60,7 @@ already persisted. It is the same figure the OAuth poll returns.
    This is a bug independent of anything below, and it is the cheapest thing on this page to fix.
 
 The SDK also exposes `Query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()`
-(sdk.d.ts:2696), returning `SDKControlGetUsageResponse` with `rate_limits.five_hour`,
+(sdk.d.ts:2901), returning `SDKControlGetUsageResponse` with `rate_limits.five_hour`,
 `.seven_day`, `.seven_day_opus`, `.seven_day_sonnet`, `.model_scoped[]` and `.extra_usage`, each
 `{ utilization, resets_at }`, plus `rate_limits_available` and `subscription_type`. That is the
 whole OAuth body, through the SDK, without us holding the token or the beta header. It is named to
