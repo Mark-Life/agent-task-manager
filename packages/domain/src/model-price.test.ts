@@ -34,11 +34,39 @@ describe("looking a model up", () => {
     expect(priceOf("claude-sonnet-5", "fast")?.input).toBe(2);
   });
 
+  test("prices Opus 5.5 fast mode below the tier before it", () => {
+    expect(priceOf("claude-opus-5-5", "fast")?.input).toBe(8);
+    expect(priceOf("claude-opus-5-5", "fast")?.output).toBe(40);
+    expect(priceOf("claude-opus-5-5", "standard")?.input).toBe(4);
+  });
+
   test("derives Claude's cache rates from its input rate", () => {
     const price = priceOf("claude-opus-5");
     expect(price?.cacheRead).toBeCloseTo(0.5, 6);
     expect(price?.cacheWrite5m).toBeCloseTo(6.25, 6);
     expect(price?.cacheWrite1h).toBeCloseTo(10, 6);
+  });
+
+  // The rates the vendor publishes, not the ones the old 0.1x helper would
+  // have derived: it would put Opus 5.5 at 0.40 and the 5.1 pair at 1.00, and
+  // on a session that is mostly cache hits that is most of the input bill.
+  test("takes the cache-hit rate the newest models publish, not a tenth", () => {
+    expect(priceOf("claude-opus-5-5")?.cacheRead).toBeCloseTo(0.2, 6);
+    expect(priceOf("claude-fable-5-1")?.cacheRead).toBeCloseTo(0.25, 6);
+    expect(priceOf("claude-mythos-5-1")?.cacheRead).toBeCloseTo(0.25, 6);
+    // Fast mode is the same model, so it keeps the same multiple.
+    expect(priceOf("claude-opus-5-5", "fast")?.cacheRead).toBeCloseTo(0.4, 6);
+  });
+
+  test("still derives the cache writes of the newest models", () => {
+    const opus = priceOf("claude-opus-5-5");
+    expect(opus?.cacheWrite5m).toBeCloseTo(5, 6);
+    expect(opus?.cacheWrite1h).toBeCloseTo(8, 6);
+    const fable = priceOf("claude-fable-5-1");
+    expect(fable?.cacheWrite5m).toBeCloseTo(12.5, 6);
+    expect(fable?.cacheWrite1h).toBeCloseTo(20, 6);
+    expect(fable?.output).toBe(50);
+    expect(priceOf("claude-mythos-5-1")).toEqual(fable);
   });
 });
 

@@ -17,8 +17,8 @@
  *
  * **Rates are per million tokens, and the four kinds are priced apart** because
  * they differ by two orders of magnitude — a cache read is a tenth of fresh
- * input and a one-hour cache write is twice it, so a session that is 90% cache
- * reads costs a fraction of what a flat input rate would claim.
+ * input or less and a one-hour cache write is twice it, so a session that is
+ * 90% cache reads costs a fraction of what a flat input rate would claim.
  *
  * What is deliberately not modelled, and would make a figure too low: the 1.1x
  * data-residency multiplier on `inference_geo: "us"`, server-tool charges such
@@ -36,10 +36,10 @@ import { CostUsd } from "./primitives";
  * from an older table is recognisable as one rather than silently compared with
  * a newer one.
  */
-export const PRICE_TABLE_VERSION = 1;
+export const PRICE_TABLE_VERSION = 2;
 
 /** The day these figures were read off the vendors' own pricing pages. */
-export const PRICE_TABLE_EFFECTIVE = "2026-08-08";
+export const PRICE_TABLE_EFFECTIVE = "2026-09-22";
 
 /** Where they were read from, so the next person updating them starts there. */
 export const PRICE_TABLE_SOURCES = [
@@ -78,9 +78,34 @@ export interface ModelPrice {
   readonly output: number;
 }
 
-/** Claude's cache rates are fixed multiples of its input rate, so they are derived, not retyped. */
-const claudePrice = (input: number, output: number): ModelPrice => ({
-  cacheRead: input * 0.1,
+/**
+ * A cache hit at the rate every Claude model charged one at until Opus 5.5:
+ * a tenth of fresh input.
+ */
+const CACHE_HIT_STANDARD = 0.1;
+
+/** Opus 5.5 halves that again — a twentieth of its input rate. */
+const CACHE_HIT_OPUS_5_5 = 0.05;
+
+/** Fable 5.1 and Mythos 5.1 go furthest: a fortieth. */
+const CACHE_HIT_5_1 = 0.025;
+
+/**
+ * Claude's two cache-write rates are still fixed multiples of its input rate —
+ * 1.25x for five minutes, 2x for an hour — so they are derived, not retyped.
+ *
+ * The cache-hit rate no longer is. It was 0.1x on every model until Opus 5.5,
+ * and the newest three each discount harder, so it is the one multiple a row
+ * states for itself. Left derived at 0.1x, Opus 5.5 would be billed at twice
+ * its real cache-read rate, which on an agent session that is mostly cache
+ * hits is most of the input bill.
+ */
+const claudePrice = (
+  input: number,
+  output: number,
+  cacheHit: number = CACHE_HIT_STANDARD
+): ModelPrice => ({
+  cacheRead: input * cacheHit,
   cacheWrite1h: input * 2,
   cacheWrite5m: input * 1.25,
   input,
@@ -109,16 +134,19 @@ const flatPrice = (
  * only normalization applied — a family-name substring match is how
  * `claude-opus-4-1` at $15 would quietly be priced as `claude-opus-4-5` at $5.
  *
- * Sonnet 5 is at its introductory rate, which expires on 31 August 2026 and
- * becomes $3/$15. That is a table edit on the day, not a branch here: a price
- * that changes itself by reading the clock is a price nobody can reproduce.
+ * Sonnet 5's $2/$10 was introduced as a rate that would expire on 31 August
+ * 2026 and revert to $3/$15. Anthropic has since confirmed it as the standard
+ * price and dropped the increase, so there is no dated edit waiting here.
  */
 const PRICES: Readonly<Record<string, ModelPrice>> = {
   // Anthropic, standard speed.
   "claude-fable-5": claudePrice(10, 50),
+  "claude-fable-5-1": claudePrice(10, 50, CACHE_HIT_5_1),
   "claude-haiku-3-5": claudePrice(0.8, 4),
   "claude-haiku-4-5": claudePrice(1, 5),
   "claude-mythos-5": claudePrice(10, 50),
+  // Limited availability, and priced exactly as Fable 5.1 is.
+  "claude-mythos-5-1": claudePrice(10, 50, CACHE_HIT_5_1),
   "claude-opus-4": claudePrice(15, 75),
   "claude-opus-4-1": claudePrice(15, 75),
   "claude-opus-4-5": claudePrice(5, 25),
@@ -126,6 +154,7 @@ const PRICES: Readonly<Record<string, ModelPrice>> = {
   "claude-opus-4-7": claudePrice(5, 25),
   "claude-opus-4-8": claudePrice(5, 25),
   "claude-opus-5": claudePrice(5, 25),
+  "claude-opus-5-5": claudePrice(4, 20, CACHE_HIT_OPUS_5_5),
   "claude-sonnet-4": claudePrice(3, 15),
   "claude-sonnet-4-5": claudePrice(3, 15),
   "claude-sonnet-4-6": claudePrice(3, 15),
@@ -156,6 +185,9 @@ const PRICES: Readonly<Record<string, ModelPrice>> = {
 const FAST_PRICES: Readonly<Record<string, ModelPrice>> = {
   "claude-opus-4-8": claudePrice(10, 50),
   "claude-opus-5": claudePrice(10, 50),
+  // The first fast tier that is cheaper than the one before it, and it keeps
+  // the model's own cache-hit multiple rather than reverting to 0.1x.
+  "claude-opus-5-5": claudePrice(8, 40, CACHE_HIT_OPUS_5_5),
 };
 
 /** How a provider names the speed tier a request ran at, where it names one. */

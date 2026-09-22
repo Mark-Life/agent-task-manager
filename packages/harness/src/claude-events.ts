@@ -149,6 +149,12 @@ const CLASS_OF_SDK_ERROR = {
   account_on_hold: "Unauthenticated",
   authentication_failed: "Unauthenticated",
   billing_error: "QuotaExhausted",
+  // Arrived with SDK 0.3.280, for a run whose cloud-side credential is missing
+  // or rejected. A credential, not a transient: retrying the same turn presents
+  // the same broken credential, so it belongs with the rest of the
+  // `Unauthenticated` group, whose outcome is `errored` — surfaced to whoever
+  // can go and fix the credential rather than absorbed into a backoff.
+  cloud_credential_error: "Unauthenticated",
   invalid_request: "Unknown",
   max_output_tokens: "Unknown",
   model_not_found: "Unknown",
@@ -157,6 +163,13 @@ const CLASS_OF_SDK_ERROR = {
   rate_limit: "RateLimited",
   server_error: "Unknown",
   unknown: "Unknown",
+  // Also new in 0.3.280: the account's credentials are good and the account
+  // itself is barred until somebody completes a verification step. That is the
+  // same shape as `account_on_hold` and `oauth_org_not_allowed` — not a
+  // shortage of quota, not something waiting fixes — so it takes the same
+  // class, and `outcomeOfClass` ends the turn `errored` rather than retrying a
+  // refusal that will keep coming back.
+  verification_required: "Unauthenticated",
 } as const satisfies Record<SDKAssistantMessageError, HarnessErrorClass>;
 
 /** What the turn learned so far, and whether it ever reached a terminus. */
