@@ -1,7 +1,8 @@
 import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig, loadEnv, type ProxyOptions } from "vite";
+import { defineConfig, loadEnv, type Plugin, type ProxyOptions } from "vite";
+import { HOLD_SCRIPT } from "./src/demo/hold.ts";
 import { serviceWorker } from "./tools/service-worker.ts";
 
 /**
@@ -80,6 +81,29 @@ const CHUNK_GROUPS = [
 ];
 
 /**
+ * The demo's fake `fetch`: an inline script that holds requests, then the
+ * module that answers them. See `src/demo/hold.ts`.
+ */
+const MAIN_SCRIPT = '<script src="/src/main.tsx" type="module"></script>';
+
+const demoBoot = (): Plugin => ({
+  name: "demo-boot",
+  // "pre", so the build bundles the boot module like the app's own entry.
+  transformIndexHtml: {
+    handler: (html) =>
+      html.replace(
+        MAIN_SCRIPT,
+        [
+          `<script>${HOLD_SCRIPT}</script>`,
+          '<script src="/src/demo/boot.ts" type="module"></script>',
+          MAIN_SCRIPT,
+        ].join("\n    ")
+      ),
+    order: "pre",
+  },
+});
+
+/**
  * Dev serves the app and the API from one origin, which is what makes the
  * session cookie first-party locally and lets the API client run with an empty
  * base URL. `GATEWAY_PROXY_TARGET` moves the far end without touching this
@@ -89,8 +113,12 @@ export default defineConfig(({ mode }) => {
   const appDir = fileURLToPath(new URL(".", import.meta.url));
   const env = loadEnv(mode, appDir, "GATEWAY_");
   const target = env.GATEWAY_PROXY_TARGET || DEFAULT_GATEWAY;
+  // The demo answers the API in the page and is served from any subpath, so
+  // it needs relative asset paths and neither the proxy nor the worker.
+  const demo = mode === "demo";
 
   return {
+    base: demo ? "./" : "/",
     build: {
       rolldownOptions: {
         output: { advancedChunks: { groups: CHUNK_GROUPS } },
@@ -102,16 +130,22 @@ export default defineConfig(({ mode }) => {
     // The worker plugin only applies to a build, which is also the only place
     // the app registers one: a dev server rewrites modules on every keystroke
     // and a worker caching that is a worker serving yesterday's edit.
-    plugins: [react(), tailwindcss(), serviceWorker()],
+    plugins: [
+      react(),
+      tailwindcss(),
+      ...(demo ? [demoBoot()] : [serviceWorker()]),
+    ],
     resolve: {
       alias: {
         "@": fileURLToPath(new URL("./src", import.meta.url)),
       },
     },
     server: {
-      proxy: Object.fromEntries(
-        GATEWAY_PREFIXES.map((prefix) => [prefix, gatewayProxy(target)])
-      ),
+      proxy: demo
+        ? {}
+        : Object.fromEntries(
+            GATEWAY_PREFIXES.map((prefix) => [prefix, gatewayProxy(target)])
+          ),
     },
   };
 });

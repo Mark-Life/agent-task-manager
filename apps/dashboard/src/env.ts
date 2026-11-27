@@ -17,3 +17,6 @@ export const gatewayUrl = (import.meta.env.VITE_GATEWAY_URL ?? "").replace(
  * {@link gatewayUrl} unconditionally, but this reads clearer at a branch.
  */
 export const isSameOrigin = gatewayUrl === "";
+
+/** The demo build: fixtures in the page instead of a gateway. */
+export const isDemo = import.meta.env.VITE_DEMO === "1";

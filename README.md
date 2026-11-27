@@ -87,6 +87,14 @@ makes the gateway look same-origin to application code, but the browser still st
 server's origin on every request, and Better Auth refuses a sign-in from an origin it was not
 told about.
 
+To see the dashboard without any of that, run the demo: the same app with a week of made-up
+work in memory, no gateway, no database and no sign-in. Moves and messages work until a reload.
+
+```bash
+bun run dashboard:demo         # dev server, prints the URL
+bun run dashboard:demo:build   # static bundle in apps/dashboard/dist-demo, works from any subpath
+```
+
 ## Check scripts
 
 Each subsystem has one script that drives it end to end and prints a line per claim. They are

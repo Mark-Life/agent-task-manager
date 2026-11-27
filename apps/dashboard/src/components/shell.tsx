@@ -312,7 +312,7 @@ export const Shell = ({ children, conversations }: ShellProps) => {
                 alt=""
                 className="size-4 shrink-0 rounded-[22.37%]"
                 height={MARK_PX}
-                src="/icon.svg"
+                src={`${import.meta.env.BASE_URL}icon.svg`}
                 width={MARK_PX}
               />
               <span className="truncate font-heading font-medium text-sm">

@@ -3,6 +3,7 @@ import "@workspace/ui/globals.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "@/app";
+import { isDemo } from "@/env";
 import { registerUpdates } from "@/pwa/update";
 
 const rootElement = document.getElementById("root");
@@ -21,4 +22,7 @@ createRoot(rootElement).render(
 // call and a set of listeners, and neither is worth a frame of the first paint.
 // It is also what keeps this app on the build that is deployed rather than the
 // one it was installed with — see `pwa/update.ts`.
-registerUpdates();
+// The demo is a throwaway page; a worker would cache it past its usefulness.
+if (!isDemo) {
+  registerUpdates();
+}

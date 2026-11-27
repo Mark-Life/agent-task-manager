@@ -10,6 +10,11 @@
  */
 interface ImportMetaEnv {
   /**
+   * `1` builds the demo: mock data in the page, no gateway, no sign-in. See
+   * `src/demo/install.ts`.
+   */
+  readonly VITE_DEMO?: string;
+  /**
    * The gateway's public origin — scheme and host, no path, no trailing slash.
    * Left unset in development, where Vite proxies the API onto this origin.
    */
