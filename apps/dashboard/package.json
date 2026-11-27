@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "demo": "vite --mode demo",
+    "demo:build": "vite build --mode demo --outDir dist-demo",
     "icons": "bun run tools/icons.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p worker/tsconfig.json",
     "preview": "vite preview",

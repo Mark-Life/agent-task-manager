@@ -43,11 +43,14 @@
       }
     },
     {
+      // The dashboard demo's fixtures are data: minutes ago, token counts,
+      // PR numbers. Naming each would be a constant per row.
       "includes": [
         "**/*.test.ts",
         "**/*.test.tsx",
         "**/*.spec.ts",
-        "**/*.spec.tsx"
+        "**/*.spec.tsx",
+        "apps/dashboard/src/demo/fixtures/**"
       ],
       "linter": {
         "rules": {

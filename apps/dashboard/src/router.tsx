@@ -1,5 +1,6 @@
-import { createRouter } from "@tanstack/react-router";
+import { createHashHistory, createRouter } from "@tanstack/react-router";
 import { Spinner } from "@workspace/ui/components/spinner";
+import { isDemo } from "@/env";
 import { queryClient } from "@/lib/query-client";
 import { apiKeysRoute } from "@/routes/api-keys";
 import { boardRoute } from "@/routes/board";
@@ -50,6 +51,9 @@ export const router = createRouter({
   context: { queryClient },
   defaultPendingComponent: RoutePending,
   defaultPreload: "intent",
+  // The demo is served from a subpath of a static host, which only a hash
+  // address survives a reload on.
+  history: isDemo ? createHashHistory() : undefined,
   routeTree,
   scrollRestoration: true,
 });
